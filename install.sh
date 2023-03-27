@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Works on Debian 10. May need tweaking for other distros.
+# Works on Debian 11. May need tweaking for other distros.
 
 INSTALL_DIR="/opt/EventBot" # Directory to install EventBot
 
