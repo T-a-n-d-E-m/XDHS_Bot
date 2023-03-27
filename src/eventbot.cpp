@@ -713,11 +713,26 @@ static const size_t BLURB_COUNT = 3;
 // The maximum allowed byte length of a XDHS league name.
 static const size_t LEAGUE_NAME_LENGTH_MAX = 32;
 
+// NOTE: As we're storing the values of these in the database, the order of these must not change!
+enum DRAFT_STATUS {
+	DRAFT_STATUS_INVALID,
+
+	DRAFT_STATUS_CREATED,           // The draft has been created but not posted.
+	DRAFT_STATUS_POSTED,            // The draft has been posted and sign ups are open.
+	DRAFT_STATUS_REMINDER_SENT,     // The pre-draft reminder has been sent to everyone signed up.
+	DRAFT_STATUS_TENTATIVES_PINGED, // The warning to tentatives has been posted.
+	DRAFT_STATUS_LOCKED,            // The draft is now partially locked and ready to be fired.
+	DRAFT_STATUS_FIRED,             // The draft is now fully locked and play has commenced.
+	DRAFT_STATUS_COMPLETE           // The draft has concluded.
+};
+
 // All data needed for a #-pre-register post is available in this structure.
 struct Draft_Event {
 	Draft_Event() {
 		memset(this, 0, sizeof(Draft_Event));
 	}
+
+	DRAFT_STATUS status;
 
 	char pings[PING_STRING_LENGTH_MAX + 1];
 	char draft_code[DRAFT_CODE_LENGTH_MAX + 1];
@@ -738,8 +753,8 @@ struct Draft_Event {
 	char icon_url[URL_LENGTH_MAX + 1]; // URL of the league icon. TODO: Not used - can be removed.
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
 
-	bool locked;
-	bool deleted;
+	//bool locked;
+	//bool deleted;
 
 	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
 	u64 details_id; // Message ID of the post in #-pre-register describing the format.
@@ -968,31 +983,30 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 
 	const char* query = R"(
 		SELECT
-			draft_code,   -- 0
-			pings,        -- 1
-			league_name,  -- 2
-			format,       -- 3
-			time_zone,    -- 4
-			time,         -- 5
-			duration,     -- 6
-			blurb_1,      -- 7
-			blurb_2,      -- 8
-			blurb_3,      -- 9
-			draft_guide,  -- 10
-			card_list,    -- 11
-			set_list,     -- 12
-			color,        -- 13
-			xmage_server, -- 14
-			mtga_draft,   -- 15
-			icon_url,     -- 16
-			banner_url,   -- 17
-			locked,       -- 18
-			deleted,      -- 19
-			channel_id,   -- 20
-			details_id,   -- 21
-			signups_id,   -- 22
-			reminder_id,  -- 23
-			tentatives_pinged_id -- 24
+			status,              -- 0
+			draft_code,          -- 1
+			pings,               -- 2
+			league_name,         -- 3
+			format,              -- 4
+			time_zone,           -- 5
+			time,                -- 6
+			duration,            -- 7
+			blurb_1,             -- 8
+			blurb_2,             -- 9
+			blurb_3,             -- 10
+			draft_guide,         -- 11
+			card_list,           -- 12
+			set_list,            -- 13
+			color,               -- 14
+			xmage_server,        -- 15
+			mtga_draft,          -- 16
+			icon_url,            -- 17
+			banner_url,          -- 18
+			channel_id,          -- 19
+			details_id,          -- 20
+			signups_id,          -- 21
+			reminder_id,         -- 22
+			tentatives_pinged_id -- 23
 		FROM draft_events
 		WHERE guild_id=? AND draft_code=?
 	)";
@@ -1005,32 +1019,31 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 
 	auto result = std::make_shared<Draft_Event>();
 
-	MYSQL_OUTPUT_INIT(25);
-	MYSQL_OUTPUT( 0, MYSQL_TYPE_STRING,   result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result->pings,           PING_STRING_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result->league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 3, MYSQL_TYPE_STRING,   result->format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING,   result->time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 5, MYSQL_TYPE_LONGLONG, &result->time,           sizeof(result->time));
-	MYSQL_OUTPUT( 6, MYSQL_TYPE_FLOAT,    &result->duration,       sizeof(result->duration));
-	MYSQL_OUTPUT( 7, MYSQL_TYPE_STRING,   &result->blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 8, MYSQL_TYPE_STRING,   &result->blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 9, MYSQL_TYPE_STRING,   &result->blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING,   result->draft_guide_url, URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(11, MYSQL_TYPE_STRING,   result->card_list_url,   URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(12, MYSQL_TYPE_STRING,   result->set_list,        SET_LIST_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(13, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color)); 
-	MYSQL_OUTPUT(14, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(15, MYSQL_TYPE_LONG,     &result->mtga_draft,     sizeof(result->mtga_draft));
-	MYSQL_OUTPUT(16, MYSQL_TYPE_STRING,   result->icon_url,        URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_url,      URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(18, MYSQL_TYPE_LONG,     &result->locked,         sizeof(result->locked));
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONG,     &result->deleted,        sizeof(result->deleted));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
-	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result->tentatives_pinged_id, sizeof(result->tentatives_pinged_id));
+	MYSQL_OUTPUT_INIT(24);
+	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result->status,         sizeof(result->status));
+	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result->pings,           PING_STRING_LENGTH_MAX + 1);
+	MYSQL_OUTPUT( 3, MYSQL_TYPE_STRING,   result->league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING,   result->format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
+	MYSQL_OUTPUT( 5, MYSQL_TYPE_STRING,   result->time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONGLONG, &result->time,           sizeof(result->time));
+	MYSQL_OUTPUT( 7, MYSQL_TYPE_FLOAT,    &result->duration,       sizeof(result->duration));
+	MYSQL_OUTPUT( 8, MYSQL_TYPE_STRING,   &result->blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT( 9, MYSQL_TYPE_STRING,   &result->blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING,   &result->blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(11, MYSQL_TYPE_STRING,   result->draft_guide_url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(12, MYSQL_TYPE_STRING,   result->card_list_url,   URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING,   result->set_list,        SET_LIST_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color)); 
+	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->mtga_draft,     sizeof(result->mtga_draft));
+	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->icon_url,        URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(18, MYSQL_TYPE_STRING,   result->banner_url,      URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
+	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
+	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
+	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
+	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result->tentatives_pinged_id, sizeof(result->tentatives_pinged_id));
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -1156,12 +1169,15 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_CONNECT();
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND details_id=0 AND deleted=0 AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
+	const DRAFT_STATUS status = DRAFT_STATUS_CREATED;
+
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status,        sizeof(status));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -1179,12 +1195,17 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_CONNECT();
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND details_id != 0 AND deleted=0 AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status>=? AND status<? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
+	const DRAFT_STATUS status1 = DRAFT_STATUS_CREATED;
+	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
+
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status1,       sizeof(status1));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONG,     &status2,       sizeof(status2));
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -1242,11 +1263,16 @@ static Database_Result<Database_No_Value> database_set_reminder_message_id(const
 
 static Database_Result<std::string> database_get_next_upcoming_draft(const u64 guild_id) {
 	MYSQL_CONNECT();
-	static const char* query = "SELECT draft_code FROM draft_events WHERE signups_id != 0 AND deleted != 1 AND guild_id=? ORDER BY time ASC LIMIT 1";
+	static const char* query = "SELECT draft_code FROM draft_events WHERE status>=? AND status!=? AND guild_id=? ORDER BY time ASC LIMIT 1";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(1)
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	const DRAFT_STATUS status1 = DRAFT_STATUS_POSTED;
+	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
+
+	MYSQL_INPUT_INIT(3)
+	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status1,   sizeof(status1));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status2,   sizeof(status2));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 	
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -1271,27 +1297,15 @@ static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u6
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_flag_draft_as_deleted(const u64 guild_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string& draft_code, const DRAFT_STATUS status) {
 	MYSQL_CONNECT();
-	static const char* query = "UPDATE draft_events SET deleted=1 WHERE guild_id=? AND draft_code=?";
+	static const char* query = "UPDATE draft_events SET status=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT_BIND_AND_EXECUTE();
-
-	MYSQL_RETURN();
-}
-
-static Database_Result<Database_No_Value> database_flag_draft_as_locked(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT();
-	static const char* query = "UPDATE draft_events SET locked=1 WHERE guild_id=? AND draft_code=?";
-	MYSQL_STATEMENT();
-
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status,            sizeof(status));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1590,7 +1604,7 @@ static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string&
 	auto draft_event = database_get_event(guild_id, draft_code);
 	if(draft_event != true) {
 		return false;
-	};		
+	}
 
 	char description[1024]; // FIXME: This can overflow...
 	expand_format_string(draft_event.value->format, strlen(draft_event.value->format), description, 1024);
@@ -1662,6 +1676,7 @@ static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string&
 					log(LOG_LEVEL_DEBUG, "Created sign ups post: %lu", (u64)message.id);
 
 					(void)database_set_signups_message_id(guild_id, draft_event.value->draft_code, message.id);
+					database_set_draft_status(guild_id, draft_event.value->draft_code, DRAFT_STATUS_POSTED);
 				} else {
 					// TODO: What now???
 					log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
@@ -1846,7 +1861,7 @@ static void set_bot_presence(dpp::cluster& bot) {
 		if(draft_code.value.length() > 0) {
 			auto draft = database_get_event(GUILD_ID, draft_code.value);
 			if(draft == true) {
-				if(draft.value->locked == true) {
+				if(draft.value->status == DRAFT_STATUS_LOCKED) {
 					status = dpp::presence_status::ps_online;
 					type = dpp::activity_type::at_watching;
 					description = fmt::format("🔒{}", draft_code.value);
@@ -1886,6 +1901,7 @@ static void output_sql() {
 
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS draft_events(\n");
 	// Draft details
+	fprintf(stdout, "status INT NOT NULL DEFAULT %d,\n", DRAFT_STATUS_CREATED);
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "pings VARCHAR(%lu) NOT NULL,\n", PING_STRING_LENGTH_MAX);
 	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL PRIMARY KEY,\n", DRAFT_CODE_LENGTH_MAX);
@@ -1907,16 +1923,16 @@ static void output_sql() {
 	fprintf(stdout, "icon_url VARCHAR(%lu) NOT NULL,\n", URL_LENGTH_MAX);
 	fprintf(stdout, "banner_url VARCHAR(%lu) NOT NULL,\n", URL_LENGTH_MAX);
 
-	fprintf(stdout, "deleted BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the event been deleted?
+	//fprintf(stdout, "deleted BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the event been deleted?
 	fprintf(stdout, "channel_id BIGINT NOT NULL,\n"); // The channel the post is going to.
 	fprintf(stdout, "details_id BIGINT NOT NULL DEFAULT 0,\n"); // The message ID of the details post.
 	fprintf(stdout, "signups_id BIGINT NOT NULL DEFAULT 0,\n"); // The message ID of the signup post.
 	fprintf(stdout, "reminder_id BIGINT NOT NULL DEFAULT 0,\n");
 	fprintf(stdout, "tentatives_pinged_id BIGINT NOT NULL DEFAULT 0,\n"); // Has the 10 minute reminder been sent to tentatives?
 
-	fprintf(stdout, "locked BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the draft been locked?
-	fprintf(stdout, "fired BOOLEAN NOT NULL DEFAULT 0,\n");
-	fprintf(stdout, "complete BOOLEAN NOT NULL DEFAULT 0,\n");
+	//fprintf(stdout, "locked BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the draft been locked?
+	//fprintf(stdout, "fired BOOLEAN NOT NULL DEFAULT 0,\n");
+	//fprintf(stdout, "complete BOOLEAN NOT NULL DEFAULT 0,\n");
 
 	fprintf(stdout, "UNIQUE KEY key_pair(guild_id, draft_code)\n");
 	fprintf(stdout, ");");
@@ -2439,11 +2455,13 @@ int main(int argc, char* argv[]) {
 			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
 
 			bool result = post_draft(bot, guild_id, draft_code);
+			std::string text;
 			if(result == true) {
-				event.reply(fmt::format("Draft {} posted.", draft_code));
+				text = fmt::format("Draft {} posted.", draft_code);
 			} else {
-				event.reply(fmt::format("Paging @TandEm: There was an error posting draft {}!", draft_code));
+				text = fmt::format("Paging @TandEm: There was an error posting draft {}!", draft_code);
 			}
+			event.reply(text);
 		} else
 		if(command_name == "edit_draft") {
 			// NOTE: May not need this if we're going to get the draft the data from the spreadsheet...
@@ -2475,7 +2493,7 @@ int main(int argc, char* argv[]) {
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
 #if TESTING
-			if(draft.value->locked == false) {
+			if(draft.value->status != DRAFT_STATUS_LOCKED) {
 				dpp::message message;
 				message.set_flags(dpp::m_ephemeral);
 				message.set_content("This command can only be used once the draft is locked.");
@@ -2507,7 +2525,7 @@ int main(int argc, char* argv[]) {
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
 #if TESTING
-			if(draft.value->locked == false) {
+			if(draft.value->status != DRAFT_STATUS_LOCKED) {
 				dpp::message message;
 				message.set_flags(dpp::m_ephemeral);
 				message.set_content("This command can only be used once the draft is locked.");
@@ -2674,6 +2692,7 @@ int main(int argc, char* argv[]) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending pre-draft reminder message for {}.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
+			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_REMINDER_SENT);
 		}
 
 		// Ping the tentatives if they haven't already been pinged.
@@ -2683,24 +2702,25 @@ int main(int argc, char* argv[]) {
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);
 			redraw_signup(bot, GUILD_ID, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
 			ping_tentatives(bot, GUILD_ID, draft_code.value.c_str());
+			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_TENTATIVES_PINGED);
 		}
 
 		// Lock the draft.
-		if((draft.value->locked == false) && now >= draft.value->time) {
+		if((draft.value->status < DRAFT_STATUS_LOCKED) && now >= draft.value->time) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Locking draft: {}.", draft_code.value.c_str()));
 			post_host_guide(bot, draft_code.value.c_str());
-			database_flag_draft_as_locked(GUILD_ID, draft_code.value);
+			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_LOCKED);
 			// Redraw the signup buttons so they all (except Minutemage) appear locked.
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);
 			redraw_signup(bot, GUILD_ID, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
 		}
 
 		// Delete the draft after a few hours.
-		if(now - draft.value->time > SECONDS_AFTER_DRAFT_TO_DELETE_POSTS) {
+		if((draft.value->status < DRAFT_STATUS_COMPLETE) && now - draft.value->time > SECONDS_AFTER_DRAFT_TO_DELETE_POSTS) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Deleting completed draft: {}", draft_code.value.c_str()));
-			database_flag_draft_as_deleted(GUILD_ID, draft_code.value.c_str());
 			delete_draft_posts(bot, GUILD_ID, draft_code.value);
 			database_clear_draft_post_ids(GUILD_ID, draft_code.value);
+			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_COMPLETE);
 		}
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
