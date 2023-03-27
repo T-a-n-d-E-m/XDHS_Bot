@@ -1,0 +1,22 @@
+# An template for the bot.ini file.
+
+# Hostname of the MySQL server. EventBot currently only supports connecting over IPV4 connections.
+mysql_host = hostname
+
+# Port the MySQL server is listening on.
+mysql_port = 3306
+
+# Username to use when connecting to MySQL
+mysql_username = username
+
+# Password to use when connecting to MySQL
+mysql_password = password
+
+# Where to write the EventBot log file
+logfile_path = /var/log/eventbot.log
+
+# The Discord token for this bot. Can be found (or created) in the Discord Developer Portal
+discord_token = 123456890ABCDEF
+
+# The default XMage server to use for sign up posts.
+xmage_server = xmage.today

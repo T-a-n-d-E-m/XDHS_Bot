@@ -1,0 +1,17 @@
+[Unit]
+Description=XDHS EventBot
+After=network.target
+
+[Service]
+Type=simple
+User=eventbot
+Group=eventbot
+WorkingDirectory=/opt/EventBot/
+ExecStart=/opt/EventBot/eventbot
+StandardOutput=syslog
+Restart=always
+RestartSec=1
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=default.target

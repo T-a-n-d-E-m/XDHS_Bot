@@ -1,5 +1,7 @@
 bot.ini
 eventbot
+eventbot.log
+*.swp
 
 # Prerequisites
 *.d
