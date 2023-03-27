@@ -1879,7 +1879,7 @@ static void set_bot_presence(dpp::cluster& bot) {
 
 // Output the required MySQL tables for this bot. These tables could be created programmatically but I prefer to limit table creation/deletion to root.
 static void output_sql() {
-	fprintf(stdout, "Use ./eventbot -sql to create this file.\n\n");
+	fprintf(stdout, "-- Use ./eventbot -sql to create this file.\n\n");
 	fprintf(stdout, "CREATE DATABASE IF NOT EXISTS XDHS; USE XDHS\n\n");
 
 	// NOTE: BadgeBot tables not shown here.
@@ -2145,13 +2145,6 @@ int main(int argc, char* argv[]) {
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
-				//dpp::slashcommand cmd("fire_draft", "Fire a draft.", bot.me.id);
-			}
-			{
-				// kick_player - remove a player from the signup list
-				// /noshow might make more sense
-			}
-			{
 				dpp::slashcommand cmd("view_allocations", "Print the pod allocations to the #-current-draft-management channel.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
@@ -2178,6 +2171,9 @@ int main(int argc, char* argv[]) {
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
+				//dpp::slashcommand cmd("fire_draft", "Fire a draft.", bot.me.id);
 			}
 			{
 				dpp::slashcommand cmd("dropper", "Add a player to the droppers list.", bot.me.id);
