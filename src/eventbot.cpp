@@ -427,7 +427,6 @@ struct XDHS_League {
 	const char* time_zone;              // IANA time zone identifier
 	Start_Time time;                    // When the draft starts
 	const char* ping[LEAGUE_PINGS_MAX]; // Which roles to ping when the signup goes up
-	const char* icon;                   // League icon file name. Flag images from https://flagpedia.net/download/images
 };
 
 // Lookup table for each of our leagues. The order these are listed doesn't matter. In the future we may want bot commands to create, edit and delete leagues but to keep things simple for now we'll hard code these into the bot.
@@ -439,7 +438,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"Europe/Berlin",
 		{19,50},
 		{"Euro","Americas"},
-		"https://i.imgur.com/VMN7obw.png"
 	},
 	{
 		"Americas Bonus",
@@ -448,7 +446,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"America/New_York",
 		{20,50},
 		{"Americas",NULL},
-		"https://i.imgur.com/9q8TUXj.png"
 	},
 	{
 		"Euro Bonus",
@@ -457,7 +454,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"Europe/Berlin",
 		{19,50},
 		{"Euro",NULL},
-		"https://i.imgur.com/D0LOKkV.png"
 	},
 	{
 		"Americas Chrono",
@@ -466,7 +462,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"America/New_York",
 		{20,50},
 		{"Americas",NULL},
-		"https://i.imgur.com/9q8TUXj.png"
 	},
 	{
 		"Euro Chrono",
@@ -475,7 +470,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"Europe/Berlin",
 		{19,50},
 		{"Euro",NULL},
-		"https://i.imgur.com/D0LOKkV.png"
 	},
 	{
 		"Asia Chrono",
@@ -484,7 +478,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"Europe/Berlin",
 		{10,50},
 		{"Asia",NULL},
-		"https://i.imgur.com/EA0TAtu.png"
 	},
 	{
 		"Pacific Chrono",
@@ -493,7 +486,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"America/New_York",
 		{20,50},
 		{"Pacific",NULL},
-		"https://i.imgur.com/hfF5AdW.png"
 	}
 };
 static const size_t LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
@@ -750,11 +742,7 @@ struct Draft_Event {
 	char xmage_server[XMAGE_SERVER_LENGTH_MAX + 1];
 	bool mtga_draft; // Will the draft portion take place on https://mtgadraft.tk/?
 	//u64 banner_id; // TODO: How long do attachments live for?
-	char icon_url[URL_LENGTH_MAX + 1]; // URL of the league icon. TODO: Not used - can be removed.
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
-
-	//bool locked;
-	//bool deleted;
 
 	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
 	u64 details_id; // Message ID of the post in #-pre-register describing the format.
@@ -942,16 +930,15 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 			color,        -- 14
 			xmage_server, -- 15
 			mtga_draft,   -- 16
-			icon_url,     -- 17
-			banner_url,   -- 18
-			channel_id    -- 19
+			banner_url,   -- 17
+			channel_id    -- 17
 		)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		)";
 
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(20);
+	MYSQL_INPUT_INIT(19);
 	MYSQL_INPUT( 0, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
 	MYSQL_INPUT( 1, MYSQL_TYPE_STRING,   event->pings,           strlen(event->pings));
 	MYSQL_INPUT( 2, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
@@ -969,9 +956,8 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_INPUT(14, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
 	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
 	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->mtga_draft,     sizeof(event->mtga_draft));
-	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->icon_url,        strlen(event->icon_url));
-	MYSQL_INPUT(18, MYSQL_TYPE_STRING,   event->banner_url,      strlen(event->banner_url));
-	MYSQL_INPUT(19, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
+	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_url,      strlen(event->banner_url));
+	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
 
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
@@ -1000,13 +986,12 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 			color,               -- 14
 			xmage_server,        -- 15
 			mtga_draft,          -- 16
-			icon_url,            -- 17
-			banner_url,          -- 18
-			channel_id,          -- 19
-			details_id,          -- 20
-			signups_id,          -- 21
-			reminder_id,         -- 22
-			tentatives_pinged_id -- 23
+			banner_url,          -- 17
+			channel_id,          -- 18
+			details_id,          -- 19
+			signups_id,          -- 20
+			reminder_id,         -- 21
+			tentatives_pinged_id -- 22
 		FROM draft_events
 		WHERE guild_id=? AND draft_code=?
 	)";
@@ -1019,7 +1004,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 
 	auto result = std::make_shared<Draft_Event>();
 
-	MYSQL_OUTPUT_INIT(24);
+	MYSQL_OUTPUT_INIT(23);
 	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result->status,         sizeof(result->status));
 	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result->pings,           PING_STRING_LENGTH_MAX + 1);
@@ -1037,13 +1022,12 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color)); 
 	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
 	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->mtga_draft,     sizeof(result->mtga_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->icon_url,        URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(18, MYSQL_TYPE_STRING,   result->banner_url,      URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result->tentatives_pinged_id, sizeof(result->tentatives_pinged_id));
+	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_url,      URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
+	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
+	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
+	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
+	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->tentatives_pinged_id, sizeof(result->tentatives_pinged_id));
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -1920,7 +1904,6 @@ static void output_sql() {
 	fprintf(stdout, "color INT NOT NULL,\n"); // Color of the vertical stripe down the left side of the embed.
 	fprintf(stdout, "xmage_server VARCHAR(%lu) NOT NULL DEFAULT \"\",\n", XMAGE_SERVER_LENGTH_MAX);
 	fprintf(stdout, "mtga_draft BOOLEAN NOT NULL DEFAULT 0,\n");
-	fprintf(stdout, "icon_url VARCHAR(%lu) NOT NULL,\n", URL_LENGTH_MAX);
 	fprintf(stdout, "banner_url VARCHAR(%lu) NOT NULL,\n", URL_LENGTH_MAX);
 
 	//fprintf(stdout, "deleted BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the event been deleted?
@@ -2139,7 +2122,6 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_string, "color", "Override the default color for the league. Must be RGB in hexidecimal. i.e. 8CE700", false));
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "mtga_draft", "Will the draft potion be run on the MTGA Draft website?", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "xmage_server", "Override the default XMage server. i.e. xmage.today:17172", false));
-				cmd.add_option(dpp::command_option(dpp::co_attachment, "icon", "Icon image to override the default icon. 320x168 approx. resolution preferred.", false));
 				cmd.add_option(dpp::command_option(dpp::co_channel, "channel", "Channel to post the signup. Defaults to #-pre-register.", false));
 #if 0
 				cmd.add_option(dpp::command_option(dpp::co_integer, "signup_type", "Override the default signup buttons.", false));
@@ -2361,20 +2343,6 @@ int main(int argc, char* argv[]) {
 				}
 			}
 			strcpy(draft_event.set_list, set_list.c_str());
-
-			// Was an icon override attached?
-			//std::string icon_url;
-			{
-				auto opt = event.get_parameter("icon");
-				if(std::holds_alternative<dpp::snowflake>(opt)) {
-					dpp::snowflake icon_id = std::get<dpp::snowflake>(opt);
-					auto itr = event.command.resolved.attachments.find(icon_id);
-					//draft_event.league.icon = itr->second.url.c_str();
-					strcpy(draft_event.icon_url, itr->second.url.c_str());
-				} else {
-					strcpy(draft_event.icon_url, league.icon);
-				}
-			}
 
 			std::string xmage_server = g_config.xmage_server;
 			{
