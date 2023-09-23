@@ -59,6 +59,8 @@ using s64 = std::int64_t;
 using f32 = float;
 using f64 = double;
 
+#define BIT_SET(value,mask) (((value) & (mask)) == (mask))
+ 
 // How many seconds before a draft the pre-draft reminder message should be sent.
 static const time_t SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER   = (60*60*1);
 
@@ -81,6 +83,8 @@ static const u64 PRE_REGISTER_CHANNEL_ID        = 907524659099099178; // Default
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID    = 1087299085612109844;
 static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID = 1075355794507305001;
 static const u64 BOT_COMMANDS_CHANNEL_ID        = 885048614190190593;
+static const u64 XDHS_TEAM_ROLE_ID              = 885054778978234408;
+static const u64 XDHS_HOST_ROLE_ID              = 1091275398639267881;
 static bool g_commands_registered               = false; // Have the bot slash commands been registered for this guild?
 #else
 // The bot will be running in release mode on the XDHS public server.
@@ -266,6 +270,9 @@ static const MTG_Draftable_Sets g_draftable_sets[] = {
 	{"DMR", "Dominaria Remastered"},
 	{"ONE", "Phyrexia: All Will Be One"},
 	{"MOM", "March of the Machine"},
+	{"LTR", "The Lord of the Rings: Tales of Middle-earth"},
+	{"WOE", "Wilds of Eldraine"},
+	{"RVR", "Ravnica Remastered"},
 
 	// XDHS team custom and remastered sets
 	{"INVR", "Invasion Remastered"},
@@ -432,36 +439,12 @@ struct XDHS_League {
 // Lookup table for each of our leagues. The order these are listed doesn't matter. In the future we may want bot commands to create, edit and delete leagues but to keep things simple for now we'll hard code these into the bot.
 static const XDHS_League g_xdhs_leagues[] = {
 	{
-		"Atlantic Bonus",
-		'T','B',
-		0x00ed8821,
-		"Europe/Berlin",
-		{19,50},
-		{"Euro","Americas"},
-	},
-	{
-		"Americas Bonus",
-		'A','B',
-		0x006aa84f,
-		"America/New_York",
-		{20,50},
-		{"Americas",NULL},
-	},
-	{
-		"Euro Bonus",
-		'E','B',
-		0x0061a0da,
-		"Europe/Berlin",
-		{19,50},
-		{"Euro",NULL},
-	},
-	{
 		"Americas Chrono",
 		'A','C',
 		0x002c7652,
 		"America/New_York",
 		{20,50},
-		{"Americas",NULL},
+		{"Americas", NULL},
 	},
 	{
 		"Euro Chrono",
@@ -469,7 +452,7 @@ static const XDHS_League g_xdhs_leagues[] = {
 		0x000d5ba1,
 		"Europe/Berlin",
 		{19,50},
-		{"Euro",NULL},
+		{"Euro", NULL},
 	},
 	{
 		"Asia Chrono",
@@ -477,7 +460,7 @@ static const XDHS_League g_xdhs_leagues[] = {
 		0x00793fab,
 		"Europe/Berlin",
 		{10,50},
-		{"Asia",NULL},
+		{"Asia", NULL},
 	},
 	{
 		"Pacific Chrono",
@@ -485,19 +468,45 @@ static const XDHS_League g_xdhs_leagues[] = {
 		0x00b82f4b,
 		"America/New_York",
 		{20,50},
-		{"Pacific",NULL},
+		{"Pacific", NULL},
+	},
+	{
+		"Atlantic Bonus",
+		'T','B',
+		0x00ed8821,
+		"Europe/Berlin",
+		{19,50},
+		{"Euro", "Americas"},
+	},
+	{
+		"Americas Bonus",
+		'A','B',
+		0x006aa84f,
+		"America/New_York",
+		{20,50},
+		{"Americas", NULL},
+	},
+	{
+		"Euro Bonus",
+		'E','B',
+		0x0061a0da,
+		"Europe/Berlin",
+		{19,50},
+		{"Euro", NULL},
 	}
 };
 static const size_t LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
 
 // Parse a draft code and find the league it is for. Makes a copy into 'league' and returns true if found, false otherwise.
 static bool get_league_from_draft_code(const char* draft_code, XDHS_League* league) {
+	// SSS.W-RT S=season, W=week, R=region, T=type
 	if(draft_code == NULL) return false;
 
 	while(isdigit(*draft_code)) {draft_code++;} // Skip the numeric part
-	if(strlen(draft_code) != 3) return false;
+	if(*draft_code++ != '.') return false;
+	while(isdigit(*draft_code)) {draft_code++;} // Skip the numeric part
+	if(*draft_code++ != '-') return false;
 	char region_code = *draft_code++;
-	draft_code++; // Skip the hyphen
 	char league_type = *draft_code;
 
 	for(size_t i = 0; i < LEAGUE_COUNT; ++i) {
@@ -510,27 +519,6 @@ static bool get_league_from_draft_code(const char* draft_code, XDHS_League* leag
 	}
 
 	return false;
-}
-
-
-// With player_count players, how many pods should be created?
-// Reference: https://i.imgur.com/tpNo13G.png
-// TODO: This needs to support a player_count of any size
-int pod_count(int player_count) {
-	if(player_count >= 1 && player_count <= 10) {
-		return 1;
-	} else
-	if(player_count >= 11 && player_count <= 18) {
-		return 2;
-	} else
-	if(player_count >= 19 && player_count <= 26) {
-		return 3;
-	} else
-	if(player_count >= 27 && player_count <= 36) {
-		return 4;
-	} else
-	
-	return 5;
 }
 
 struct Draft_Duration {
@@ -566,7 +554,7 @@ static const char* parse_date_string(const char* date_string, Date* out) {
 	}
 	*str_ptr++ = 0;
 	if(strlen(year) < 2) return "Date should be written as YYYY-MM-DD.";
-	out->year = (int) strtol(year, NULL, 0);
+	out->year = (int) strtol(year, NULL, 10);
 	if(strlen(year) == 2) out->year += 2000; // Two digits given, make it four.
 
 	// Parse the month
@@ -579,7 +567,7 @@ static const char* parse_date_string(const char* date_string, Date* out) {
 	}
 	*str_ptr++ = 0;
 	if(strlen(month) < 1) return "Date should be written as YYYY-MM-DD.";
-	out->month = (int) strtol(month, NULL, 0);
+	out->month = (int) strtol(month, NULL, 10);
 
 	// Parse the day
 	const char* day = str_ptr;
@@ -591,7 +579,7 @@ static const char* parse_date_string(const char* date_string, Date* out) {
 		return "String longer than expected.";
 	}
 	if(strlen(day) < 1) return "Date should be written as YYYY-MM-DD.";
-	out->day = (int) strtol(day, NULL, 0);
+	out->day = (int) strtol(day, NULL, 10);
 
 	// String parsed - check if this looks like a valid date.
 
@@ -707,15 +695,15 @@ static const size_t LEAGUE_NAME_LENGTH_MAX = 32;
 
 // NOTE: As we're storing the values of these in the database, the order of these must not change!
 enum DRAFT_STATUS {
-	DRAFT_STATUS_INVALID,
+	DRAFT_STATUS_INVALID            =  0,
 
-	DRAFT_STATUS_CREATED,           // The draft has been created but not posted.
-	DRAFT_STATUS_POSTED,            // The draft has been posted and sign ups are open.
-	DRAFT_STATUS_REMINDER_SENT,     // The pre-draft reminder has been sent to everyone signed up.
-	DRAFT_STATUS_TENTATIVES_PINGED, // The warning to tentatives has been posted.
-	DRAFT_STATUS_LOCKED,            // The draft is now partially locked and ready to be fired.
-	DRAFT_STATUS_FIRED,             // The draft is now fully locked and play has commenced.
-	DRAFT_STATUS_COMPLETE           // The draft has concluded.
+	DRAFT_STATUS_CREATED            =  1, // The draft has been created but not posted.
+	DRAFT_STATUS_POSTED             =  2, // The draft has been posted and sign ups are open.
+	DRAFT_STATUS_REMINDER_SENT      =  4, // The pre-draft reminder has been sent to everyone signed up.
+	DRAFT_STATUS_TENTATIVES_PINGED  =  8, // The warning to tentatives has been posted, if there are any.
+	DRAFT_STATUS_LOCKED             = 16, // The draft is now partially locked and ready to be fired.
+	DRAFT_STATUS_FIRED              = 32, // The draft is now fully locked and play has commenced.
+	DRAFT_STATUS_COMPLETE           = 64, // The draft has concluded.
 };
 
 // All data needed for a #-pre-register post is available in this structure.
@@ -741,7 +729,6 @@ struct Draft_Event {
 	u32 color; // Color to use for vertical strip on the signup post.
 	char xmage_server[XMAGE_SERVER_LENGTH_MAX + 1];
 	bool mtga_draft; // Will the draft portion take place on https://mtgadraft.tk/?
-	//u64 banner_id; // TODO: How long do attachments live for?
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
 
 	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
@@ -751,6 +738,64 @@ struct Draft_Event {
 	u64 tentatives_pinged_id; // Message ID of the reminder sent to tentatives #-in-the-moment-draft.
 };
 static_assert(std::is_trivially_copyable<Draft_Event>(), "struct Draft_Event is not trivially copyable");
+
+
+enum POD_ALLOCATION_REASON {
+	POD_ALLOCATION_REASON_INVALID,
+
+	POD_ALLOCATION_REASON_HOST,
+	POD_ALLOCATION_REASON_RO3,
+	POD_ALLOCATION_REASON_ERO3,
+	POD_ALLOCATION_REASON_CONTENTION,
+	POD_ALLOCATION_REASON_SHARK,
+	POD_ALLOCATION_REASON_NEWBIE, // Members with < 4 drafts player get priority for pod 2
+	POD_ALLOCATION_PREFERENCE,
+	POD_ALLOCATION_RANDOM
+};
+
+struct Pod_Player {
+	u64 member_id;
+	POD_ALLOCATION_REASON reason;
+	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
+};
+
+// No draft can have fewer seats than this.
+static const int POD_SEATS_MIN = 6;
+
+// No draft pod will ever have more seats than this.
+static const int POD_SEATS_MAX = 10;
+
+// The maximum number of pods this bot can handle.
+static const int PODS_MAX = 8;
+
+struct Pod {
+	int seats;
+	Pod_Player players[POD_SEATS_MAX];
+};
+
+static void add_player_to_pod(Pod* pod, const Pod_Player* player) {
+	memcpy((void*)&pod->players[pod->seats], player, sizeof(Pod_Player));
+	++pod->seats;
+}
+
+struct Draft_Pods {
+	Draft_Pods() {
+		memset(this, 0, sizeof(Draft_Pods));
+	}
+
+	int count;
+	Pod pods[PODS_MAX];
+};
+
+// With player_count players, how many pods should be created?
+// Reference: https://i.imgur.com/tpNo13G.png
+// TODO: This needs to support a player_count of any size
+static int calc_pod_count(int player_count) {
+	if(player_count < POD_SEATS_MIN) {
+		return 0;
+	} else
+	return (int)(round((float)player_count / 8));
+}
 
 // All database_xxxx functions return this struct. If the member variable success is true value will contain the requested data and count will be the number of rows returned.
 template<typename T>
@@ -1148,6 +1193,118 @@ static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draf
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
+struct Draft_Sign_Up {
+	u64 member_id;
+	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
+	SIGNUP_STATUS status;
+	time_t time;
+	
+	my_bool rank_is_null;
+	int rank;
+
+	my_bool is_shark_is_null;
+	bool is_shark;
+	
+	my_bool points_is_null;
+	int points;
+	
+	my_bool devotion_is_null;
+	int devotion;
+
+	my_bool win_rate_is_null;
+	f32 win_rate;
+
+	bool is_host; // NOTE: Not written to by a database query - set elsewhere.
+	bool allocated; // Player has been allocated to a pod.
+};
+
+static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code) {
+	MYSQL_CONNECT();
+	static const char* query = R"(
+		SELECT
+			draft_signups.member_id,
+			draft_signups.preferred_name,
+			draft_signups.status,
+			draft_signups.time,
+			leaderboards.rank,
+			shark.is_shark,
+			leaderboards.points,
+			devotion.value AS devotion,
+			win_rate_recent.overall AS win_rate
+		FROM draft_signups
+		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? -- League code from spread: PC, AC, EB etc 
+		LEFT JOIN shark ON draft_signups.member_id=shark.id
+		LEFT JOIN devotion ON draft_signups.member_id=devotion.id
+		LEFT JOIN win_rate_recent ON draft_signups.member_id=win_rate_recent.id
+		WHERE
+			draft_signups.guild_id=?
+		AND
+			draft_signups.draft_code=?
+		;)";
+	MYSQL_STATEMENT();
+
+	static const char* league = "PC";
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Draft_Sign_Up result;
+
+	MYSQL_BIND output[9];
+	memset(output, 0, sizeof(output));
+	unsigned long length[9];
+	my_bool is_error[9];
+	my_bool is_null[9]; // NOTE: Not all are used here
+
+	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
+	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(2, MYSQL_TYPE_LONG, &result.status, sizeof(result.status));
+	MYSQL_OUTPUT(3, MYSQL_TYPE_LONGLONG, &result.time, sizeof(result.time));
+
+	output[4].buffer_type = MYSQL_TYPE_LONG;
+	output[4].buffer = (void*) &result.rank;
+	output[4].buffer_length = sizeof(result.rank);
+	output[4].is_null = &result.rank_is_null;
+	output[4].length = &length[4];
+	output[4].error = &is_error[4];
+
+	output[5].buffer_type = MYSQL_TYPE_TINY;
+	output[5].buffer = (void*) &result.is_shark;
+	output[5].buffer_length = sizeof(result.is_shark);
+	output[5].is_null = &result.is_shark_is_null;
+	output[5].length = &length[5];
+	output[5].error = &is_error[5];
+
+	output[6].buffer_type = MYSQL_TYPE_LONG;
+	output[6].buffer = (void*) &result.points;
+	output[6].buffer_length = sizeof(result.points);
+	output[6].is_null = &result.points_is_null;
+	output[6].length = &length[6];
+	output[6].error = &is_error[6];
+
+	output[7].buffer_type = MYSQL_TYPE_LONG;
+	output[7].buffer = (void*) &result.devotion;
+	output[7].buffer_length = sizeof(result.devotion);
+	output[7].is_null = &result.devotion_is_null;
+	output[7].length = &length[7];
+	output[7].error = &is_error[7];
+
+	output[8].buffer_type = MYSQL_TYPE_FLOAT;
+	output[8].buffer = (void*) &result.win_rate;
+	output[8].buffer_length = sizeof(result.win_rate);
+	output[8].is_null = &result.win_rate_is_null;
+	output[8].length = &length[8];
+	output[8].error = &is_error[8];
+
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Draft_Sign_Up> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix) {
 	MYSQL_CONNECT();
@@ -1283,7 +1440,7 @@ static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u6
 
 static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string& draft_code, const DRAFT_STATUS status) {
 	MYSQL_CONNECT();
-	static const char* query = "UPDATE draft_events SET status=? WHERE guild_id=? AND draft_code=?";
+	static const char* query = "UPDATE draft_events SET status=status|? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
@@ -1760,6 +1917,8 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 	const auto draft_event = database_get_event(guild_id, draft_code);
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
 
+	if(sign_ups == 0) return;
+
 	dpp::message message;
 	message.set_type(dpp::message_type::mt_default);
 	message.set_guild_id(guild_id);
@@ -1795,22 +1954,24 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 
 // Post a message to the hosts-only #-current-draft-management channel outlining the procedures for correctly managing the firing of the draft.
 static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
-	std::string text = fmt::format(":alarm_clock: **Attention hosts! Draft {} has now been locked.** :alarm_clock:\n\n", draft_code);
+	std::string text = fmt::format(":alarm_clock: **Attention hosts! Draft {} has now been partially locked.** :alarm_clock:\n\n", draft_code);
 
 	text += "NOTE: Not everything here is implemented yet...\n\n";
 
 	text += "Use the following commands to manage the signup list before pod allocations are posted:\n";
 	text += "	**/add_player** - Add a player to the Playing list. Use this for adding Minutemages.\n";
 	text += "	**/remove_player** - Remove a player from the Playing list. Use this for no-shows or members volunteering to drop to make an even number of players.\n";
-
 	text += "\n";
 
 	text += "Once the Playing list shows all available players:\n";
 	text += "   **/show_allocations** - Show the pod allocations here in this team-only channel.\n";
-	text += "   **/post_allocations** - Post the pod allocations to #-in-the-moment-draft for all to see.\n";
-	text += "   **/fire** - Post the pre-draft reminder text and prevent further minutemage sign ups.\n";
-
+	text += "   **/post_allocations** - Post the pod allocations to #-in-the-moment-draft channel.\n";
 	text += "\n";
+
+	text += "Once all pods have been filled:\n";
+	text += "   **/fire** - Post the pre-draft reminder text and fully lock the draft.\n";
+	text += "\n";
+
 	text += "The follow commands are available once the draft has been fired:\n";
 	text += "	**/dropper** - Add a player to the droppers list.\n";
 
@@ -1995,6 +2156,13 @@ int main(int argc, char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	// Download and install the latest IANA time zone database.
+	fprintf(stdout, "Downloading IANA time zone database...");
+	const std::string tz_version = date::remote_version();
+	(void)date::remote_download(tz_version);
+	(void)date::remote_install(tz_version);
+	fprintf(stdout, "OK\n");
+
 #ifdef DEBUG
     // Careful not to pipe these somewhere a malicious user could find...
     fprintf(stdout, "mysql_host     = '%s'\n", g_config.mysql_host);
@@ -2123,9 +2291,6 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "mtga_draft", "Will the draft potion be run on the MTGA Draft website?", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "xmage_server", "Override the default XMage server. i.e. xmage.today:17172", false));
 				cmd.add_option(dpp::command_option(dpp::co_channel, "channel", "Channel to post the signup. Defaults to #-pre-register.", false));
-#if 0
-				cmd.add_option(dpp::command_option(dpp::co_integer, "signup_type", "Override the default signup buttons.", false));
-#endif
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
@@ -2197,7 +2362,7 @@ int main(int argc, char* argv[]) {
 			// First, check if the draft code is valid and if it is get a copy of the XDHS_League it applies to.
 			XDHS_League league;
 			if(get_league_from_draft_code(draft_code.c_str(), &league) == false) {
-				event.reply("**Invalid draft code.** Draft codes should look like XXXL-T, where:\n\tXXX is any number\n\tL is the uppercase league code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\tT is the uppercase league type: (C)hrono or (B)onus.");
+				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\tSS is the season\n\tW is the week in the season\n\tR is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\tT is the league type: (C)hrono or (B)onus.");
 				return;
 			}
 			strcpy(draft_event.draft_code, draft_code.c_str());
@@ -2524,6 +2689,75 @@ int main(int argc, char* argv[]) {
 
 			event.reply(fmt::format("{} removed from {}.", preferred_name, g_current_draft_code));
 		} else
+		if(command_name == "post_allocations") {
+			const auto guild_id = event.command.get_guild().id;
+
+			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code);
+
+			if((sign_ups.count % 2) == 1) {
+				event.reply("Odd number of sign ups. Use /add_player or /remove_player.");
+				return;
+			}
+
+			Draft_Pods pods;
+			pods.count = calc_pod_count(sign_ups.count);
+
+			if(pods.count == 0) {
+				event.reply("Insufficient players to form a pod.");
+				return;
+			}
+
+
+			// Flag all potential hosts and flag everyone as not allocated.
+			int host_indexes[64];
+			int host_count = 0;
+
+			for(size_t i = 0; i < sign_ups.value.size(); ++i) {
+				sign_ups.value[i].is_host = false;
+				sign_ups.value[i].allocated = false;
+				const dpp::guild_member member = dpp::find_guild_member(guild_id, sign_ups.value[i].member_id);
+				for(auto role : member.roles) {
+					if((role == XDHS_TEAM_ROLE_ID) || (role == XDHS_HOST_ROLE_ID)) {
+						sign_ups.value[i].is_host = true;
+						host_indexes[host_count] = i;
+						++host_count;
+					}
+				}
+			}
+
+			if(host_count < pods.count) {
+				// TODO: Now what?
+			}
+
+			std::vector<Draft_Sign_Up*> hosts;
+			for(int i = 0; i < host_count; ++i) {
+				hosts.push_back(&sign_ups.value[host_indexes[i]]);
+			}
+
+			std::string text;
+			for(auto& sign_up : sign_ups.value) {
+				sign_up.is_host = false;
+				const dpp::guild_member member = dpp::find_guild_member(guild_id, sign_up.member_id);
+				for(auto role : member.roles) {
+					if((role == XDHS_TEAM_ROLE_ID) || (role == XDHS_HOST_ROLE_ID)) {
+						sign_up.is_host = true;
+					}
+				}
+
+				text += sign_up.preferred_name;
+
+				if(sign_up.is_host == true) text += ":cowboy:";
+				if(sign_up.is_shark_is_null == false && sign_up.is_shark == true) text += ":shark:";
+				if(sign_up.status == 1) text += ":one:";
+				if(sign_up.status == 2) text += ":two:";
+				if(sign_up.status == 3) text += ":person_shrugging:";
+				
+				text += "\n";
+			}
+
+
+			event.reply(text);
+		} else
 		if(command_name == "dropper") {
 			const auto guild_id = event.command.get_guild().id;
 			const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
@@ -2634,8 +2868,15 @@ int main(int argc, char* argv[]) {
 		// Discord will now call on_guild_create for each guild this bot is a member of.
 	});
 
-
     bot.start(true);
+
+#if 0
+	{
+		bot.thread_create_with_message("123P-C", IN_THE_MOMENT_DRAFT_CHANNEL_ID, 1090316907871211561, 1440, 0, [&bot](const dpp::confirmation_callback_t& event) {
+
+		});
+	}
+#endif
 
 	bot.start_timer([&bot](dpp::timer t) {
 		set_bot_presence(bot);
@@ -2656,7 +2897,7 @@ int main(int argc, char* argv[]) {
 		time_t now = time(NULL);
 
 		// Send the pre-draft reminder message if it hasn't already been sent.
-		if((draft.value->reminder_id == 0) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
+		if((BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending pre-draft reminder message for {}.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
@@ -2664,7 +2905,7 @@ int main(int argc, char* argv[]) {
 		}
 
 		// Ping the tentatives if they haven't already been pinged.
-		if((draft.value->tentatives_pinged_id == 0) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
+		if((BIT_SET(draft.value->status, DRAFT_STATUS_TENTATIVES_PINGED)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending tentative reminder message for {}.", draft_code.value.c_str()));
 			// Redraw the sign up posts so the Tentative button shows as locked.
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);

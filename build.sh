@@ -14,8 +14,8 @@ else
 	BUILD_MODE="-DDEBUG -g"
 fi
 
-# Opts for Howard Hinnant's date/tz library
-LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1 -DAUTO_DOWNLOAD=1"
+# Opts for Howard Hinnant's date/tz library.
+LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1" # -DAUTO_DOWNLOAD=1
 
 # Libraries to link with
 LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpthread"
