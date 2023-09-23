@@ -2156,13 +2156,6 @@ int main(int argc, char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
-	// Download and install the latest IANA time zone database.
-	fprintf(stdout, "Downloading IANA time zone database...");
-	const std::string tz_version = date::remote_version();
-	(void)date::remote_download(tz_version);
-	(void)date::remote_install(tz_version);
-	fprintf(stdout, "OK\n");
-
 #ifdef DEBUG
     // Careful not to pipe these somewhere a malicious user could find...
     fprintf(stdout, "mysql_host     = '%s'\n", g_config.mysql_host);
@@ -2188,6 +2181,14 @@ int main(int argc, char* argv[]) {
 	log(LOG_LEVEL_INFO, "Build mode: %s",             g_build_mode);
     log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
+
+	// Download and install the latest IANA time zone database.
+	log(LOG_LEVEL_INFO, "Downloading IANA time zone database.");
+	const std::string tz_version = date::remote_version();
+	(void)date::remote_download(tz_version);
+	(void)date::remote_install(tz_version);
+	fprintf(stdout, "OK\n");
+
 
 	// Create the bot and connect to Discord.
 	// TODO: We don't need all intents, just request what we need...
