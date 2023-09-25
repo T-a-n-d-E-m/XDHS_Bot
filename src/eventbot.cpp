@@ -707,7 +707,7 @@ struct Draft_Event {
 
 	u32 color; // Color to use for vertical strip on the signup post.
 	char xmage_server[XMAGE_SERVER_LENGTH_MAX + 1];
-	bool mtga_draft; // Will the draft portion take place on Draftmancer? TODO: Rename this variable
+	bool draftmancer_draft; // Will the draft portion take place on Draftmancer? TODO: Rename this variable
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
 
 	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
@@ -956,7 +956,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 			set_list,     -- 13
 			color,        -- 14
 			xmage_server, -- 15
-			mtga_draft,   -- 16
+			draftmancer_draft, -- 16
 			banner_url,   -- 17
 			channel_id    -- 17
 		)
@@ -982,7 +982,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_INPUT(13, MYSQL_TYPE_STRING,   event->set_list,        strlen(event->set_list));
 	MYSQL_INPUT(14, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
 	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
-	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->mtga_draft,     sizeof(event->mtga_draft));
+	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
 	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_url,      strlen(event->banner_url));
 	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
 
@@ -1012,7 +1012,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 			set_list,            -- 13
 			color,               -- 14
 			xmage_server,        -- 15
-			mtga_draft,          -- 16
+			draftmancer_draft,   -- 16
 			banner_url,          -- 17
 			channel_id,          -- 18
 			details_id,          -- 19
@@ -1048,7 +1048,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING,   result->set_list,        SET_LIST_LENGTH_MAX + 1);
 	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color)); 
 	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->mtga_draft,     sizeof(result->mtga_draft));
+	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->draftmancer_draft, sizeof(result->draftmancer_draft));
 	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_url,      URL_LENGTH_MAX + 1);
 	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
 	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
@@ -1668,10 +1668,10 @@ static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_E
 	std::string embed_title = fmt::format(":hourglass_flowing_sand: Draft starts: <t:{}:R>", draft_event->time);
 	embed.set_title(embed_title);
 
-	if(draft_event->mtga_draft == false) {
+	if(draft_event->draftmancer_draft == false) {
 		embed.set_description(fmt::format("The draft and games will take place on **{}**.", draft_event->xmage_server));
 	} else {
-		embed.set_description(fmt::format("The draft will take place on **mtgadraft.tk**, games on **{}**.", draft_event->xmage_server));
+		embed.set_description(fmt::format("The draft will take place on **https://www.draftmancer.com**, games on **{}**.", draft_event->xmage_server));
 	}
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_event->draft_code);
@@ -2046,7 +2046,7 @@ static void output_sql() {
 	// Draft sign up
 	fprintf(stdout, "color INT NOT NULL,\n"); // Color of the vertical stripe down the left side of the embed.
 	fprintf(stdout, "xmage_server VARCHAR(%lu) NOT NULL DEFAULT \"\",\n", XMAGE_SERVER_LENGTH_MAX);
-	fprintf(stdout, "mtga_draft BOOLEAN NOT NULL DEFAULT 0,\n");
+	fprintf(stdout, "draftmancer_draft BOOLEAN NOT NULL DEFAULT 0,\n");
 	fprintf(stdout, "banner_url VARCHAR(%lu) NOT NULL,\n", URL_LENGTH_MAX);
 
 	//fprintf(stdout, "deleted BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the event been deleted?
@@ -2269,7 +2269,7 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_string, "card_list", "A link to a card list for this draft. i.e. A link to CubeCobra.", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "set_list", "For chaos drafts. A comma separated list of sets in the pool. i.e. IVN,ONS,ZEN,...", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "color", "Override the default color for the league. Must be RGB in hexidecimal. i.e. 8CE700", false));
-				cmd.add_option(dpp::command_option(dpp::co_boolean, "mtga_draft", "Will the draft potion be run on the MTGA Draft website?", false));
+				cmd.add_option(dpp::command_option(dpp::co_boolean, "draftmancer_draft", "Will the draft potion be run on Draftmancer?", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "xmage_server", "Override the default XMage server. i.e. xmage.today:17172", false));
 				cmd.add_option(dpp::command_option(dpp::co_channel, "channel", "Channel to post the signup. Defaults to #-pre-register.", false));
 				bot.guild_command_create(cmd, event.created->id);
@@ -2415,11 +2415,11 @@ int main(int argc, char* argv[]) {
 			}
 
 			// Is the draft portion using the MTGA Draft site?
-			draft_event.mtga_draft = false;
+			draft_event.draftmancer_draft = false;
 			{
-				auto opt = event.get_parameter("mtga_draft");
+				auto opt = event.get_parameter("draftmancer_draft");
 				if(std::holds_alternative<bool>(opt)) {
-					draft_event.mtga_draft = std::get<bool>(opt);
+					draft_event.draftmancer_draft = std::get<bool>(opt);
 				}
 			}
 
