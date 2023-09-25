@@ -274,13 +274,11 @@ static const MTG_Draftable_Sets g_draftable_sets[] = {
 	{"WOE", "Wilds of Eldraine"},
 	{"RVR", "Ravnica Remastered"},
 
-	// XDHS team custom and remastered sets
+	// XDHS custom and remastered sets
 	{"INVR", "Invasion Remastered"},
 	{"KMGR", "Kamigawa Remastered"},
 	{"PMMA", "Pre Mirage Masters"},
 	{"GBMA", "Garbage Masters"},
-
-	// Member custom and remastered sets
 	{"SLCS", "The Sliver Core Set"},
 	{"USGR", "Urza Block Redeemed"},
 	{"TWAR", "Total WAR"},
@@ -408,7 +406,7 @@ static void expand_format_string(const char* format, size_t len, char* out, size
 		int offset = 0;
 		for(int i = 0; i < token_count; ++i) {
 			const char* set_name = get_set_name_from_code(&tokens[i][0]);
-			if(set_name == NULL) set_name = format; // Use the set name passed in
+			if(set_name == NULL) set_name = format; // Unknown set - Use the set name passed in
 			offset += snprintf(out + offset, out_len - offset, "%s", set_name);
 			if(i != token_count-1) { // If not the last in the list, add a separator.
 				offset += snprintf(out + offset, out_len - offset, "%s", "/");
@@ -709,7 +707,7 @@ struct Draft_Event {
 
 	u32 color; // Color to use for vertical strip on the signup post.
 	char xmage_server[XMAGE_SERVER_LENGTH_MAX + 1];
-	bool mtga_draft; // Will the draft portion take place on https://mtgadraft.tk/?
+	bool mtga_draft; // Will the draft portion take place on Draftmancer? TODO: Rename this variable
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
 
 	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
@@ -717,6 +715,9 @@ struct Draft_Event {
 	u64 signups_id; // Message ID of the sign up sheet posted in #-pre-register.
 	u64 reminder_id; // Message ID of the reminder message sent to all sign ups #-in-the-moment-draft.
 	u64 tentatives_pinged_id; // Message ID of the reminder sent to tentatives #-in-the-moment-draft.
+
+	// TODO!
+	u64 hosts_info_id; // Message ID of the message posted to hosts in #current-draft-management
 };
 static_assert(std::is_trivially_copyable<Draft_Event>(), "struct Draft_Event is not trivially copyable");
 
@@ -2252,7 +2253,7 @@ int main(int argc, char* argv[]) {
 				dpp::slashcommand cmd("create_draft", "Create a new draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				// Required
-				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code for this draft. i.e. 123P-C.", true));
+				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code for this draft. i.e. 123.4-PC.", true));
 				cmd.add_option(dpp::command_option(dpp::co_string, "format", "The format of the draft. i.e. TSP/PLC/FUT or 'Artifact Chaos'", true));
 				//cmd.add_option(dpp::command_option(dpp::co_string, "description", "A short description of the draft format. i.e. Time Spiral/Planar Chaos/Future Sight.", true));
 				cmd.add_option(dpp::command_option(dpp::co_string, "date", "Date of the draft in YYYY-MM-DD format. i.e. 2023-03-15.", true));
