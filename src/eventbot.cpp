@@ -640,7 +640,7 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
 
 // The maximum allowed byte length of a draft code. 5 digits should be enough!
-static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT"); // FIXME: The MySQL table was created with the old draft code length
+static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT");
 
 // The maximum allowed byte length of a draft format string.
 static const size_t DRAFT_FORMAT_LENGTH_MAX = 64;
