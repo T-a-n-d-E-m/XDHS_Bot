@@ -639,7 +639,7 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 // The maximum allowed characters in a Discord username or nickname.
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
 
-// The maximum allowed byte length of a draft code. 5 digits should be enough!
+// The maximum allowed byte length of a draft code.
 static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT");
 
 // The maximum allowed byte length of a draft format string.
