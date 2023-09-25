@@ -533,8 +533,19 @@ struct Date {
 };
 
 // Do some rudimentary validation on the date string sent with the create_event command and parse the provided values. Returns NULL if no error and fills the 'out' variable with the parsed values, or an string describing the problem.
-// Despite the harsh sounding error strings, this tries to be quite generous and forgiving.
-// For example, it will accept a date written as YY/M/D
+// Despite the harsh sounding error strings, this tries to be quite generous and forgiving. For example, it will accept a date written as YY/M/D
+// Yes, this could use std::regex but this uses less memory, less cycles and compiles faster.
+#define split_date(str, min_len, max_len, out) \
+{ \
+	const char* start = str; \
+	while(isdigit(*str)) str++;       \
+	if(*str != '-' && *str != '.' && *str != '\\' && *str != '/' && *str != '\0') { \
+		return "Invalid digit separator.";  \
+	} \
+	*str++ = 0; \
+	if(strlen(start) < min_len || strlen(start) > max_len) return "Date should be written as YYYY-MM-DD"; \
+	out = strtol(start, NULL, 10); \
+}
 static const char* parse_date_string(const char* date_string, Date* out) {
 	if(strlen(date_string) < strlen("YY-M-D")) return "String is too short to contain a valid date. Date should be written as YYYY-MM-DD.";
 	if(strlen(date_string) > strlen("YYYY-MM-DD")) return "String is too long. Date should be written as YYYY-MM-DD.";
@@ -544,44 +555,14 @@ static const char* parse_date_string(const char* date_string, Date* out) {
 	memcpy(str, date_string, strlen(date_string)+1);
 	char* str_ptr = str;
 
-	// Parse the year
-	const char* year = str_ptr;
-	while(isdigit(*str_ptr)) {
-		str_ptr++;
-	}
-	if(*str_ptr != '-' && *str_ptr != '\\' && *str_ptr != '/') {
-		return "Unsupported separator used. Use - between digits.";
-	}
-	*str_ptr++ = 0;
-	if(strlen(year) < 2) return "Date should be written as YYYY-MM-DD.";
-	out->year = (int) strtol(year, NULL, 10);
-	if(strlen(year) == 2) out->year += 2000; // Two digits given, make it four.
+	split_date(str_ptr, 2, 4, out->year);
+	split_date(str_ptr, 1, 2, out->month);
+	split_date(str_ptr, 1, 2, out->day);
 
-	// Parse the month
-	const char* month = str_ptr;
-	while(isdigit(*str_ptr)) {
-		str_ptr++;
-	}
-	if(*str_ptr != '-' && *str_ptr != '\\' && *str_ptr != '/') {
-		return "Unsupported separator used. Use - between digits.";
-	}
-	*str_ptr++ = 0;
-	if(strlen(month) < 1) return "Date should be written as YYYY-MM-DD.";
-	out->month = (int) strtol(month, NULL, 10);
-
-	// Parse the day
-	const char* day = str_ptr;
-	while(isdigit(*str_ptr)) {
-		str_ptr++;
-	}
-	if(*str_ptr != '\0') {
-		// TODO: With the previous checks, this should be impossible... right?
-		return "String longer than expected.";
-	}
-	if(strlen(day) < 1) return "Date should be written as YYYY-MM-DD.";
-	out->day = (int) strtol(day, NULL, 10);
-
+	if(out->year <= 99) out->year += 2000;
+	
 	// String parsed - check if this looks like a valid date.
+	// TODO: The date library probably could do this, right?
 
 	time_t current_time = time(NULL);
 	struct tm t = *localtime(&current_time);
@@ -637,7 +618,7 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 		return false;
 	}
 	*str_ptr++ = 0;
-	out->hour = (int) strtol(hour, NULL, 0);
+	out->hour = (int) strtol(hour, NULL, 10);
 	if(out->hour < 0 || out->hour > 23) return false;
 
 	// Parse the minutes
@@ -648,7 +629,7 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 	if(*str_ptr != '\0') {
 		return false;
 	}
-	out->minute = (int) strtol(minute, NULL, 0);
+	out->minute = (int) strtol(minute, NULL, 10);
 	if(out->minute < 1 && out->minute > 59) return false;
 
 	return true;
@@ -661,7 +642,7 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
 
 // The maximum allowed byte length of a draft code. 5 digits should be enough!
-static const size_t DRAFT_CODE_LENGTH_MAX = strlen("XXXXXL-T");
+static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT"); // FIXME: The MySQL table was created with the old draft code length
 
 // The maximum allowed byte length of a draft format string.
 static const size_t DRAFT_FORMAT_LENGTH_MAX = 64;
@@ -2187,11 +2168,9 @@ int main(int argc, char* argv[]) {
 	const std::string tz_version = date::remote_version();
 	(void)date::remote_download(tz_version);
 	(void)date::remote_install(tz_version);
-	fprintf(stdout, "OK\n");
-
 
 	// Create the bot and connect to Discord.
-	// TODO: We don't need all intents, just request what we need...
+	// TODO: We don't need all intents, so just request what we need...
 	dpp::cluster bot(g_config.discord_token, dpp::i_all_intents);
 
 	// Override the default DPP logger with ours.
