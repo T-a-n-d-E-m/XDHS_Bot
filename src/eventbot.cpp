@@ -71,7 +71,7 @@ static const time_t SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES = (60*10);
 static const time_t SECONDS_AFTER_DRAFT_TO_DELETE_POSTS     = (60*60*5);
 
 // How often often to spin up the thread that sends the pre-draft reminders, tentatives ping, etc.
-static const dpp::timer JOB_THREAD_TICK_RATE = 15;
+static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 
 // The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
@@ -83,6 +83,11 @@ static const u64 PRE_REGISTER_CHANNEL_ID        = 907524659099099178; // Default
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID    = 1087299085612109844;
 static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID = 1075355794507305001;
 static const u64 BOT_COMMANDS_CHANNEL_ID        = 885048614190190593;
+static const u64 DECK_SCREENSHOTS_CHANNEL_ID    = 1155769474520199279;
+static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 1155771897225674752;
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID  = 1155772743485235200;
+static const u64 FEEDBACK_CHANNEL_ID            = 1155773361104887880;
+static const u64 CALENDAR_CHANNEL_ID			= 1155774664732323952;
 static const u64 XDHS_TEAM_ROLE_ID              = 885054778978234408;
 static const u64 XDHS_HOST_ROLE_ID              = 1091275398639267881;
 static bool g_commands_registered               = false; // Have the bot slash commands been registered for this guild?
@@ -94,6 +99,11 @@ static const u64 PRE_REGISTER_CHANNEL_ID        = 753639027428687962; // Default
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID    = 921027014822068234;
 static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID = 535127333401657354;
 static const u64 BOT_COMMANDS_CHANNEL_ID        = 753637350877429842;
+static const u64 DECK_SCREENSHOTS_CHANNEL_ID    = 647073844649000962;
+static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID  = 796861143594958868; 
+static const u64 FEEDBACK_CHANNEL_ID            = 822015209756950528;
+static const u64 CALENDAR_CHANNEL_ID			= 794227134892998666;
 static bool g_commands_registered               = false // Have the bot slash commands been registered for this guild?;
 #endif
 
@@ -741,10 +751,10 @@ struct Pod_Player {
 	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 };
 
-// No draft can have fewer seats than this.
+// Our drafts can have no fewer seats than this.
 static const int POD_SEATS_MIN = 6;
 
-// No draft pod will ever have more seats than this.
+// Our drafts can have no more seats than this.
 static const int POD_SEATS_MAX = 10;
 
 // The maximum number of pods this bot can handle.
@@ -1086,7 +1096,7 @@ static const char* to_cstring(SIGNUP_STATUS s) {
 		case SIGNUP_STATUS_TENTATIVE:   return "tentative";
 		case SIGNUP_STATUS_MINUTEMAGE:  return "minutemage";
 		case SIGNUP_STATUS_DECLINE:     return "decline";
-		case SIGNUP_STATUS_REMOVED:     return "decline";
+		case SIGNUP_STATUS_REMOVED:     return "removed";
 		default:
 			return NULL;
 	}
@@ -1566,9 +1576,13 @@ static void add_sign_up_buttons_to_message(dpp::message& message, const std::sha
 
 	bool playing_locked = false;
 	bool tentative_locked = false;
-	bool minutemage_locked = false; // TODO: Do we ever want to lock this?
+	bool minutemage_locked = true;
 
 	time_t now = time(NULL);
+
+	if(draft_event->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER) {
+		minutemage_locked = false;
+	}
 
 	if(draft_event->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES) {
 		tentative_locked = true;
@@ -1861,6 +1875,8 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 		text += fmt::format("<@{}> ", sign_up.member_id);
 	}
 
+	// TODO: Needs the XMage version here.
+
 	text += "\n\n";
 	text += fmt::format("**:bell: This is the pre-draft reminder for {}: {} :bell:**\n\n", draft_event.value->draft_code, draft_event.value->format);
 	text += "Please confirm your status on the signup sheet below.\n";
@@ -1938,29 +1954,38 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 	std::string text = fmt::format(":alarm_clock: **Attention hosts! Draft {} has now been partially locked.** :alarm_clock:\n\n", draft_code);
 
-	text += "NOTE: Not everything here is implemented yet...\n\n";
+	text += "NOTE: Not everything here is implemented yet!\n\n";
 
 	text += "Use the following commands to manage the signup list before pod allocations are posted:\n";
 	text += "	**/add_player** - Add a player to the Playing list. Use this for adding Minutemages.\n";
 	text += "	**/remove_player** - Remove a player from the Playing list. Use this for no-shows or members volunteering to drop to make an even number of players.\n";
 	text += "\n";
 
-	text += "Once the Playing list shows all available players:\n";
+	text += "Nominate a host for each pod:\n";
+	text += "   **/add_host**\n";
+	text += "   **/remove_host**\n";
+	text += "\n";
+
+	text += "Once the Playing list shows all available players and they are confirmed to be playing:\n";
 	text += "   **/show_allocations** - Show the pod allocations here in this team-only channel.\n";
-	text += "   **/post_allocations** - Post the pod allocations to #-in-the-moment-draft channel.\n";
+	text += "   **/post_allocations** - Create threads for each pod and post the pod allocations to #-in-the-moment-draft channel.\n";
 	text += "\n";
 
 	text += "Once all pods have been filled:\n";
-	text += "   **/fire** - Post the pre-draft reminder text and fully lock the draft.\n";
+	text += "   **/fire** - Post the pre-draft reminder message and fully lock the draft.\n";
 	text += "\n";
 
 	text += "The follow commands are available once the draft has been fired:\n";
-	text += "	**/dropper** - Add a player to the droppers list.\n";
+	text += "	**/dropper** - Increment the drop counter for a member.\n";
+	text += "\n";
+
+	text += "After the draft has completed:\n";
+	text += "   **/finish** - Post the post-draft reminder message to #in-the-moment draft (close the threads now?).\n";
 
 	send_message(bot, CURRENT_DRAFT_MANAGEMENT_ID, text);
 }
 
-// Users on Discord have two possible names per guild: Their global username or a per-guild nickname.
+// Users on Discord have two possible names per guild: Their global name or a per-guild nickname. (They also have a username, argh!)
 static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
 	std::string preferred_name;
 	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
@@ -1969,7 +1994,7 @@ static std::string get_members_preferred_name(const u64 guild_id, const u64 memb
 	} else {
 		const dpp::user* user = dpp::find_user(member_id);
 		if(user != nullptr) {
-			preferred_name = user->username;	
+			preferred_name = user->global_name;	
 		} else {
 			// TODO: Now what? Return an error message?
 			log(LOG_LEVEL_ERROR, "Failed to find preferred name for member %lu.", member_id);
@@ -2325,6 +2350,11 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the droppers list.", true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+			{
+				dpp::slashcommand cmd("finish", "Post the post draft message.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
+			}
 
 			g_commands_registered = true;
 		}
@@ -2606,7 +2636,7 @@ int main(int argc, char* argv[]) {
 			const auto guild_id = event.command.get_guild().id;
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
-#if TESTING
+#if TESTING // Disabled so I can use the command any time.
 			if(draft.value->status != DRAFT_STATUS_LOCKED) {
 				dpp::message message;
 				message.set_flags(dpp::m_ephemeral);
@@ -2746,6 +2776,16 @@ int main(int argc, char* argv[]) {
 			database_add_dropper(guild_id, member_id, g_current_draft_code.c_str());
 			const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
 			event.reply(fmt::format("{} added to droppers list.", preferred_name));
+		} else
+		if(command_name == "finish") {
+			std::string text;
+			text += "### Thanks everyone for drafting with us!\n";
+			text += fmt::format("* You can share a screenshot of your deck in <#{}>.\n", DECK_SCREENSHOTS_CHANNEL_ID);
+			text += fmt::format("* If you want feedback on your draft, just ask or give yourself the Civilized Scholar role in <#{}>).\n", ROLE_SELF_ASSIGNMENT_CHANNEL_ID);
+			text += fmt::format("* You can also upload your draftlog to <https://magic.flooey.org/draft/upload> and share it in <#{}>.\n", P1P1_AND_DRAFT_LOG_CHANNEL_ID);
+			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with FeedbackBot ""/feedback"".\n", FEEDBACK_CHANNEL_ID);
+			text += fmt::format("* Check out <#{}> to see upcoming events, and sign up in <#{}>!", CALENDAR_CHANNEL_ID, PRE_REGISTER_CHANNEL_ID);
+			event.reply(text);
 		}
 	});
 
@@ -2878,16 +2918,17 @@ int main(int argc, char* argv[]) {
 		time_t now = time(NULL);
 
 		// Send the pre-draft reminder message if it hasn't already been sent.
-		if((BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
+		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending pre-draft reminder message for {}.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
+			// TODO: Unlock the minute mage signups
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_REMINDER_SENT);
 		}
 
 		// Ping the tentatives if they haven't already been pinged.
-		if((BIT_SET(draft.value->status, DRAFT_STATUS_TENTATIVES_PINGED)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending tentative reminder message for {}.", draft_code.value.c_str()));
+		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_TENTATIVES_PINGED)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
+			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending tentative reminder message for: {}", draft_code.value.c_str()));
 			// Redraw the sign up posts so the Tentative button shows as locked.
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);
 			redraw_signup(bot, GUILD_ID, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
@@ -2897,7 +2938,7 @@ int main(int argc, char* argv[]) {
 
 		// Lock the draft.
 		if((draft.value->status < DRAFT_STATUS_LOCKED) && now >= draft.value->time) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Locking draft: {}.", draft_code.value.c_str()));
+			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Locking draft: {}", draft_code.value.c_str()));
 			post_host_guide(bot, draft_code.value.c_str());
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_LOCKED);
 			// Redraw the signup buttons so they all (except Minutemage) appear locked.
@@ -2914,7 +2955,6 @@ int main(int argc, char* argv[]) {
 		}
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
-
 
     while(g_quit == false) {
         sleep(1);
