@@ -670,7 +670,7 @@ static const size_t SET_LIST_LENGTH_MAX = 256;
 // The maximum allowed byte length for the XMage server string.
 static const size_t XMAGE_SERVER_LENGTH_MAX = 32;
 
-// The maximum number of bytes needed for a ping string. The space on the end is intentional!
+// The maximum number of bytes needed for a ping string. The space on the end is intentional.
 static const size_t PING_STRING_LENGTH_MAX = LEAGUE_PINGS_MAX * strlen("<@&18446744073709551616> ");
 
 // The maximum allowed byte length for a IANA time zone string. See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
@@ -800,8 +800,10 @@ struct Database_Result {
 	bool operator!=(const bool& rhs) const { return !(success == rhs); }
 };
 
-// For database_ functions that return no data. We could use template specialization here... but I don't want to!
+// For database_ functions that return no data. We could use template specialization here this is simpler.
 struct Database_No_Value {};
+
+static const char* DATABASE_NAME = "XDHS"; // TODO: Move this to options?
 
 // Connect to the MySQL database specified in the bot.ini file and request access to the XDHS table.
 #define MYSQL_CONNECT()                                      \
@@ -814,7 +816,7 @@ struct Database_No_Value {};
 		g_config.mysql_host,                                 \
 		g_config.mysql_username,                             \
 		g_config.mysql_password,                             \
-		"XDHS",                                              \
+		DATABASE_NAME,                                       \
 		g_config.mysql_port,                                 \
 		NULL, 0);                                            \
 	if(connection == NULL) {                                 \
@@ -1985,7 +1987,7 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 	send_message(bot, CURRENT_DRAFT_MANAGEMENT_ID, text);
 }
 
-// Users on Discord have two possible names per guild: Their global name or a per-guild nickname. (They also have a username, argh!)
+// Users on Discord have two names per guild: Their global name or an optional per-guild nickname.
 static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
 	std::string preferred_name;
 	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
