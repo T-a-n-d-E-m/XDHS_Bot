@@ -786,7 +786,7 @@ static const int PODS_MAX = 8;
 static const int PLAYERS_MAX = 64;
 
 struct Table {
-	int seats;
+	int seats; // How many seats at this table. Either 6, 8 or 10
 	Pod_Player players[POD_SEATS_MAX];
 };
 
@@ -800,280 +800,66 @@ struct Draft_Pods {
 		memset(this, 0, sizeof(Draft_Pods));
 	}
 
-	int count;
+	int table_count; // Total number of tables FIXME: Rename
 	Table tables[PODS_MAX];
 };
 
 // With player_count players, how many pods should be created?
 // Reference: https://i.imgur.com/tpNo13G.png
 // TODO: This needs to support a player_count of any size
-static bool allocate_pod_seats(Draft_Pods* pods, int player_count) {
-	// Round up player count.
+// FIXME: Brute forcing this is silly, but as I write this I can't work out the function to calculate the correct number of seats...
+static Draft_Pods allocate_pod_seats(int player_count) {
+	// Round up player count to even number.
 	if((player_count % 2) == 1) player_count++;
 
-	switch(player_count) {
-		case 6: {
-			pods->count = 1;
-			pods->tables[0].seats = 6;
-		} break;
+	// As we only need to consider an even number of players, we can halve the player count and use it as an array index.
+	player_count /= 2;
+	static const int seats_for_player_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8}; 
 
-		case 8: {
-			pods->count = 1;
-			pods->tables[0].seats = 8;
-		} break;
 
-		case 10: {
-			pods->count = 1;
-			pods->tables[0].seats = 10;
-		} break;
+	static const int tables[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
+		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  0
+		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  2
+		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  4
+		{ 6, 0, 0, 0, 0, 0, 0, 0}, //  6
+		{ 8, 0, 0, 0, 0, 0, 0, 0}, //  8
+		{10, 0, 0, 0, 0, 0, 0, 0}, // 10
+		{ 6, 6, 0, 0, 0, 0, 0, 0}, // 12
+		{ 8, 6, 0, 0, 0, 0, 0, 0}, // 14
+		{ 8, 8, 0, 0, 0, 0, 0, 0}, // 16
+		{10, 8, 0, 0, 0, 0, 0, 0}, // 18
+		{ 8, 6, 6, 0, 0, 0, 0, 0}, // 20
+		{ 8, 8, 6, 0, 0, 0, 0, 0}, // 22
+		{ 8, 8, 8, 0, 0, 0, 0, 0}, // 24
+		{10, 8, 8, 0, 0, 0, 0, 0}, // 26
+		{ 8, 8, 6, 6, 0, 0, 0, 0}, // 28
+		{ 8, 8, 8, 6, 0, 0, 0, 0}, // 30
+		{ 8, 8, 8, 8, 0, 0, 0, 0}, // 32
+		{10, 8, 8, 8, 0, 0, 0, 0}, // 34
+		{ 8, 8, 8, 6, 6, 0, 0, 0}, // 36
+		{ 8, 8, 8, 8, 6, 0, 0, 0}, // 38
+		{ 8, 8, 8, 8, 8, 0, 0, 0}, // 40
+		{10, 8, 8, 8, 8, 0, 0, 0}, // 42
+		{ 8, 8, 8, 8, 6, 6, 0, 0}, // 44
+		{ 8, 8, 8, 8, 8, 6, 0, 0}, // 46
+		{ 8, 8, 8, 8, 8, 8, 0, 0}, // 48
+		{10, 8, 8, 8, 8, 8, 0, 0}, // 50
+		{ 8, 8, 8, 8, 8, 6, 6, 0}, // 52
+		{ 8, 8, 8, 8, 8, 8, 6, 0}, // 54
+		{ 8, 8, 8, 8, 8, 8, 8, 0}, // 56
+		{10, 8, 8, 8, 8, 8, 8, 0}, // 58
+		{ 8, 8, 8, 8, 8, 8, 6, 6}, // 60
+		{ 8, 8, 8, 8, 8, 8, 8, 6}, // 62
+		{ 8, 8, 8, 8, 8, 8, 8, 8}, // 64
+	};
 
-		case 12: {
-			pods->count = 2;
-			pods->tables[0].seats = 6;
-			pods->tables[1].seats = 6;
-		} break;
-
-		case 14: {
-			pods->count = 2;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 6;
-		} break;
-
-		case 16: {
-			pods->count = 2;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-		} break;
-
-		case 18: {
-			pods->count = 2;
-			pods->tables[0].seats = 10;
-			pods->tables[1].seats = 8;
-		} break;
-
-		case 20: {
-			pods->count = 3;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 6;
-			pods->tables[2].seats = 6;
-		} break;
-
-		case 22: {
-			pods->count = 3;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 6;
-		} break;
-
-		case 24: {
-			pods->count = 3;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-		} break;
-
-		case 26: {
-			pods->count = 3;
-			pods->tables[0].seats = 10;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-		} break;
-
-		case 28: {
-			pods->count = 4;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 6;
-			pods->tables[3].seats = 6;
-		} break;
-
-		case 30: {
-			pods->count = 4;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 6;
-		} break;
-
-		case 32: {
-			pods->count = 4;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-		} break;
-
-		case 34: {
-			pods->count = 4;
-			pods->tables[0].seats = 10;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-		} break;
-
-		case 36: {
-			pods->count = 5;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 6;
-			pods->tables[4].seats = 6;
-		} break;
-
-		case 38: {
-			pods->count = 5;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 6;
-		} break;
-
-		case 40: {
-			pods->count = 5;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-		} break;
-
-		case 42: {
-			pods->count = 5;
-			pods->tables[0].seats = 10;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-		} break;
-
-		case 44: {
-			pods->count = 6;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 6;
-			pods->tables[5].seats = 6;
-		} break;
-
-		case 46: {
-			pods->count = 6;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 6;
-		} break;
-
-		case 48: {
-			pods->count = 6;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-		} break;
-
-		case 50: {
-			pods->count = 6;
-			pods->tables[0].seats = 10;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-		} break;
-
-		case 52: {
-			pods->count = 7;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 6;
-			pods->tables[6].seats = 6;
-		} break;
-
-		case 54: {
-			pods->count = 7;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-			pods->tables[6].seats = 6;
-		} break;
-
-		case 56: {
-			pods->count = 7;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-			pods->tables[6].seats = 8;
-		} break;
-
-		case 58: {
-			pods->count = 7;
-			pods->tables[0].seats = 10;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-			pods->tables[6].seats = 8;
-		} break;
-
-		case 60: {
-			pods->count = 8;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-			pods->tables[6].seats = 6;
-			pods->tables[7].seats = 6;
-		} break;
-
-		case 62: {
-			pods->count = 8;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-			pods->tables[6].seats = 8;
-			pods->tables[7].seats = 6;
-		} break;
-
-		case 64: {
-			pods->count = 8;
-			pods->tables[0].seats = 8;
-			pods->tables[1].seats = 8;
-			pods->tables[2].seats = 8;
-			pods->tables[3].seats = 8;
-			pods->tables[4].seats = 8;
-			pods->tables[5].seats = 8;
-			pods->tables[6].seats = 8;
-			pods->tables[7].seats = 8;
-		} break;
-
-		default: {
-			pods->count = 0;
-			return false;
-		} break;
+	Draft_Pods result;
+	result.table_count = seats_for_player_count[player_count];
+	for(int table = 0; table < result.table_count; ++table) {
+		result.tables[table].seats = tables[player_count][table];
 	}
 
-	return true;
+	return result;
 }
 
 // All database_xxxx functions return this struct. If the member variable success is true value will contain the requested data and count will be the number of rows returned.
@@ -2481,10 +2267,9 @@ int main(int argc, char* argv[]) {
 #ifdef DEBUG
 	// Verify the allocate_pod_seats() function is doing the right thing.
 	for(int i = 6; i < 66; i+=2) {
-		Draft_Pods pods;
-		allocate_pod_seats(&pods, i);
+		Draft_Pods pods = allocate_pod_seats(i);
 		int sum = 0;
-		for(int j = 0; j < pods.count; ++j) {
+		for(int j = 0; j < pods.table_count; ++j) {
 			sum += pods.tables[j].seats;
 		}
 		if(sum != i) fprintf(stdout, "ERROR: %d has %d seats\n", i, sum);
@@ -3073,10 +2858,9 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
-			Draft_Pods pods;
-			allocate_pod_seats(&pods, sign_ups.count);
+			Draft_Pods pods = allocate_pod_seats(sign_ups.count);
 
-			if(pods.count == 0) {
+			if(pods.table_count == 0) {
 				// Shouldn't be possible with the above checks.
 				event.reply("Insufficient players to form a pod.");
 				return;
@@ -3099,7 +2883,7 @@ int main(int argc, char* argv[]) {
 				}
 			}
 
-			if(host_count < pods.count) {
+			if(host_count < pods.table_count) {
 				// TODO: Now what?
 			}
 
