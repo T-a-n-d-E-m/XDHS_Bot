@@ -800,7 +800,7 @@ struct Draft_Pods {
 		memset(this, 0, sizeof(Draft_Pods));
 	}
 
-	int table_count; // Total number of tables FIXME: Rename
+	int table_count; // Total number of tables.
 	Table tables[PODS_MAX];
 };
 
@@ -815,7 +815,6 @@ static Draft_Pods allocate_pod_seats(int player_count) {
 	// As we only need to consider an even number of players, we can halve the player count and use it as an array index.
 	player_count /= 2;
 	static const int seats_for_player_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8}; 
-
 
 	static const int tables[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  0
@@ -2289,15 +2288,6 @@ int main(int argc, char* argv[]) {
 	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
 		return EXIT_FAILURE;
 	}
-
-
-	auto xmage_version = database_get_xmage_version();
-	if(xmage_version == true) {
-		fprintf(stdout, "Latest XMage version: %s, %lu\n", xmage_version.value.version, xmage_version.value.timestamp);
-	} else {
-		fprintf(stdout, "Error getting XMage version\n");
-	}
-
 
 #ifdef DEBUG
     // Careful not to pipe these somewhere a malicious user could find...
