@@ -816,7 +816,7 @@ static Draft_Pods allocate_pod_seats(int player_count) {
 	player_count /= 2;
 	static const int tables_needed_for_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8}; 
 
-	static const int tables[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
+	static const int seats_per_table[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  0
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  2
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  4
@@ -855,7 +855,7 @@ static Draft_Pods allocate_pod_seats(int player_count) {
 	Draft_Pods result;
 	result.table_count = tables_needed_for_count[player_count];
 	for(int table = 0; table < result.table_count; ++table) {
-		result.tables[table].seats = tables[player_count][table];
+		result.tables[table].seats = seats_per_table[player_count][table];
 	}
 
 	return result;
