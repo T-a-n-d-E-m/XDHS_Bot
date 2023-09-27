@@ -60,6 +60,9 @@ using f32 = float;
 using f64 = double;
 
 #define BIT_SET(value,mask) (((value) & (mask)) == (mask))
+
+// FIXME: This is an awful hack so I don't have to deal with timezone conversion stuff. Add this to timestamps inserted in the database by Badge Bot by this amount. This is the UTC offset of where the server running this code is.
+static const int SERVER_TIMEZONE_OFFSET = (60*60*10);
  
 // How many seconds before a draft the pre-draft reminder message should be sent.
 static const time_t SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER   = (60*60*1);
@@ -425,6 +428,19 @@ static void expand_format_string(const char* format, size_t len, char* out, size
 	}
 }
 
+#if 0
+struct Draft_Code {
+	int season;
+	int week;
+	char region_code;
+	char league_type;
+};
+
+static void parse_draft_code(const char* draft_code, Draft_Code* out) {
+
+}
+#endif
+
 
 struct Start_Time {
 	int hour;
@@ -527,6 +543,12 @@ static bool get_league_from_draft_code(const char* draft_code, XDHS_League* leag
 	}
 
 	return false;
+}
+
+static void make_2_digit_league_code(const XDHS_League* league, char out[3]) {
+	out[0] = league->region_code;
+	out[1] = league->league_type;
+	out[2] = 0;
 }
 
 struct Draft_Duration {
@@ -760,12 +782,15 @@ static const int POD_SEATS_MAX = 10;
 // The maximum number of pods this bot can handle.
 static const int PODS_MAX = 8;
 
-struct Pod {
+// The maximum number of players this bot can handle in a single tournament.
+static const int PLAYERS_MAX = 64;
+
+struct Table {
 	int seats;
 	Pod_Player players[POD_SEATS_MAX];
 };
 
-static void add_player_to_pod(Pod* pod, const Pod_Player* player) {
+static void add_player_to_pod(Table* pod, const Pod_Player* player) {
 	memcpy((void*)&pod->players[pod->seats], player, sizeof(Pod_Player));
 	++pod->seats;
 }
@@ -776,17 +801,279 @@ struct Draft_Pods {
 	}
 
 	int count;
-	Pod pods[PODS_MAX];
+	Table tables[PODS_MAX];
 };
 
 // With player_count players, how many pods should be created?
 // Reference: https://i.imgur.com/tpNo13G.png
 // TODO: This needs to support a player_count of any size
-static int calc_pod_count(int player_count) {
-	if(player_count < POD_SEATS_MIN) {
-		return 0;
-	} else
-	return (int)(round((float)player_count / 8));
+static bool allocate_pod_seats(Draft_Pods* pods, int player_count) {
+	// Round up player count.
+	if((player_count % 2) == 1) player_count++;
+
+	switch(player_count) {
+		case 6: {
+			pods->count = 1;
+			pods->tables[0].seats = 6;
+		} break;
+
+		case 8: {
+			pods->count = 1;
+			pods->tables[0].seats = 8;
+		} break;
+
+		case 10: {
+			pods->count = 1;
+			pods->tables[0].seats = 10;
+		} break;
+
+		case 12: {
+			pods->count = 2;
+			pods->tables[0].seats = 6;
+			pods->tables[1].seats = 6;
+		} break;
+
+		case 14: {
+			pods->count = 2;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 6;
+		} break;
+
+		case 16: {
+			pods->count = 2;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+		} break;
+
+		case 18: {
+			pods->count = 2;
+			pods->tables[0].seats = 10;
+			pods->tables[1].seats = 8;
+		} break;
+
+		case 20: {
+			pods->count = 3;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 6;
+			pods->tables[2].seats = 6;
+		} break;
+
+		case 22: {
+			pods->count = 3;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 6;
+		} break;
+
+		case 24: {
+			pods->count = 3;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+		} break;
+
+		case 26: {
+			pods->count = 3;
+			pods->tables[0].seats = 10;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+		} break;
+
+		case 28: {
+			pods->count = 4;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 6;
+			pods->tables[3].seats = 6;
+		} break;
+
+		case 30: {
+			pods->count = 4;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 6;
+		} break;
+
+		case 32: {
+			pods->count = 4;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+		} break;
+
+		case 34: {
+			pods->count = 4;
+			pods->tables[0].seats = 10;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+		} break;
+
+		case 36: {
+			pods->count = 5;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 6;
+			pods->tables[4].seats = 6;
+		} break;
+
+		case 38: {
+			pods->count = 5;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 6;
+		} break;
+
+		case 40: {
+			pods->count = 5;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+		} break;
+
+		case 42: {
+			pods->count = 5;
+			pods->tables[0].seats = 10;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+		} break;
+
+		case 44: {
+			pods->count = 6;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 6;
+			pods->tables[5].seats = 6;
+		} break;
+
+		case 46: {
+			pods->count = 6;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 6;
+		} break;
+
+		case 48: {
+			pods->count = 6;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+		} break;
+
+		case 50: {
+			pods->count = 6;
+			pods->tables[0].seats = 10;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+		} break;
+
+		case 52: {
+			pods->count = 7;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 6;
+			pods->tables[6].seats = 6;
+		} break;
+
+		case 54: {
+			pods->count = 7;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+			pods->tables[6].seats = 6;
+		} break;
+
+		case 56: {
+			pods->count = 7;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+			pods->tables[6].seats = 8;
+		} break;
+
+		case 58: {
+			pods->count = 7;
+			pods->tables[0].seats = 10;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+			pods->tables[6].seats = 8;
+		} break;
+
+		case 60: {
+			pods->count = 8;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+			pods->tables[6].seats = 6;
+			pods->tables[7].seats = 6;
+		} break;
+
+		case 62: {
+			pods->count = 8;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+			pods->tables[6].seats = 8;
+			pods->tables[7].seats = 6;
+		} break;
+
+		case 64: {
+			pods->count = 8;
+			pods->tables[0].seats = 8;
+			pods->tables[1].seats = 8;
+			pods->tables[2].seats = 8;
+			pods->tables[3].seats = 8;
+			pods->tables[4].seats = 8;
+			pods->tables[5].seats = 8;
+			pods->tables[6].seats = 8;
+			pods->tables[7].seats = 8;
+		} break;
+
+		default: {
+			pods->count = 0;
+			return false;
+		} break;
+	}
+
+	return true;
 }
 
 // All database_xxxx functions return this struct. If the member variable success is true value will contain the requested data and count will be the number of rows returned.
@@ -857,6 +1144,13 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: Move this to options?
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_param() failed: %s", mysql_stmt_error(stmt));                \
 		return {false, 0, {}};                                                                             \
 	}                                                                                                      \
+	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
+		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
+		return {false, 0, {}};                                                                             \
+	}
+
+// A query with no input params
+#define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
 		return {false, 0, {}};                                                                             \
@@ -1089,6 +1383,7 @@ enum SIGNUP_STATUS : int {
 	SIGNUP_STATUS_PLAYING     = SIGNUP_STATUS_COMPETITIVE | SIGNUP_STATUS_CASUAL | SIGNUP_STATUS_FLEXIBLE
 };
 
+
 static const char* to_cstring(SIGNUP_STATUS s) {
 	switch(s) {
 		case SIGNUP_STATUS_NONE:        return "none";
@@ -1099,10 +1394,10 @@ static const char* to_cstring(SIGNUP_STATUS s) {
 		case SIGNUP_STATUS_MINUTEMAGE:  return "minutemage";
 		case SIGNUP_STATUS_DECLINE:     return "decline";
 		case SIGNUP_STATUS_REMOVED:     return "removed";
-		default:
-			return NULL;
+		default:                        return NULL;
 	}
 }
+
 
 struct Draft_Signup_Status {
 	u64 member_id;
@@ -1212,7 +1507,7 @@ struct Draft_Sign_Up {
 	bool allocated; // Player has been allocated to a pod.
 };
 
-static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code) {
+static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league) {
 	MYSQL_CONNECT();
 	static const char* query = R"(
 		SELECT
@@ -1236,8 +1531,6 @@ static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(c
 			draft_signups.draft_code=?
 		;)";
 	MYSQL_STATEMENT();
-
-	static const char* league = "PC";
 
 	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
@@ -1398,7 +1691,7 @@ static Database_Result<Database_No_Value> database_set_reminder_message_id(const
 
 static Database_Result<std::string> database_get_next_upcoming_draft(const u64 guild_id) {
 	MYSQL_CONNECT();
-	static const char* query = "SELECT draft_code FROM draft_events WHERE status>=? AND status!=? AND guild_id=? ORDER BY time ASC LIMIT 1";
+	static const char* query = "SELECT draft_code FROM draft_events WHERE status>? AND status<? AND guild_id=? ORDER BY time ASC LIMIT 1";
 	MYSQL_STATEMENT();
 
 	const DRAFT_STATUS status1 = DRAFT_STATUS_POSTED;
@@ -1407,7 +1700,7 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 	MYSQL_INPUT_INIT(3)
 	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status1,   sizeof(status1));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status2,   sizeof(status2));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 	
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -1527,6 +1820,31 @@ static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_i
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
+}
+
+
+static const size_t XMAGE_VERSION_STRING_MAX = 128;
+
+struct XMage_Version {
+	char version[XMAGE_VERSION_STRING_MAX + 1];
+	u64 timestamp;
+};
+
+static Database_Result<XMage_Version> database_get_xmage_version() {
+	MYSQL_CONNECT();
+	static const char* query = "SELECT version, timestamp FROM xmage_version ORDER BY timestamp DESC LIMIT 1";
+	MYSQL_STATEMENT();
+
+	MYSQL_EXECUTE();
+
+	XMage_Version result;
+
+	MYSQL_OUTPUT_INIT(1);
+	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING,   &result.version[0], XMAGE_VERSION_STRING_MAX);
+	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.timestamp,  sizeof(result.timestamp));
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
 }
 
 static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
@@ -1877,12 +2195,17 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 		text += fmt::format("<@{}> ", sign_up.member_id);
 	}
 
-	// TODO: Needs the XMage version here.
+
 
 	text += "\n\n";
 	text += fmt::format("**:bell: This is the pre-draft reminder for {}: {} :bell:**\n\n", draft_event.value->draft_code, draft_event.value->format);
 	text += "Please confirm your status on the signup sheet below.\n";
 	text += fmt::format("If playing, check your XMage install is up-to-date by starting the launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
+
+	const auto xmage_version = database_get_xmage_version();
+	if(xmage_version == true) {
+		text += fmt::format("\nThe latest XMage release is {}, released <t:{}:R>.", xmage_version.value.version, xmage_version.value.timestamp + SERVER_TIMEZONE_OFFSET);
+	}
 
 	message.set_content(text);
 
@@ -1996,7 +2319,11 @@ static std::string get_members_preferred_name(const u64 guild_id, const u64 memb
 	} else {
 		const dpp::user* user = dpp::find_user(member_id);
 		if(user != nullptr) {
-			preferred_name = user->global_name;	
+			if(user->global_name.length() > 0) {
+				preferred_name = user->global_name;
+			} else {
+				preferred_name = user->username;
+			}
 		} else {
 			// TODO: Now what? Return an error message?
 			log(LOG_LEVEL_ERROR, "Failed to find preferred name for member %lu.", member_id);
@@ -2151,6 +2478,19 @@ static void output_sql() {
 
 
 int main(int argc, char* argv[]) {
+#ifdef DEBUG
+	// Verify the allocate_pod_seats() function is doing the right thing.
+	for(int i = 6; i < 66; i+=2) {
+		Draft_Pods pods;
+		allocate_pod_seats(&pods, i);
+		int sum = 0;
+		for(int j = 0; j < pods.count; ++j) {
+			sum += pods.tables[j].seats;
+		}
+		if(sum != i) fprintf(stdout, "ERROR: %d has %d seats\n", i, sum);
+	}
+#endif
+
 	if(argc > 1) {
 		if(strcmp(argv[1], "-sql") == 0) {
 			// Dump SQL schema to stdout and return.
@@ -2164,6 +2504,15 @@ int main(int argc, char* argv[]) {
 	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
 		return EXIT_FAILURE;
 	}
+
+
+	auto xmage_version = database_get_xmage_version();
+	if(xmage_version == true) {
+		fprintf(stdout, "Latest XMage version: %s, %lu\n", xmage_version.value.version, xmage_version.value.timestamp);
+	} else {
+		fprintf(stdout, "Error getting XMage version\n");
+	}
+
 
 #ifdef DEBUG
     // Careful not to pipe these somewhere a malicious user could find...
@@ -2338,6 +2687,9 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "noshow", "Record this as a No Show.", true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+			{
+			}
+				//dpp::slashcommand cmd("add_host", "Specify a 
 			{
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -2705,7 +3057,16 @@ int main(int argc, char* argv[]) {
 		if(command_name == "post_allocations") {
 			const auto guild_id = event.command.get_guild().id;
 
-			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code);
+			XDHS_League league;
+			get_league_from_draft_code(g_current_draft_code.c_str(), &league);
+			char league_code[3];
+			make_2_digit_league_code(&league, league_code);
+			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code);
+
+			if(sign_ups.count < POD_SEATS_MIN) {
+				event.reply(fmt::format("At least {} players needed. Use /add_player.", POD_SEATS_MIN));
+				return;
+			}
 
 			if((sign_ups.count % 2) == 1) {
 				event.reply("Odd number of sign ups. Use /add_player or /remove_player.");
@@ -2713,13 +3074,13 @@ int main(int argc, char* argv[]) {
 			}
 
 			Draft_Pods pods;
-			pods.count = calc_pod_count(sign_ups.count);
+			allocate_pod_seats(&pods, sign_ups.count);
 
 			if(pods.count == 0) {
+				// Shouldn't be possible with the above checks.
 				event.reply("Insufficient players to form a pod.");
 				return;
 			}
-
 
 			// Flag all potential hosts and flag everyone as not allocated.
 			int host_indexes[64];
@@ -2757,13 +3118,13 @@ int main(int argc, char* argv[]) {
 					}
 				}
 
-				text += sign_up.preferred_name;
-
 				if(sign_up.is_host == true) text += ":cowboy:";
 				if(sign_up.is_shark_is_null == false && sign_up.is_shark == true) text += ":shark:";
 				if(sign_up.status == 1) text += ":one:";
 				if(sign_up.status == 2) text += ":two:";
 				if(sign_up.status == 3) text += ":person_shrugging:";
+
+				text += sign_up.preferred_name;
 				
 				text += "\n";
 			}
