@@ -24,6 +24,7 @@
 // For more information, please refer to <http://unlicense.org/>
 
 // TODO: Cleanup inconsistent use of char* and std::string in database functions.
+// TODO: Need a /minutemage command that either pings a random 'mage or the role 
 
 // C libraries
 #include <alloca.h>
@@ -743,7 +744,7 @@ struct Draft_Event {
 
 	u32 color; // Color to use for vertical strip on the signup post.
 	char xmage_server[XMAGE_SERVER_LENGTH_MAX + 1];
-	bool draftmancer_draft; // Will the draft portion take place on Draftmancer? TODO: Rename this variable
+	bool draftmancer_draft; // Will the draft portion take place on Draftmancer?
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
 
 	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
@@ -2072,6 +2073,69 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 	}
 }
 
+static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
+	const auto draft_event = database_get_event(guild_id, draft_code);
+	if(draft_event == false) return;
+
+	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
+	if(sign_ups == false) return;
+
+	int confirmed_count = 0;
+	for(const auto& sign_up : sign_ups.value) {
+		if((sign_up.status & SIGNUP_STATUS_PLAYING) > 0) {
+			confirmed_count++;
+		}
+	}
+
+	if((confirmed_count % 2) == 1) {
+		// Odd number of players.
+
+		dpp::message message;
+		message.set_type(dpp::message_type::mt_default);
+		message.set_guild_id(guild_id);
+		message.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+		message.set_allowed_mentions(true, true, true, true, {}, {});
+		std::string text;
+
+		std::vector<const Draft_Signup_Status*> minutemages;
+		for(const auto& sign_up : sign_ups.value) {
+			if(sign_up.status == SIGNUP_STATUS_MINUTEMAGE) {
+				minutemages.push_back(&sign_up);
+			}
+		}
+		if(minutemages.size() > 0) {
+			u64 member_id = 0;
+			if(minutemages.size() == 1) {
+				member_id = minutemages[0]->member_id;
+			} else {
+				// Select a minutemage at random.
+				int index = rand() % minutemages.size();
+				member_id = minutemages[index]->member_id;
+			}
+
+			text = fmt::format(":superhero: Paging minutemage <@{}>! You are needed on {} for {}.",
+				member_id,
+				draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
+				draft_event.value->format);
+		} else {
+			// Ping the @Minutemage role.
+			text = fmt::format(":superhero: <@&{}> One more needed on {} for {}.",
+				MINUTEMAGE_ROLE_ID,
+				draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
+				draft_event.value->format);
+		}
+
+		message.set_content(text);
+
+		bot.message_create(message, [](const dpp::confirmation_callback_t& callback) {
+			if(!callback.is_error()) {
+			} else {
+				log(LOG_LEVEL_DEBUG, callback.get_error().message.c_str());
+			}
+		});
+	}
+}
+
 // Post a message to the hosts-only #-current-draft-management channel outlining the procedures for correctly managing the firing of the draft.
 static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 	std::string text = fmt::format(":alarm_clock: **Attention hosts! Draft {} has now been partially locked.** :alarm_clock:\n\n", draft_code);
@@ -2318,6 +2382,8 @@ int main(int argc, char* argv[]) {
     (void)signal(SIGHUP,  sig_handler);
     (void)signal(SIGTERM, sig_handler);
     (void)signal(SIGKILL, sig_handler);
+
+	srand(time(NULL));
 
 	// Set up logging to an external file.
 	log_init(g_config.logfile_path);
@@ -3095,6 +3161,8 @@ int main(int argc, char* argv[]) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Locking draft: {}", draft_code.value.c_str()));
 			post_host_guide(bot, draft_code.value.c_str());
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_LOCKED);
+			// Ping minutemages if there is an odd number of confirmed sign ups.
+			ping_minutemages(bot, GUILD_ID, draft_code.value.c_str());
 			// Redraw the signup buttons so they all (except Minutemage) appear locked.
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);
 			redraw_signup(bot, GUILD_ID, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
