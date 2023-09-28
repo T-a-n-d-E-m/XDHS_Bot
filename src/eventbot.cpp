@@ -93,6 +93,7 @@ static const u64 FEEDBACK_CHANNEL_ID            = 1155773361104887880;
 static const u64 CALENDAR_CHANNEL_ID			= 1155774664732323952;
 static const u64 XDHS_TEAM_ROLE_ID              = 885054778978234408;
 static const u64 XDHS_HOST_ROLE_ID              = 1091275398639267881;
+static const u64 MINUTEMAGE_ROLE_ID             = 1156767797192437891;
 static bool g_commands_registered               = false; // Have the bot slash commands been registered for this guild?
 #else
 // The bot will be running in release mode on the XDHS public server.
@@ -107,6 +108,9 @@ static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
 static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID  = 796861143594958868; 
 static const u64 FEEDBACK_CHANNEL_ID            = 822015209756950528;
 static const u64 CALENDAR_CHANNEL_ID			= 794227134892998666;
+static const u64 XDHS_TEAM_ROLE_ID              = 639451893399027722;
+static const u64 XDHS_HOST_ROLE_ID              = 1051631435506794657;
+static const u64 MINUTEMAGE_ROLE_ID             = 843796946984370176;
 static bool g_commands_registered               = false // Have the bot slash commands been registered for this guild?;
 #endif
 
@@ -746,7 +750,7 @@ struct Draft_Event {
 	u64 details_id; // Message ID of the post in #-pre-register describing the format.
 	u64 signups_id; // Message ID of the sign up sheet posted in #-pre-register.
 	u64 reminder_id; // Message ID of the reminder message sent to all sign ups #-in-the-moment-draft.
-	u64 tentatives_pinged_id; // Message ID of the reminder sent to tentatives #-in-the-moment-draft.
+	u64 tentatives_pinged_id; // Message ID of the reminder sent to tentatives #-in-the-moment-draft. FIXME: Set but never used.
 
 	// TODO!
 	u64 hosts_info_id; // Message ID of the message posted to hosts in #current-draft-management
@@ -1579,7 +1583,7 @@ static Database_Result<Database_No_Value> database_set_tentatives_pinged_id(cons
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_add_nowshow(const u64 guild_id, const u64 member_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const char* draft_code) {
 	MYSQL_CONNECT();
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
@@ -1980,18 +1984,17 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 		text += fmt::format("<@{}> ", sign_up.member_id);
 	}
 
-
-
 	text += "\n\n";
-	text += fmt::format("**:bell: This is the pre-draft reminder for {}: {} :bell:**\n\n", draft_event.value->draft_code, draft_event.value->format);
+	text += fmt::format(":bell: This is the pre-draft reminder for {}: {} :bell:**\n\n", draft_event.value->draft_code, draft_event.value->format);
 	text += "Please confirm your status on the signup sheet below.\n\n";
-	//text += "Minutemage sign ups are now open.... **TODO**: I'm still thinking about the right wording here. Feel free to suggest something!\n\n";
-	text += fmt::format("If playing, check your XMage install is up-to-date by starting the launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
+	text += "Minutemage sign ups are now open. If needed, a minutemage will be selected at random to fill an empty seat.\n\n";
+	text += fmt::format("If playing, **check your XMage install is up-to-date** by starting the launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
 
 	const auto xmage_version = database_get_xmage_version();
 	if(xmage_version == true) {
 		u64 timestamp = xmage_version.value.timestamp + SERVER_TIMEZONE_OFFSET;
-		text += fmt::format("\nThe latest XMage release is {}, released <t:{}:R>.", xmage_version.value.version, timestamp);
+		// Note: The leading space is intentional as this joins with the previous line.
+		text += fmt::format(" The latest XMage release is {}, released <t:{}:R>.", xmage_version.value.version, timestamp);
 	}
 
 	message.set_content(text);
@@ -2025,41 +2028,48 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 
 static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
 	const auto draft_event = database_get_event(guild_id, draft_code);
+	if(draft_event == false) return;
+
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
+	if(sign_ups == false) return;
 
-	if(sign_ups == 0) return;
-
-	dpp::message message;
-	message.set_type(dpp::message_type::mt_default);
-	message.set_guild_id(guild_id);
-	message.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
-	message.set_allowed_mentions(true, true, true, true, {}, {});
-
-	std::string text;
-	text.reserve(512);
-
-	// Ping everyone who is still listed as tentative.
+	int tentative_count = 0;
 	for(const auto& sign_up : sign_ups.value) {
-		if(sign_up.status == SIGNUP_STATUS_TENTATIVE) {
-			text += fmt::format("<@{}> ", sign_up.member_id);
-		}
+		if(sign_up.status == SIGNUP_STATUS_TENTATIVE) tentative_count++;
 	}
 
-	text += "\n\n";
-	text += fmt::format("**:warning: Tentatives, this is your 10 minute reminder for {}: {} :warning:**\n", draft_event.value->draft_code, draft_event.value->format);
-	text += fmt::format("Please confirm whether you are joining the imminent draft by clicking your desired pod role or Decline if you are not drafting today: https://discord.com/channels/{}/{}/{}", guild_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft_event.value->reminder_id);
+	if(tentative_count > 0) {
+		dpp::message message;
+		message.set_type(dpp::message_type::mt_default);
+		message.set_guild_id(guild_id);
+		message.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+		message.set_allowed_mentions(true, true, true, true, {}, {});
 
-	message.set_content(text);
+		std::string text;
+		text.reserve(512);
 
-	bot.message_create(message, [&bot, guild_id, draft = draft_event.value](const dpp::confirmation_callback_t& callback) {
-		if(!callback.is_error()) {
-			const dpp::message& message = std::get<dpp::message>(callback.value);
-			database_set_tentatives_pinged_id(guild_id, draft->draft_code, message.id);
-		} else {
-			log(LOG_LEVEL_DEBUG, callback.get_error().message.c_str());
+		// Ping everyone who is still listed as tentative.
+		for(const auto& sign_up : sign_ups.value) {
+			if(sign_up.status == SIGNUP_STATUS_TENTATIVE) {
+				text += fmt::format("<@{}> ", sign_up.member_id);
+			}
 		}
 
-	});
+		text += "\n\n";
+		text += fmt::format("**:warning: Tentatives, this is your 10 minute reminder for {}: {} :warning:**\n", draft_event.value->draft_code, draft_event.value->format);
+		text += fmt::format("Please confirm whether you are joining the imminent draft by clicking your desired pod role or Decline if you are not drafting today: https://discord.com/channels/{}/{}/{}", guild_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft_event.value->reminder_id);
+
+		message.set_content(text);
+
+		bot.message_create(message, [&bot, guild_id, draft = draft_event.value](const dpp::confirmation_callback_t& callback) {
+			if(!callback.is_error()) {
+				const dpp::message& message = std::get<dpp::message>(callback.value);
+				database_set_tentatives_pinged_id(guild_id, draft->draft_code, message.id);
+			} else {
+				log(LOG_LEVEL_DEBUG, callback.get_error().message.c_str());
+			}
+		});
+	}
 }
 
 // Post a message to the hosts-only #-current-draft-management channel outlining the procedures for correctly managing the firing of the draft.
@@ -2813,7 +2823,7 @@ int main(int argc, char* argv[]) {
 				auto opt = event.get_parameter("noshow");
 				if(std::holds_alternative<bool>(opt)) {
 					bool noshow = std::get<bool>(opt);
-					if(noshow == true) database_add_nowshow(guild_id, member_id, g_current_draft_code.c_str());
+					if(noshow == true) database_add_noshow(guild_id, member_id, g_current_draft_code.c_str());
 				}
 			}
 			
