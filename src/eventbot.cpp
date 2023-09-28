@@ -1624,7 +1624,7 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 
 	XMage_Version result;
 
-	MYSQL_OUTPUT_INIT(1);
+	MYSQL_OUTPUT_INIT(2);
 	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING,   &result.version[0], XMAGE_VERSION_STRING_MAX);
 	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.timestamp,  sizeof(result.timestamp));
 	MYSQL_OUTPUT_BIND_AND_STORE();
@@ -1984,12 +1984,14 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 
 	text += "\n\n";
 	text += fmt::format("**:bell: This is the pre-draft reminder for {}: {} :bell:**\n\n", draft_event.value->draft_code, draft_event.value->format);
-	text += "Please confirm your status on the signup sheet below.\n";
+	text += "Please confirm your status on the signup sheet below.\n\n";
+	//text += "Minutemage sign ups are now open.... **TODO**: I'm still thinking about the right wording here. Feel free to suggest something!\n\n";
 	text += fmt::format("If playing, check your XMage install is up-to-date by starting the launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
 
 	const auto xmage_version = database_get_xmage_version();
 	if(xmage_version == true) {
-		text += fmt::format("\nThe latest XMage release is {}, released <t:{}:R>.", xmage_version.value.version, xmage_version.value.timestamp + SERVER_TIMEZONE_OFFSET);
+		u64 timestamp = xmage_version.value.timestamp + SERVER_TIMEZONE_OFFSET;
+		text += fmt::format("\nThe latest XMage release is {}, released <t:{}:R>.", xmage_version.value.version, timestamp);
 	}
 
 	message.set_content(text);
@@ -2845,6 +2847,11 @@ int main(int argc, char* argv[]) {
 
 			if((sign_ups.count % 2) == 1) {
 				event.reply("Odd number of sign ups. Use /add_player or /remove_player.");
+				return;
+			}
+
+			if(sign_ups.count > PLAYERS_MAX) {
+				event.reply("Maximum player count of {} exceeded. You're on your own!");
 				return;
 			}
 
