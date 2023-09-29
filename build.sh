@@ -21,4 +21,4 @@ LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1" # -DAUTO_DOWNLOAD=1
 LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpthread"
 
 
-g++ --verbose -std=c++20 $BUILD_MODE -DEVENTBOT -Wall -Werror -Wpedantic -Wno-unused-function -fno-rtti $LIB_DATE_OPTS -I./src/date ./src/tz.cpp ./src/eventbot.cpp $LIBS -o eventbot
+g++ -std=c++20 $BUILD_MODE -DEVENTBOT -Wall -Werror -Wpedantic -Wno-unused-function -fno-rtti $LIB_DATE_OPTS -I./src/date ./src/tz.cpp ./src/eventbot.cpp $LIBS -o eventbot
