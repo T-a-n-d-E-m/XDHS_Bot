@@ -8,7 +8,7 @@
 
 # No, this does not need a Makefile or some other convoluted build system!
 
-if [ $1 == 'release' ]; then
+if [[ $1 == 'release' ]]; then
 	BUILD_MODE="-DRELEASE -O3"
 else
 	BUILD_MODE="-DDEBUG -g"
