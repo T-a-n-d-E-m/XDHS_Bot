@@ -24,6 +24,7 @@
 // For more information, please refer to <http://unlicense.org/>
 
 // TODO: Cleanup inconsistent use of char* and std::string in database functions.
+// TODO: All the blit_ functions can be rewritten to use SIMD ops
 // FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
 
 // C libraries
@@ -449,7 +450,8 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 
 static const size_t SET_COUNT = sizeof(g_draftable_sets) / sizeof(MTG_Draftable_Set);
 
-void print_set_list_code() {
+#if 0
+void emit_set_list_code() {
 	// Find the longest set name
 	size_t max = 0;
 	for(size_t i = 0; i < SET_COUNT; ++i) {
@@ -469,6 +471,7 @@ void print_set_list_code() {
 	}
 	fprintf(stdout, "};");
 }
+#endif
 
 // Hardly the most efficient way to search, but until the set list has thousands of entries this will be fast enough.
 static const char* get_set_name_from_code(const char* code) {
@@ -685,7 +688,6 @@ static const char* to_cstring(const LEAGUE_ID id) {
 }
 
 struct XDHS_League {
-	//const char* name;                   // Full name of the league.
 	LEAGUE_ID id;
 	char region_code;                   // (E)uro, (A)mericas, A(S)ia, (P)acific, A(T)lantic
 	char league_type;                   // (C)hrono or (B)onus
@@ -698,7 +700,6 @@ struct XDHS_League {
 // Lookup table for each of our leagues. The order these are listed doesn't matter. In the future we may want bot commands to create, edit and delete leagues but to keep things simple for now we'll hard code these into the bot.
 static const XDHS_League g_xdhs_leagues[] = {
 	{
-		//"Americas Chrono",
 		LEAGUE_ID_AMERICAS_CHRONO,
 		'A','C',
 		0x002c7652,
@@ -707,7 +708,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Americas", NULL},
 	},
 	{
-		//"Euro Chrono",
 		LEAGUE_ID_EURO_CHRONO,
 		'E','C',
 		0x000d5ba1,
@@ -716,7 +716,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Euro", NULL},
 	},
 	{
-		//"Asia Chrono",
 		LEAGUE_ID_ASIA_CHRONO,
 		'S','C',
 		0x00793fab,
@@ -725,7 +724,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Asia", NULL},
 	},
 	{
-		//"Pacific Chrono",
 		LEAGUE_ID_PACIFIC_CHRONO,
 		'P','C',
 		0x00b82f4b,
@@ -734,7 +732,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Pacific", NULL},
 	},
 	{
-		//"Atlantic Bonus",
 		LEAGUE_ID_ATLANTIC_BONUS,
 		'T','B',
 		0x00ed8821,
@@ -743,7 +740,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Euro", "Americas"},
 	},
 	{
-		//"Americas Bonus",
 		LEAGUE_ID_AMERICAS_BONUS,
 		'A','B',
 		0x006aa84f,
@@ -752,7 +748,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Americas", NULL},
 	},
 	{
-		//"Euro Bonus",
 		LEAGUE_ID_EURO_BONUS,
 		'E','B',
 		0x0061a0da,
@@ -787,6 +782,7 @@ static bool get_league_from_draft_code(const char* draft_code, XDHS_League* leag
 	return false;
 }
 
+// FIXME: Get rid of this!
 static void make_2_digit_league_code(const XDHS_League* league, char out[3]) {
 	out[0] = league->region_code;
 	out[1] = league->league_type;
@@ -2399,6 +2395,7 @@ const Icon* get_icon(DRAFT_TYPE type) {
 	return NULL;
 }
 
+// NOTE: Don't forget to free the returned buffer!
 static u8* file_slurp(const char* path, size_t* size) {
 	u8* file_contents = NULL;
 	FILE* f = fopen(path, "rb");
@@ -2421,6 +2418,8 @@ static u8* file_slurp(const char* path, size_t* size) {
 	return file_contents;
 }
 
+// Fill this structure and pass it to the render function.
+// TODO: Themes? We could have themes for different times of the year, or types of draft etc.
 struct Banner_Opts {
 	DRAFT_TYPE draft_type;
 	u32 league_color;
@@ -2436,7 +2435,7 @@ static const char* g_banner_font_file = "gfx/banner/SourceSansPro-Black.otf";
 
 struct Render_Banner_Result {
 	bool is_error;
-	std::string path;
+	std::string path; // if is_error == false, this is the path to the generated banner. FIXME: This smells bad!
 };
 
 const Render_Banner_Result render_banner(Banner_Opts* opts) {
@@ -2592,7 +2591,7 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 	}
 
 	// Save the file
-	// TODO: Only need to save RGB, this saves having to clear the alpha channel
+	// TODO: Only need to save RGB, this saves having to clear the alpha channel, but does stbii_write support this?
 	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
 	image_max_alpha(&banner); // TODO: How do I write only the RGB channels?
 	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
@@ -2602,8 +2601,6 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 
 	return {false, file_path};
 }
-
-
 
 
 static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
@@ -3372,8 +3369,7 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	const char* previous_set_code = NULL;
 	std::vector<std::string> result;
 
-	// TODO: If the list has no pack art for any of the sets, use the format string to reverse lookup a set code and use key art
-	// i.e. Invasion Remastered -> INVR.png
+	// TODO: If the first set and the third set are the same, but the second is different, use pack art 1 and 2
 	if(list.count == 0) {
 		// No match found. Do a reverse lookup and find the art.
 		const MTG_Draftable_Set* set = get_set_from_name(format);
@@ -3395,8 +3391,6 @@ static std::vector<std::string> get_pack_images(const char* format) {
 					pack_to_use = 0; // Reset
 				}
 			}
-			//fprintf(stdout, "%s:%s:%d pack:%d\n", list.set[i]->code, list.set[i]->name, list.set[i]->pack_images, pack_to_use+1);
-
 			result.push_back(fmt::format("gfx/pack_art/crop/{}/{}.png", list.set[i]->code, pack_to_use+1));
 
 			previous_set_code = list.set[i]->code;
@@ -3408,7 +3402,7 @@ static std::vector<std::string> get_pack_images(const char* format) {
 
 
 int main(int argc, char* argv[]) {
-#ifdef DEBUG
+#ifdef 0
 	// Verify the allocate_pod_seats() function is doing the right thing.
 	for(int i = 6; i < 66; i+=2) {
 		Draft_Pods pods = allocate_pod_seats(i);
@@ -3428,15 +3422,6 @@ int main(int argc, char* argv[]) {
 		}
 
 	}
-
-#if 0
-	if(argc > 1) {
-		if(strcmp(argv[1], "-sets") == 0) {
-			print_set_list_code();
-			return EXIT_SUCCESS;
-		}
-	}
-#endif
 
 	// Load the bot.ini config file. This file has sensitive information and so isn't versioned.
 	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
@@ -3478,32 +3463,6 @@ int main(int argc, char* argv[]) {
 	const std::string tz_version = date::remote_version();
 	(void)date::remote_download(tz_version);
 	(void)date::remote_install(tz_version);
-
-#if 0
-	// TESING time zone stuff
-	//auto t = date::make_zoned("America/New_York", system_clock::now()); // Time in New York 
-	auto new_york = date::make_zoned("America/New_York",
-		date::local_days{date::year{2023}/10/21} +
-		std::chrono::hours(19) + 
-		std::chrono::minutes(50));
-
-	auto aus = date::make_zoned("Australia/Sydney", new_york);
-	auto bris = date::make_zoned("Australia/Brisbane", new_york);
-
-	std::string str = format("%a %b %d %H:%M %Z", new_york); // 24 Hour time, %p is for PM in the examples below
-	std::cout << str << std::endl; 
-	std::cout << format("%a %b %d %I:%M %p %Z", new_york) << std::endl;
-	std::cout << format("%a %b %d %I:%M %p %Z", aus) << std::endl;
-	std::cout << format("%a %b %d %I:%M %p %Z", bris) << std::endl;
-#if 0
-    		auto zoned_time = date::make_zoned(draft_event.time_zone,
-				date::local_days{date::year{date.year}/date.month/date.day} +
-				std::chrono::hours(start_time.hour) +
-				std::chrono::minutes(start_time.minute));
-			draft_event.time = std::chrono::system_clock::to_time_t(zoned_time.get_sys_time());
-#endif
-	return 0;
-#endif
 
 	// Create the bot and connect to Discord.
 	// TODO: We don't need all intents, so just request what we need...
@@ -3595,7 +3554,6 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_string, "format", "The format of the draft. i.e. TSP/PLC/FUT or 'Artifact Chaos'.", true));
 
 				// Optional
-				//cmd.add_option(dpp::command_option(dpp::co_number, "draft_type", "Devotion, hero draft or community choice draft.", false).set_auto_complete(true));
 				auto draft_type_opt = dpp::command_option(dpp::co_integer, "draft_type", "Deovtion, hero, or community choice draft.", false);
 				for(int i = (int)DRAFT_TYPE_DEVOTION_GIANT; i < (int)DRAFT_TYPE_COUNT; ++i) {
 					draft_type_opt.add_choice(dpp::command_option_choice(to_cstring((DRAFT_TYPE)i), (std::int64_t)i));
@@ -3670,7 +3628,7 @@ int main(int argc, char* argv[]) {
 			}
 			{
 			}
-				//dpp::slashcommand cmd("add_host", "Specify a 
+				//dpp::slashcommand cmd("add_host", "Specify a host for a pod");
 			{
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3761,7 +3719,7 @@ int main(int argc, char* argv[]) {
 				} break;
 
 				case LEAGUE_ID_ASIA_CHRONO: {
-					// Euro and Australia
+					// Euro and Australia - Date is the same
 					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("Australia/Sydney", zoned_time));
 				} break;
 
@@ -3903,8 +3861,6 @@ int main(int argc, char* argv[]) {
 			}
 
 			// Is the default start time for this league overridden?
-			//draft_event.time.hour = league.time.hour;
-			//draft_event.time.minute = league.time.minute;
 			Start_Time start_time;
 			start_time.hour = league.time.hour;
 			start_time.minute = league.time.minute;
@@ -3917,8 +3873,6 @@ int main(int argc, char* argv[]) {
 						event.reply("Invalid start time. Start time should be entered as HH:MM, in 24 hour time.");
 						return;
 					}
-					//draft_event.time.hour = start_time.hour;
-					//draft_event.time.minute = start_time.minute;
 				}
 			}
 
@@ -3928,7 +3882,6 @@ int main(int argc, char* argv[]) {
 			auto banner = itr->second;
 			strcpy(draft_event.banner_url, banner.url.c_str());
 
-			//std::string blurbs[BLURB_COUNT];
 			for(size_t i = 0; i < BLURB_COUNT; ++i) {
 				static const size_t blurb_name_len = strlen("blurb_x") + 1;
 				char blurb_name[blurb_name_len];
@@ -4318,7 +4271,7 @@ int main(int argc, char* argv[]) {
 			}
 #endif
 
-/*
+/* Pod Priority Rules
 #1: The host of that pod - If the only available hosts (@XDHS Team members and @Hosts) are both in the leaderboard Top 3, the lowest-ranked host will host Pod 2.
 #2: Players who are required to play in that pod via the Rule of 3
 #3: Players with "Shark" status for the current Season (must play in pod 1)
@@ -4549,14 +4502,6 @@ The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
 	});
 
     bot.start(true);
-
-#if 0
-	{
-		bot.thread_create_with_message("123P-C", IN_THE_MOMENT_DRAFT_CHANNEL_ID, 1090316907871211561, 1440, 0, [&bot](const dpp::confirmation_callback_t& event) {
-
-		});
-	}
-#endif
 
 	bot.start_timer([&bot](dpp::timer t) {
 		set_bot_presence(bot);
