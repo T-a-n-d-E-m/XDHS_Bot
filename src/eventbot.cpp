@@ -24,18 +24,22 @@
 // For more information, please refer to <http://unlicense.org/>
 
 // TODO: Cleanup inconsistent use of char* and std::string in database functions.
-// TODO: Need a /minutemage command that either pings a random 'mage or the role 
+// FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
 
 // C libraries
 #include <alloca.h>
-#include <unistd.h>
+#include <assert.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // C++ libraries
 #include <cinttypes>
+#include <iostream> // TESTING ONLY - REMOVE!
 
 // System libraries
+#include <curl/curl.h>
 #include <mysql.h>
 
 // User libraries
@@ -43,10 +47,28 @@
 #include <fmt/format.h>
 
 // Local libraries
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_PSD
+#define STBI_NO_TGA
+#define STBI_FAILURE_USRMSG
+#define STBI_NO_HDR
+#define STBI_MAX_DIMENSIONS (1<<11)
+#include "stb_image.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
 #include "date/tz.h"                   // Howard Hinnant's date and timezone library.
 #include "../../BadgeBot/log.h"        // Not versioned - shared from a private repo
 #include "../../BadgeBot/config.h"     // Not versioned - shared from a private repo
 #include "../../BadgeBot/scope_exit.h" // Not versioned - shared from a private repo
+#include "../../BadgeBot/utf8.h"       // Not versioned - shared from a private repo
 
 // Some useful shorthands for common types.
 using  u8 = std::uint8_t;
@@ -77,43 +99,49 @@ static const time_t SECONDS_AFTER_DRAFT_TO_DELETE_POSTS     = (60*60*5);
 // How often often to spin up the thread that sends the pre-draft reminders, tentatives ping, etc.
 static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 
+// How long we allow for deck construction
+static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
+
 // The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
 #ifdef DEBUG
 // The bot will be running in debug mode on the XDHS Dev server.
-static const char* g_build_mode                 = "Debug";
-static const u64 GUILD_ID                       = 882164794566791179;
-static const u64 PRE_REGISTER_CHANNEL_ID        = 907524659099099178; // Default channel to post the draft signup.
-static const u64 CURRENT_DRAFT_MANAGEMENT_ID    = 1087299085612109844;
-static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID = 1075355794507305001;
-static const u64 BOT_COMMANDS_CHANNEL_ID        = 885048614190190593;
-static const u64 DECK_SCREENSHOTS_CHANNEL_ID    = 1155769474520199279;
+static const char* g_build_mode                  = "Debug";
+static const u64 GUILD_ID                        = 882164794566791179;
+static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft signup.
+static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 1087299085612109844;
+static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 1075355794507305001;
+static const u64 BOT_COMMANDS_CHANNEL_ID         = 885048614190190593;
+static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 1155769474520199279;
 static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 1155771897225674752;
-static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID  = 1155772743485235200;
-static const u64 FEEDBACK_CHANNEL_ID            = 1155773361104887880;
-static const u64 CALENDAR_CHANNEL_ID			= 1155774664732323952;
-static const u64 XDHS_TEAM_ROLE_ID              = 885054778978234408;
-static const u64 XDHS_HOST_ROLE_ID              = 1091275398639267881;
-static const u64 MINUTEMAGE_ROLE_ID             = 1156767797192437891;
-static bool g_commands_registered               = false; // Have the bot slash commands been registered for this guild?
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 1155772743485235200;
+static const u64 FEEDBACK_CHANNEL_ID             = 1155773361104887880;
+static const u64 CALENDAR_CHANNEL_ID			 = 1155774664732323952;
+static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
+static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
+static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
+static bool g_commands_registered                = false; // Have the bot slash commands been registered for this guild?
 #else
 // The bot will be running in release mode on the XDHS public server.
-static const char* g_build_mode                 = "Release";
-static const u64 GUILD_ID                       = 528728694680715324;
-static const u64 PRE_REGISTER_CHANNEL_ID        = 753639027428687962; // Default channel to post the draft signup.
-static const u64 CURRENT_DRAFT_MANAGEMENT_ID    = 921027014822068234;
-static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID = 535127333401657354;
-static const u64 BOT_COMMANDS_CHANNEL_ID        = 753637350877429842;
-static const u64 DECK_SCREENSHOTS_CHANNEL_ID    = 647073844649000962;
+static const char* g_build_mode                  = "Release";
+static const u64 GUILD_ID                        = 528728694680715324;
+static const u64 PRE_REGISTER_CHANNEL_ID         = 753639027428687962; // Default channel to post the draft signup.
+static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 921027014822068234;
+static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 535127333401657354;
+static const u64 BOT_COMMANDS_CHANNEL_ID         = 753637350877429842;
+static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 647073844649000962;
 static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
-static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID  = 796861143594958868; 
-static const u64 FEEDBACK_CHANNEL_ID            = 822015209756950528;
-static const u64 CALENDAR_CHANNEL_ID			= 794227134892998666;
-static const u64 XDHS_TEAM_ROLE_ID              = 639451893399027722;
-static const u64 XDHS_HOST_ROLE_ID              = 1051631435506794657;
-static const u64 MINUTEMAGE_ROLE_ID             = 843796946984370176;
-static bool g_commands_registered               = false // Have the bot slash commands been registered for this guild?;
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 796861143594958868; 
+static const u64 FEEDBACK_CHANNEL_ID             = 822015209756950528;
+static const u64 CALENDAR_CHANNEL_ID			 = 794227134892998666;
+static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
+static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
+static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
+static bool g_commands_registered                = false; // Have the bot slash commands been registered for this guild?;
 #endif
+
+// Some serious errors will ping this person as the error needs attention ASAP.
+static const u64 TANDEM_DISCORD_ID               = 767299805348233217;
 
 // The name of the currently active draft or the next upcoming draft.
 // NOTE: When the bot starts there is a brief window of time where this has not yet been set.
@@ -140,6 +168,105 @@ static void sig_handler(int signo) {
     g_exit_code = signo;
 }
 
+static std::string to_upper(const char* src) {
+	const size_t len = strlen(src);
+	std::string result;
+	result.reserve(len);
+	for(size_t i = 0; i < len; ++i) {
+		result += std::toupper(src[i]);
+	}
+	return result;
+}
+
+static std::string random_string(const int len) {
+	static const char* c = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+	std::string result;
+	result.reserve(len+1);
+	for(int i = 0; i < len; ++i) {
+		result += c[rand() % strlen(c)];
+	}
+	return result;
+}
+
+
+
+static const size_t DOWNLOAD_BYTES_MAX = (3 * 1024 * 1024);
+
+struct curl_mem_chunk {
+    size_t size;
+    u8* data;
+};
+
+static size_t curl_write_memory_callback(void* data, size_t size, size_t nmemb, void* usr_ptr) {
+    size_t real_size = size * nmemb;
+    curl_mem_chunk* mem = (curl_mem_chunk*)usr_ptr;
+
+    // TODO: Keep track of how much we've allocated so far and error out if over some maximum amount to prevent denial of service attacks from giant files being sent.
+
+    u8* ptr = (u8*) realloc(mem->data, mem->size + real_size);
+    if(ptr == NULL) {
+		log(LOG_LEVEL_ERROR, "%s: out of memeory", __FUNCTION__); // TODO: Now what? On the potato server EventBot is on this could happen...
+        return 0;
+    }
+
+    mem->data = ptr;
+    memcpy(mem->data + mem->size, data, real_size);
+    mem->size += real_size;
+
+    return real_size;
+}
+
+enum DOWNLOAD_IMAGE_RESULT {
+    DOWNLOAD_IMAGE_RESULT_OK,
+    DOWNLOAD_IMAGE_RESULT_CURL_INIT_ERROR,
+    DOWNLOAD_IMAGE_RESULT_CURL_ERROR
+};
+
+static DOWNLOAD_IMAGE_RESULT download_file(const char* url, size_t* size, u8** data) {
+    curl_global_init(CURL_GLOBAL_DEFAULT); // TODO: Can this be done once at startup?
+
+    CURL* curl = curl_easy_init();
+    if(curl == NULL) {
+        return DOWNLOAD_IMAGE_RESULT_CURL_INIT_ERROR;
+    }
+
+    // Disable checking SSL certs
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    // Disable checking SSL certs are valid
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+
+    curl_mem_chunk chunk;
+    chunk.size = 0;
+    chunk.data = NULL;
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_memory_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
+
+    CURLcode result = curl_easy_perform(curl);
+    if(result != CURLE_OK) {
+        // TODO: Need to pass in a **error_str variable to get these error messages from curl?
+		log(LOG_LEVEL_ERROR, "curl_easy_perform() failed: %s", curl_easy_strerror(result));
+        return DOWNLOAD_IMAGE_RESULT_CURL_ERROR;
+    }
+
+    //printf("downloaded %lu bytes\n", chunk.size);
+
+    curl_easy_cleanup(curl);
+
+    curl_global_cleanup(); // TODO: Can this be done once at shutdown?
+
+    *size = chunk.size;
+    *data = chunk.data;
+
+    return DOWNLOAD_IMAGE_RESULT_OK;
+}
+
+
+
 // Send a message to a channel. Mostly used for posting what the bot is currently doing.
 static void send_message(dpp::cluster& bot, const u64 channel_id, const std::string& text) {
 	dpp::message message;
@@ -151,163 +278,197 @@ static void send_message(dpp::cluster& bot, const u64 channel_id, const std::str
 	bot.message_create(message);
 }
 
-struct MTG_Draftable_Sets {
+struct MTG_Draftable_Set {
 	const char* code;
 	const char* name;
+	int pack_images;
+	bool key_art;
 };
 
 // Not an complete list - just the sets we draft (or explicitly DON'T) at XDHS.
 // This is probably not the best way to handle this as new sets (official or not) need to keep this updated.
 // Perhaps move it to the database and use a /add_set command?
-static const MTG_Draftable_Sets g_draftable_sets[] = {
-	{"LEB", "Limited Edition Beta"},
-	{"MIR", "Mirage"},
-	{"VIS", "Visions"},
-	{"WTH", "Weatherlight"},
-	{"POR", "Portal"},
-	{"P02", "Portal Second Age"},
-	{"TMP", "Tempest"},
-	{"STH", "Stronghold"},
-	{"EXO", "Exodus"},
-	{"USG", "Urza's Saga"},
-	{"ULG", "Urza's Legacy"},
-	{"UDS", "Urza's Destiny"},
-	{"PTK", "Portal Three Kingdoms"},
-	{"MMQ", "Mercadian Masques"},
-	{"NEM", "Nemesis"},
-	{"PCY", "Prophecy"},
-	{"INV", "Invasion"},
-	{"PLS", "Planeshift"},
-	{"APC", "Apocalypse"},
-	{"ODY", "Odyssey"},
-	{"TOR", "Torment"},
-	{"JUD", "Judgment"},
-	{"ONS", "Onslaught"},
-	{"LGN", "Legions"},
-	{"SCG", "Scourge"},
-	{"MRD", "Mirrodin"},
-	{"DST", "Darksteel"},
-	{"5DN", "Fifth Dawn"},
-	{"CHK", "Champions of Kamigawa"},
-	{"BOK", "Betrayers of Kamigawa"},
-	{"SOK", "Saviors of Kamigawa"},
-	{"RAV", "Ravnida: City of Guilds"},
-	{"GPT", "Guildpact"},
-	{"DIS", "Dissension"},
-	{"CSP", "Coldsnap"},
-	{"TSP", "Time Spiral"},
-	{"PLC", "Planar Choas"},
-	{"FUT", "Future Sight"},
-	{"ME1", "Masters Edition"},
-	{"LRW", "Lorwyn"},
-	{"MOR", "Morningtide"},
-	{"SHM", "Shadowmoor"},
-	{"EVE", "Eventide"},
-	{"ME2", "Masters Edition II"},
-	{"ALA", "Shards of Alara"},
-	{"CON", "Conflux"},
-	{"ARB", "Alara Reborn"},
-	{"M10", "Magic 2010"},
-	{"ME3", "Masters Edition III"},
-	{"ZEN", "Zendikar"},
-	{"WWK", "Worldwake"},
-	{"ROE", "Rise of the Eldrazi"},
-	{"M11", "Magic 2011"},
-	{"ME4", "Masters Edition IV"},
-	{"SOM", "Scars of Mirrodin"},
-	{"MBS", "Mirrodin Besieged"},
-	{"NPH", "New Phyrexia"},
-	{"M12", "Magic 2012"},
-	{"ISB", "Innistrad"},
-	{"DKA", "Dark Ascension"},
-	{"AVR", "Avacyn Restored"},
-	{"M13", "Magic 2013"},
-	{"RTR", "Return to Ravnica"},
-	{"GTC", "Gatecrash"},
-	{"DGM", "Dragon's Maze"},
-	{"MMA", "Modern Masters"},
-	{"M14", "Magic 2014"},
-	{"THS", "Theros"},
-	{"BNG", "Born of the Gods"},
-	{"JOU", "Journey into Nyx"},
-	{"CNS", "Conspiracy"},
-	{"VMA", "Vintage Masters"},
-	{"M15", "Magic 2015"},
-	{"KTK", "Khans of Tarkir"},
-	{"FRF", "Fate Reforged"},
-	{"DTK", "Dragons of Tarkir"},
-	{"TPR", "Tempest Remastered"},
-	{"MM2", "Modern Masters 2015"},
-	{"ORI", "Magic Origins"},
-	{"BFZ", "Battle for Zendikar"},
-	{"OGW", "Oath of the Gatewatch"},
-	{"SOI", "Shadows Over Innistrad"},
-	{"EMA", "Eternal Masters"},
-	{"EMN", "Eldritch Moon"},
-	{"CN2", "Conspiracy: Take the Crown"},
-	{"KLD", "Kaladesh"},
-	{"AER", "Aether Revolt"},
-	{"MM3", "Modern Masters 2017"},
-	{"AKH", "Amonkhet"},
-	{"HOU", "Hour of Devastation"},
-	{"XLN", "Ixalan"},
-	{"IMA", "Iconic Masters"},
-	{"RIX", "Rivals of Ixalan"},
-	{"A25", "Masters 25"},
-	{"DOM", "Dominaria"},
-	{"M19", "Core Set 2019"},
-	{"GRN", "Guilds of Ravnica"},
-	{"UMA", "Ultimate Masters"},
-	{"RNA", "Ravnica Allegiance"},
-	{"WAR", "War of the Spark"},
-	{"MH1", "Modern Horizons"},
-	{"M20", "Core Set 2020"},
-	{"ELD", "Throne of Eldraine"},
-	{"MB1", "Mystery Booster"},
-	{"THB", "Theros Beyond Death"},
-	{"IKO", "Ikoria: Lair of Behemoths"},
-	{"M21", "Core Set 2021"},
-	{"2XM", "Double Masters"},
-	{"AKR", "Amonkhet Remastered"},
-	{"ZNR", "Zendikar Rising"},
-	{"KLR", "Kaladesh Remastered"},
-	{"CMD", "Commander Legends"},
-	{"KHM", "Kaldheim"},
-	{"TSR", "Time Spiral Remastered"},
-	{"STX", "Strixhaven: School of Mages"},
-	{"MH2", "Modern Horizons 2"},
-	{"AFR", "Adventures in the Forgotten Realms"},
-	{"MID", "Innistrad: Midnight Hunt"},
-	{"VOW", "Innistrad: Crimson Vow"},
-	{"NEO", "Kamigawa: Neon Dynasty"},
-	{"SNC", "Streets of New Capenna"},
-	{"CLB", "Commander Legends: Battle for Baldur's Gate"},
-	{"2X2", "Double Masters 2022"},
-	{"DMU", "Dominaria United"},
-	{"BRO", "The Brothers' War"},
-	{"DMR", "Dominaria Remastered"},
-	{"ONE", "Phyrexia: All Will Be One"},
-	{"MOM", "March of the Machine"},
-	{"LTR", "The Lord of the Rings: Tales of Middle-earth"},
-	{"WOE", "Wilds of Eldraine"},
-	{"RVR", "Ravnica Remastered"},
+static const MTG_Draftable_Set g_draftable_sets[] = {
+	{"LEA", "Limited Edition Alpha",                       1, false},
+	{"LEB", "Limited Edition Beta",                        1, false},
+	{"ARN", "Arabian Nights",                              1, false},
+	{"ATQ", "Antiquities",                                 1, false},
+	{"LEG", "Legends",                                     1, false},
+	{"DRK", "The Dark",                                    1, false},
+	{"FEM", "Fallen Empires",                              1, false},
+	{"ICE", "Ice Age",                                     5, false},
+	{"CHR", "Chronicles",                                  1, false},
+	{"HML", "Homelands",                                   1, false},
+	{"ALL", "Alliances",                                   1, false},
+	{"MIR", "Mirage",                                      5, false},
+	{"VIS", "Visions",                                     1, false},
+	{"WTH", "Weatherlight",                                1, false},
+	{"POR", "Portal",                                      5, false},
+	{"P02", "Portal Second Age",                           1, false},
+	{"TMP", "Tempest",                                     3, false},
+	{"STH", "Stronghold",                                  1, false},
+	{"EXO", "Exodus",                                      1, false},
+	{"USG", "Urza's Saga",                                 0, false},
+	{"ULG", "Urza's Legacy",                               0, false},
+	{"UDS", "Urza's Destiny",                              0, false},
+	{"PTK", "Portal Three Kingdoms",                       0, false},
+	{"MMQ", "Mercadian Masques",                           0, false},
+	{"NEM", "Nemesis",                                     0, false},
+	{"PCY", "Prophecy",                                    0, false},
+	{"INV", "Invasion",                                    0, false},
+	{"PLS", "Planeshift",                                  0, false},
+	{"APC", "Apocalypse",                                  0, false},
+	{"ODY", "Odyssey",                                     0, false},
+	{"TOR", "Torment",                                     0, false},
+	{"JUD", "Judgment",                                    0, false},
+	{"ONS", "Onslaught",                                   0, false},
+	{"LGN", "Legions",                                     0, false},
+	{"SCG", "Scourge",                                     0, false},
+	{"MRD", "Mirrodin",                                    0, false},
+	{"DST", "Darksteel",                                   0, false},
+	{"5DN", "Fifth Dawn",                                  0, false},
+	{"CHK", "Champions of Kamigawa",                       0, false},
+	{"BOK", "Betrayers of Kamigawa",                       0, false},
+	{"SOK", "Saviors of Kamigawa",                         0, false},
+	{"RAV", "Ravnida: City of Guilds",                     5, false},
+	{"GPT", "Guildpact",                                   0, false},
+	{"DIS", "Dissension",                                  0, false},
+	{"CSP", "Coldsnap",                                    0, false},
+	{"TSP", "Time Spiral",                                 0, false},
+	{"PLC", "Planar Choas",                                0, false},
+	{"FUT", "Future Sight",                                0, false},
+	{"ME1", "Masters Edition",                             0, false},
+	{"LRW", "Lorwyn",                                      0, false},
+	{"MOR", "Morningtide",                                 0, false},
+	{"SHM", "Shadowmoor",                                  0, false},
+	{"EVE", "Eventide",                                    0, false},
+	{"ME2", "Masters Edition II",                          0, false},
+	{"ALA", "Shards of Alara",                             0, false},
+	{"CON", "Conflux",                                     0, false},
+	{"ARB", "Alara Reborn",                                0, false},
+	{"M10", "Magic 2010",                                  0, false},
+	{"ME3", "Masters Edition III",                         0, false},
+	{"ZEN", "Zendikar",                                    0, false},
+	{"WWK", "Worldwake",                                   0, false},
+	{"ROE", "Rise of the Eldrazi",                         0, false},
+	{"M11", "Magic 2011",                                  0, false},
+	{"ME4", "Masters Edition IV",                          0, false},
+	{"SOM", "Scars of Mirrodin",                           5, false},
+	{"MBS", "Mirrodin Besieged",                           3, false},
+	{"NPH", "New Phyrexia",                                3, false},
+	{"M12", "Magic 2012",                                  5, false},
+	{"ISD", "Innistrad",                                   5, false},
+	{"DKA", "Dark Ascension",                              3, false},
+	{"AVR", "Avacyn Restored",                             5, false},
+	{"M13", "Magic 2013",                                  5, false},
+	{"RTR", "Return to Ravnica",                           5, false},
+	{"GTC", "Gatecrash",                                   5, false},
+	{"DGM", "Dragon's Maze",                               1, false},
+	{"MMA", "Modern Masters",                              3, false},
+	{"M14", "Magic 2014",                                  5, false},
+	{"THS", "Theros",                                      4, false},
+	{"BNG", "Born of the Gods",                            3, false},
+	{"JOU", "Journey into Nyx",                            3, false},
+	{"CNS", "Conspiracy",                                  3, false},
+	{"VMA", "Vintage Masters",                             2, false},
+	{"M15", "Magic 2015",                                  5, false},
+	{"KTK", "Khans of Tarkir",                             5, false},
+	{"FRF", "Fate Reforged",                               3, false},
+	{"DTK", "Dragons of Tarkir",                           4, false},
+	{"TPR", "Tempest Remastered",                          1, false},
+	{"MM2", "Modern Masters 2015",                         3, false},
+	{"ORI", "Magic Origins",                               4, false},
+	{"BFZ", "Battle for Zendikar",                         5, false},
+	{"OGW", "Oath of the Gatewatch",                       3, false},
+	{"SOI", "Shadows Over Innistrad",                      3, false},
+	{"EMA", "Eternal Masters",                             3, false},
+	{"EMN", "Eldritch Moon",                               3, false},
+	{"CN2", "Conspiracy: Take the Crown",                  3, false},
+	{"KLD", "Kaladesh",                                    3, false},
+	{"AER", "Aether Revolt",                               3, false},
+	{"MM3", "Modern Masters 2017",                         3, false},
+	{"AKH", "Amonkhet",                                    3, false},
+	{"HOU", "Hour of Devastation",                         5, false},
+	{"XLN", "Ixalan",                                      3, false},
+	{"IMA", "Iconic Masters",                              3, false},
+	{"RIX", "Rivals of Ixalan",                            5, false},
+	{"A25", "Masters 25",                                  3, false},
+	{"DOM", "Dominaria",                                   5, false},
+	{"M19", "Core Set 2019",                               5, false},
+	{"GRN", "Guilds of Ravnica",                           5, false},
+	{"UMA", "Ultimate Masters",                            3, false},
+	{"RNA", "Ravnica Allegiance",                          5, false},
+	{"WAR", "War of the Spark",                            3, false},
+	{"MH1", "Modern Horizons",                             3, false},
+	{"M20", "Core Set 2020",                               3, false},
+	{"ELD", "Throne of Eldraine",                          3, false},
+	{"MB1", "Mystery Booster",                             1, false},
+	{"THB", "Theros Beyond Death",                         3, false},
+	{"IKO", "Ikoria: Lair of Behemoths",                   3, false},
+	{"M21", "Core Set 2021",                               3, false},
+	{"2XM", "Double Masters",                              3, false},
+	{"AKR", "Amonkhet Remastered",                         0,  true},
+	{"ZNR", "Zendikar Rising",                             3, false},
+	{"KLR", "Kaladesh Remastered",                         0,  true},
+	{"CMD", "Commander Legends",                           1, false},
+	{"KHM", "Kaldheim",                                    4, false},
+	{"TSR", "Time Spiral Remastered",                      3, false},
+	{"STX", "Strixhaven: School of Mages",                 5, false},
+	{"MH2", "Modern Horizons 2",                           3, false},
+	{"AFR", "Adventures in the Forgotten Realms",          1, false},
+	{"MID", "Innistrad: Midnight Hunt",                    1, false},
+	{"VOW", "Innistrad: Crimson Vow",                      1, false},
+	{"NEO", "Kamigawa: Neon Dynasty",                      1, false},
+	{"SNC", "Streets of New Capenna",                      1, false},
+	{"CLB", "Commander Legends: Battle for Baldur's Gate", 1, false},
+	{"2X2", "Double Masters 2022",                         1, false},
+	{"DMU", "Dominaria United",                            1, false},
+	{"BRO", "The Brothers' War",                           1, false},
+	{"DMR", "Dominaria Remastered",                        1, false},
+	{"ONE", "Phyrexia: All Will Be One",                   1, false},
+	{"MOM", "March of the Machine",                        1, false},
+	{"LTR", "The Lord of the Rings: Tales of Middle-earth",1, false},
+	{"WOE", "Wilds of Eldraine",                           1, false},
+	{"LCI", "Lost Caverns of Ixalan",                      1, false},
+	{"RVR", "Ravnica Remastered",                          1, false},
 
-	// XDHS custom and remastered sets
-	{"INVR", "Invasion Remastered"},
-	{"KMGR", "Kamigawa Remastered"},
-	{"PMMA", "Pre Mirage Masters"},
-	{"GBMA", "Garbage Masters"},
-	{"SLCS", "The Sliver Core Set"},
-	{"USGR", "Urza Block Redeemed"},
-	{"TWAR", "Total WAR"},
-	{"ATQR", "Antiquities Reforged"},
-	{"ISDR", "Innistrad Remastered "},
-	{"CRSN", "Core Resonance"},
-	{"DOMR", "Dominaria Revised"},
-	{"10LE", "10 Life Edition"},
-	{"GLNT", "Ravnica Revolution: GLINT"},
+	{"INVR", "Invasion Remastered",                        0,  true},
+	{"KMGR", "Kamigawa Remastered",                        0,  true},
+	{"PMMA", "Pre Mirage Masters",                         0, false},
+	{"GBMA", "Garbage Masters",                            0, false},
+	{"SLCS", "The Sliver Core Set",                        0, false},
+	{"USGR", "Urza Block Redeemed",                        0, false},
+	{"TWAR", "Total WAR",                                  0, false},
+	{"ATQR", "Antiquities Reforged",                       0, false},
+	{"ISDR", "Innistrad Remastered ",                      0, false},
+	{"CRSN", "Core Resonance",                             0, false},
+	{"DOMR", "Dominaria Revised",                          0, false},
+	{"10LE", "10 Life Edition",                            0, false},
+	{"GLNT", "Ravnica Revolution: GLINT",                  0, false},
 };
-static const size_t SET_COUNT = sizeof(g_draftable_sets) / sizeof(MTG_Draftable_Sets);
+
+static const size_t SET_COUNT = sizeof(g_draftable_sets) / sizeof(MTG_Draftable_Set);
+
+void print_set_list_code() {
+	// Find the longest set name
+	size_t max = 0;
+	for(size_t i = 0; i < SET_COUNT; ++i) {
+		size_t len = strlen(g_draftable_sets[i].name) + strlen(g_draftable_sets[i].code);
+		max = (max > len) ? max : len;
+	}
+	char* whitespace = (char*) alloca(max+1);
+	fprintf(stdout, "static const MTG_Draftable_Set g_draftable_sets[] = {\n");
+	for(size_t i = 0; i < SET_COUNT; ++i) {
+		size_t needed = max - (strlen(g_draftable_sets[i].code)+strlen(g_draftable_sets[i].name));
+		for(size_t j = 0; j < needed; ++j) {
+			whitespace[j] = ' ';
+		}
+		whitespace[needed] = 0;
+		fprintf(stdout, "\t{\"%s\", \"%s\",%s%d, false},\n",
+			g_draftable_sets[i].code, g_draftable_sets[i].name, whitespace, g_draftable_sets[i].pack_images);
+	}
+	fprintf(stdout, "};");
+}
 
 // Hardly the most efficient way to search, but until the set list has thousands of entries this will be fast enough.
 static const char* get_set_name_from_code(const char* code) {
@@ -318,6 +479,25 @@ static const char* get_set_name_from_code(const char* code) {
 	}
 	return NULL;
 }
+
+static const MTG_Draftable_Set* get_set_from_name(const char* name) {
+	for(size_t i = 0; i < SET_COUNT; ++i) {
+		if(strcasecmp(g_draftable_sets[i].name, name) == 0) {
+			return &g_draftable_sets[i];
+		}
+	}
+	return NULL;
+}
+
+static const MTG_Draftable_Set* get_set_from_code(const char* code) {
+	for(size_t i = 0; i < SET_COUNT; ++i) {
+		if(strcasecmp(g_draftable_sets[i].code, code) == 0) {
+			return &g_draftable_sets[i];
+		}
+	}
+	return NULL;
+}
+
 
 // Parse the set_codes string (e.g. TMP,EXO,ELD,ISD,...) and expand them into full set names (e.g. Tempest, Exodus, Eldraine, Innistrad, ...) writing the results into the out variable.
 static const void make_set_list(const char* set_codes, const size_t len, char* out, size_t out_len) {
@@ -362,6 +542,46 @@ static const size_t FORMAT_STRING_LEN_MAX = 128;
 
 // The maximum amount of packs we support in a draft. As of writing this, four is the highest (IIRC) number of packs we've ever used in a draft, and ever needing more than six is extremely unlikely.
 static const int PACKS_PER_DRAFT_MAX = 6;
+
+
+struct Set_List {
+	int count;
+	const MTG_Draftable_Set* set[PACKS_PER_DRAFT_MAX];
+};
+
+static Set_List get_set_list_from_string(const char* format) {
+	size_t len = strlen(format);
+	char* str = (char*)alloca(len+1);
+	memcpy(str, format, len+1);
+	for(size_t i = 0; i < len; ++i) {
+		str[i] = toupper(str[i]);
+	}
+	char* start = str;
+	char* end = start;
+	bool done = false;
+	Set_List list;
+	list.count = 0;
+	while(!done) {
+		while(*end != '/' && *end != '\\' && *end != '|' && *end != '\0') {
+			end++;
+		}
+		if(*end == 0) done = true;
+
+		*end = 0;
+		if(strlen(start) == 0) break;
+		
+		const MTG_Draftable_Set* set = get_set_from_code(start);
+		if(set != NULL) {
+			list.set[list.count++] = set;
+		}
+
+		end++;
+		start = end;
+	}
+
+	return list;
+}
+
 
 // Turn a format string like "TSP/TSP/TSP" into "3x Time Spiral", or "MIR/VIS/WTH" into "Mirage/Visions/Weatherlight"
 static void expand_format_string(const char* format, size_t len, char* out, size_t out_len) {
@@ -432,21 +652,6 @@ static void expand_format_string(const char* format, size_t len, char* out, size
 		}
 	}
 }
-
-#if 0
-struct Draft_Code {
-	int season;
-	int week;
-	char region_code;
-	char league_type;
-};
-
-static void parse_draft_code(const char* draft_code, Draft_Code* out) {
-
-}
-#endif
-
-
 struct Start_Time {
 	int hour;
 	int minute;
@@ -455,8 +660,33 @@ struct Start_Time {
 // The maximum number of leagues to be pinged when a draft signup is posted. Increase this if a league ever needs to ping more than two roles.
 static const size_t LEAGUE_PINGS_MAX = 2; 
 
+enum LEAGUE_ID {
+	LEAGUE_ID_AMERICAS_CHRONO,
+	LEAGUE_ID_EURO_CHRONO,
+	LEAGUE_ID_ASIA_CHRONO,
+	LEAGUE_ID_PACIFIC_CHRONO,
+	LEAGUE_ID_ATLANTIC_BONUS,
+	LEAGUE_ID_AMERICAS_BONUS,
+	LEAGUE_ID_EURO_BONUS
+};
+
+static const char* to_cstring(const LEAGUE_ID id) {
+	switch(id) {
+		case LEAGUE_ID_AMERICAS_CHRONO: return "Americas Chrono";
+		case LEAGUE_ID_EURO_CHRONO:     return "Euro Chrono";
+		case LEAGUE_ID_ASIA_CHRONO:     return "Asia Chrono";
+		case LEAGUE_ID_PACIFIC_CHRONO:  return "Pacific Chrono";
+		case LEAGUE_ID_ATLANTIC_BONUS:  return "Atlantic Bonus";
+		case LEAGUE_ID_AMERICAS_BONUS:  return "Americas Bonus";
+		case LEAGUE_ID_EURO_BONUS:      return "Euro Bonus";
+	}
+
+	return NULL;
+}
+
 struct XDHS_League {
-	const char* name;                   // Full name of the league.
+	//const char* name;                   // Full name of the league.
+	LEAGUE_ID id;
 	char region_code;                   // (E)uro, (A)mericas, A(S)ia, (P)acific, A(T)lantic
 	char league_type;                   // (C)hrono or (B)onus
 	u32 color;                          // Color for the league
@@ -468,7 +698,8 @@ struct XDHS_League {
 // Lookup table for each of our leagues. The order these are listed doesn't matter. In the future we may want bot commands to create, edit and delete leagues but to keep things simple for now we'll hard code these into the bot.
 static const XDHS_League g_xdhs_leagues[] = {
 	{
-		"Americas Chrono",
+		//"Americas Chrono",
+		LEAGUE_ID_AMERICAS_CHRONO,
 		'A','C',
 		0x002c7652,
 		"America/New_York",
@@ -476,7 +707,8 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Americas", NULL},
 	},
 	{
-		"Euro Chrono",
+		//"Euro Chrono",
+		LEAGUE_ID_EURO_CHRONO,
 		'E','C',
 		0x000d5ba1,
 		"Europe/Berlin",
@@ -484,7 +716,8 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Euro", NULL},
 	},
 	{
-		"Asia Chrono",
+		//"Asia Chrono",
+		LEAGUE_ID_ASIA_CHRONO,
 		'S','C',
 		0x00793fab,
 		"Europe/Berlin",
@@ -492,7 +725,8 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Asia", NULL},
 	},
 	{
-		"Pacific Chrono",
+		//"Pacific Chrono",
+		LEAGUE_ID_PACIFIC_CHRONO,
 		'P','C',
 		0x00b82f4b,
 		"America/New_York",
@@ -500,7 +734,8 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Pacific", NULL},
 	},
 	{
-		"Atlantic Bonus",
+		//"Atlantic Bonus",
+		LEAGUE_ID_ATLANTIC_BONUS,
 		'T','B',
 		0x00ed8821,
 		"Europe/Berlin",
@@ -508,7 +743,8 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Euro", "Americas"},
 	},
 	{
-		"Americas Bonus",
+		//"Americas Bonus",
+		LEAGUE_ID_AMERICAS_BONUS,
 		'A','B',
 		0x006aa84f,
 		"America/New_York",
@@ -516,7 +752,8 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Americas", NULL},
 	},
 	{
-		"Euro Bonus",
+		//"Euro Bonus",
+		LEAGUE_ID_EURO_BONUS,
 		'E','B',
 		0x0061a0da,
 		"Europe/Berlin",
@@ -555,6 +792,58 @@ static void make_2_digit_league_code(const XDHS_League* league, char out[3]) {
 	out[1] = league->league_type;
 	out[2] = 0;
 }
+
+
+// The maximum allowed byte length of a draft code.
+static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT");
+
+struct Draft_Code {
+	u16 season; // max 3 digits
+	u8 week; // max 2 digits
+	char region_code; // TODO: Already in league so remove
+	char league_type; // TODO: Already in league so remove
+	const XDHS_League *league;
+};
+
+static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
+	if(draft_code == NULL) return false;
+	const size_t len = strlen(draft_code);
+	if(len > DRAFT_CODE_LENGTH_MAX) return false;
+	char str[DRAFT_CODE_LENGTH_MAX]; // Mutable copy
+	memcpy(str, draft_code, len);
+
+	char* start = str;
+	char* end = str;
+
+	// Season
+	while(isdigit(*end)) end++;
+	if(*end != '.') return false;
+	*end = 0;
+	if(strlen(start) > 3) return false;
+	out->season = strtol(start, NULL, 10);
+	start = end++;
+
+	// Week
+	while(isdigit(*end)) end++;
+	if(*end != '-') return false;
+	*end = 0;
+	if(strlen(start) > 2) return false;
+	out->week = strtol(start, NULL, 10);
+	start = end++;
+
+	out->region_code = *end++;
+	out->league_type = *end;
+
+	for(size_t i = 0; i < LEAGUE_COUNT; ++i) {
+		if((g_xdhs_leagues[i].region_code == out->region_code) && (g_xdhs_leagues[i].league_type == out->league_type)) {
+			out->league = &g_xdhs_leagues[i];
+			return true;
+		}
+	}
+
+	return false;
+}
+
 
 struct Draft_Duration {
 	int hours;
@@ -675,9 +964,6 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 
 // The maximum allowed characters in a Discord username or nickname.
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
-
-// The maximum allowed byte length of a draft code.
-static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT");
 
 // The maximum allowed byte length of a draft format string.
 static const size_t DRAFT_FORMAT_LENGTH_MAX = 64;
@@ -1165,7 +1451,7 @@ enum SIGNUP_STATUS : int {
 	SIGNUP_STATUS_FLEXIBLE    = 4,
 	SIGNUP_STATUS_TENTATIVE   = 8,
 	SIGNUP_STATUS_MINUTEMAGE  = 16,
-	SIGNUP_STATUS_DECLINE     = 32,
+	SIGNUP_STATUS_DECLINE     = 32, // This person was signed up but has clicked the Decline button.
 	SIGNUP_STATUS_REMOVED     = 64, // The host has removed the player (likely a no-show) from the signup sheet.
 
 	SIGNUP_STATUS_INVALID     = -1,
@@ -1299,6 +1585,7 @@ struct Draft_Sign_Up {
 
 static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league) {
 	MYSQL_CONNECT();
+	// TODO: This needs to know the season!
 	static const char* query = R"(
 		SELECT
 			draft_signups.member_id,
@@ -1584,6 +1871,47 @@ static Database_Result<Database_No_Value> database_set_tentatives_pinged_id(cons
 	MYSQL_RETURN();
 }
 
+static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild_id, const char* draft_code, const u64 role_id) {
+	MYSQL_CONNECT();
+	static const char* query = "REPLACE INTO temp_roles (guild_id, draft_code, role_id) VALUES(?,?,?)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,   sizeof(role_id));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
+static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guild_id, const char* draft_code) {
+	MYSQL_CONNECT();
+	static const char *query = "DELETE FROM temp_roles WHERE guild_id=? AND draft_code=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
+static Database_Result<Database_No_Value> database_add_temp_member_role(const u64 guild_id, const u64 member_id, const u64 role_id) {
+	MYSQL_CONNECT();
+	static const char* query = "REPLACE INTO temp_members (guild_id, member_id, role_id) VALUES(?,?,?)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,   sizeof(role_id));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
 static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const char* draft_code) {
 	MYSQL_CONNECT();
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
@@ -1636,6 +1964,647 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
 }
+
+
+static const int BANNER_IMAGE_WIDTH = 900;
+static const int BANNER_IMAGE_HEIGHT = 600;
+
+// Pack images are scaled to this size
+static const int PACK_IMAGE_WIDTH  = 300;
+static const int PACK_IMAGE_HEIGHT = 470;
+
+static const int KEY_ART_WIDTH = (PACK_IMAGE_WIDTH * 3);
+static const int KEY_ART_HEIGHT = PACK_IMAGE_HEIGHT;
+
+
+union Pixel {
+    struct {
+		u8 r, g, b, a; // Little endian
+    } components;
+    u8 block[4];
+    u32 c; // 0xAABBGGRR
+};
+static_assert(sizeof(Pixel) == 4, "Unexpected size for Pixel union.");
+
+struct Image {
+    int w;
+    int h;
+	int channels;
+	void* data;
+};
+
+void init_image(Image* img, int width, int height, int channels, u32 color) {
+	img->data = malloc(width * height * channels);// sizeof(Pixel));
+	if(img->data == NULL) {
+		// FIXME: Failing to allocate is possibly a real problem on the virtual server this runs on...
+		img->w = 0;
+		img->h = 0;
+		img->channels = 0;
+		fprintf(stdout, "out of memory\n");
+		return;
+	}
+
+	img->channels = channels;
+	img->w = width;
+	img->h = height;
+
+	// TODO: Do I need to support 3 channel images here? Probably not...
+	if(channels == 4) {
+		Pixel* ptr = (Pixel*)img->data;
+		for(int i = 0; i < (width * height); ++i) {
+			ptr[i].c = color;
+		}
+	} else
+	if(channels == 1) {
+		u8* ptr = (u8*)img->data;
+		for(int i = 0; i < (width * height); ++i) {
+			ptr[i] = (u8)color;	
+		}
+	}
+}
+
+void image_max_alpha(Image* img) {
+	if(img->channels == 4) {
+		Pixel* ptr = (Pixel*)img->data;
+		for(int i = 0; i < (img->w * img->h); ++i) {
+			ptr[i].components.a = 0xFF;
+		}
+	} else
+	if(img->channels == 1) {
+		u8* ptr = (u8*)img->data;
+		for(int i = 0; i < (img->w * img->h); ++i) {
+			ptr[i] = (u8)0xFF;	
+		}
+	}
+}
+
+// blit src over dst at position x, y using (SourceColor*SourceAlpha)+(DestColor*(1-SourceAlpha)) as the blend function.
+void blit_RGBA_to_RGBA(const Image* src, const Image* dst, int x, int y) {
+	assert(src->channels == 4);
+	assert(dst->channels == 4);
+
+    for(int row = 0; row < src->h; ++row) {
+        int write_offset = (dst->w * y) + (dst->w * row) + x;
+        u32* write_ptr = (u32*) ((Pixel*)dst->data + write_offset);
+
+        int read_offset = src->w * row;
+        u32* read_ptr = (u32*) ((Pixel*)src->data + read_offset);
+        for(int col = 0; col < src->w; ++col) {
+            Pixel src_pixel;
+            src_pixel.c = *read_ptr++;
+            const f32 src_r = (f32)src_pixel.components.r / 255.0f;
+            const f32 src_g = (f32)src_pixel.components.g / 255.0f;
+            const f32 src_b = (f32)src_pixel.components.b / 255.0f;
+            const f32 src_a = (f32)src_pixel.components.a / 255.0f;
+
+            Pixel dst_pixel;
+            dst_pixel.c = *write_ptr;
+            const f32 dst_r = (f32)dst_pixel.components.r / 255.0f;
+            const f32 dst_g = (f32)dst_pixel.components.g / 255.0f;
+            const f32 dst_b = (f32)dst_pixel.components.b / 255.0f;
+            const f32 dst_a = (f32)dst_pixel.components.a / 255.0f;
+
+			const f32 one_minus_source_alpha = (1.0f - src_a);
+            Pixel out;
+            out.components.r = 255 * ((src_r * src_a) + (dst_r * (one_minus_source_alpha)));
+            out.components.g = 255 * ((src_g * src_a) + (dst_g * (one_minus_source_alpha)));
+            out.components.b = 255 * ((src_b * src_a) + (dst_b * (one_minus_source_alpha)));
+            out.components.a = 255 * ((src_a * src_a) + (dst_a * (one_minus_source_alpha)));
+
+            *write_ptr++ = out.c;
+        }
+    }
+}
+
+void blit_RGB_to_RGBA(const Image* src, const Image* dst, int x, int y) {
+	assert(src->channels == 3);
+	assert(dst->channels == 4);
+ 
+    for(int row = 0; row < src->h; ++row) {
+        int write_offset = (dst->w * y) + (dst->w * row) + x;
+        u32* write_ptr = (u32*) ((Pixel*)dst->data + write_offset);
+
+        const u8* read_ptr = (u8*) ((u8*)src->data + (src->w * row * src->channels));
+        for(int col = 0; col < src->w; ++col) {
+            Pixel out;
+            out.components.r = *read_ptr++;
+            out.components.g = *read_ptr++;
+            out.components.b = *read_ptr++;
+            out.components.a = 255;
+            *write_ptr++ = out.c;
+        }
+    }
+}
+
+void blit_A8_to_RGBA(const Image* src, int stride, const Pixel color, const Image* dst, int x, int y) {
+	assert(src->channels == 1);
+	assert(dst->channels == 4);
+
+	const f32 src_r = (f32)color.components.r / 255.0f;
+	const f32 src_g = (f32)color.components.g / 255.0f;
+	const f32 src_b = (f32)color.components.b / 255.0f;
+
+    for(int row = 0; row < src->h; ++row) {
+        int write_offset = (dst->w * y) + (dst->w * row) + x; // FIXME: Should this be size_t?
+        u32* write_ptr = (u32*) ((Pixel*)dst->data + write_offset);
+
+        int read_offset = stride * row;
+        u8* read_ptr = (u8*)((u8*)src->data + read_offset);
+        for(int col = 0; col < src->w; ++col) {
+            const f32 src_a = (f32)*read_ptr / 255.0f;
+			read_ptr++;
+
+            Pixel dst_pixel;
+            dst_pixel.c = *write_ptr;
+            const f32 dst_r = (f32)dst_pixel.components.r / 255.0f;
+            const f32 dst_g = (f32)dst_pixel.components.g / 255.0f;
+            const f32 dst_b = (f32)dst_pixel.components.b / 255.0f;
+            const f32 dst_a = (f32)dst_pixel.components.a / 255.0f;
+
+			const f32 one_minus_source_alpha = 1.0f - src_a;
+            Pixel out;
+            out.components.r = 255 * ((src_r * src_a) + (dst_r * one_minus_source_alpha));
+            out.components.g = 255 * ((src_g * src_a) + (dst_g * one_minus_source_alpha));
+            out.components.b = 255 * ((src_b * src_a) + (dst_b * one_minus_source_alpha));
+            out.components.a = 255 * ((src_a * src_a) + (dst_a * one_minus_source_alpha));
+
+            *write_ptr++ = out.c;
+        }
+    }
+}
+
+void blit_A8_to_RGBA_no_alpha(const Image* src, int stride, const Pixel color, const Image* dst, int x, int y) {
+	assert(src->channels == 1);
+	assert(dst->channels == 4);
+
+	const f32 src_r = (f32)color.components.r / 255.0f;
+	const f32 src_g = (f32)color.components.g / 255.0f;
+	const f32 src_b = (f32)color.components.b / 255.0f;
+
+    for(int row = 0; row < src->h; ++row) {
+        int write_offset = (dst->w * y) + (dst->w * row) + x;
+        u32* write_ptr = (u32*) ((Pixel*)dst->data + write_offset);
+
+        int read_offset = stride * row;
+        u8* read_ptr = (u8*)((u8*)src->data + read_offset);
+        for(int col = 0; col < src->w; ++col) {
+            const f32 src_a = (f32)*read_ptr / 255.0f;
+			read_ptr++;
+
+            Pixel out;
+            out.components.r = 255 * ((src_r * src_a));
+            out.components.g = 255 * ((src_g * src_a));
+            out.components.b = 255 * ((src_b * src_a));
+            out.components.a = 255 * ((src_a * src_a));
+
+            *write_ptr++ = out.c;
+        }
+    }
+}
+
+void blit_A8_to_A8(const Image* src, int stride, Image* dst, int x, int y) {
+	assert(src->channels == 1);
+	assert(dst->channels == 1);
+
+    for(int row = 0; row < src->h; ++row) {
+        int write_offset = (dst->w * y) + (dst->w * row) + x;
+        u8* write_ptr = (u8*) ((u8*)dst->data + write_offset);
+
+        int read_offset = stride * row;
+        u8* read_ptr = (u8*) ((u8*)src->data + read_offset);
+        for(int col = 0; col < src->w; ++col) {
+            const f32 src_a = (f32)*read_ptr / 255.0f;
+			read_ptr++;
+
+            const f32 dst_a = (f32)(*write_ptr) / 255.0f;
+			const f32 one_minus_source_alpha = 1.0f - src_a;
+            u8 out = 255 * ((src_a * src_a) + (dst_a * one_minus_source_alpha));
+
+            *write_ptr++ = out;
+        }
+    }
+}
+
+struct Text_Dim {
+	int w;
+	int h;
+};
+
+static Text_Dim get_text_dimensions(stbtt_fontinfo* font, const int size, const u8* str) {
+	f32 scale = stbtt_ScaleForPixelHeight(font, size);
+
+	Text_Dim dim;
+
+	int ascent, descent, linegap;
+	stbtt_GetFontVMetrics(font, &ascent, &descent, &linegap);
+
+	dim.h = ceil(scale * (ascent - descent));
+
+	f32 xpos = 0.0f;
+	u32 ch = 0;
+	int index = 0;
+	while((ch = u8_nextchar(str, &index)) != 0) {
+		f32 x_shift = xpos - (f32) floor(xpos);
+		int advance, lsb;
+		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
+		int x0, y0, x1, y1;
+      	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+		xpos += advance * scale;
+		if(isutf(str[index+1])) {
+			int tmp = index;
+			xpos += scale * stbtt_GetCodepointKernAdvance(font, ch, u8_nextchar(str, &tmp));
+		}
+	}
+
+	dim.w = ceil(xpos);
+
+	return dim;
+}
+
+// FIXME: Move color to the end as it's optional
+static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int size, const Pixel color, Image* canvas, int x, int y) {
+	f32 scale = stbtt_ScaleForPixelHeight(font, size);
+	int ascent, descent, linegap;
+	stbtt_GetFontVMetrics(font, &ascent, &descent, &linegap);
+	int baseline = (int) (ascent * scale);
+
+	static const int GLYPH_WIDTH_MAX = 200;
+	static const int GLYPH_HEIGHT_MAX = 300;
+	u8 bitmap_buffer[GLYPH_WIDTH_MAX * GLYPH_HEIGHT_MAX];
+
+	Image bitmap;
+	bitmap.data = (u8*)bitmap_buffer;
+	bitmap.channels = 1;
+
+	f32 xpos = (f32)x;
+	int ch = 0;
+	int index = 0;
+	while((ch = u8_nextchar(str, &index)) != 0) {
+		if(!isutf(ch)) continue; // FIXME: Not sure why some std::strings are reading past the end. Should they be double terminiated?
+		f32 x_shift = xpos - (f32) floor(xpos);
+		int advance, lsb;
+		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
+		int x0, y0, x1, y1;
+      	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+		bitmap.w = x1-x0;
+		bitmap.h = y1-y0;
+      	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
+
+		if(canvas->channels == 4) {
+			blit_A8_to_RGBA(&bitmap, GLYPH_WIDTH_MAX, color, canvas, (int)xpos + x0, y + baseline + y0);
+		} else
+		if(canvas->channels == 1) {
+			blit_A8_to_A8(&bitmap, GLYPH_WIDTH_MAX, canvas, (int)xpos + x0, y + baseline + y0);
+		} else {
+			// FIXME: log error
+			assert(false);
+		}
+
+		xpos += advance * scale;
+		if(isutf(str[index+1])) {
+			int index_copy = index;
+			xpos += scale * stbtt_GetCodepointKernAdvance(font, ch, u8_nextchar(str, &index_copy));
+		}
+	}
+}
+
+void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, const u8* str, u32 shadow_color, u32 text_color, Image* out, int ypos) {
+	// The output of the stbtt_truetype library isn't as nice as Freetype so to generate smoother looking glyphs we render the text larger than we need, then scale it down to the requested size. This produces better aliasing, IMO!
+	const int upscale_factor = 2;
+	const int upscaled_font_size = (font_size * upscale_factor); // TODO: Rename to font_size_upscaled or something
+
+	Text_Dim dim = get_text_dimensions(font, upscaled_font_size, str);
+
+	// FIXME: There are no bounds checks done here
+
+	Image upscaled;
+	init_image(&upscaled, dim.w, dim.h, 1, 0x00000000);
+	render_text_to_image(font, str, upscaled_font_size, {.c=shadow_color}, &upscaled, 0, 0);
+
+	Image downscaled;
+	if((upscaled.w / upscale_factor) < max_width) {
+		init_image(&downscaled, dim.w / upscale_factor, dim.h / upscale_factor, 1, 0x00000000);
+	} else {
+		// The text is too wide, it will need to be scaled down more than upscale_factor
+		f32 ratio = ((f32)max_width / (f32)dim.w);
+		int height = ceil(((f32)dim.h * ratio));
+		init_image(&downscaled, max_width, height, 1, 0x00000000);
+	}
+	stbir_resize_uint8_srgb((const u8*)upscaled.data, upscaled.w, upscaled.h, 0,
+	                        (u8*)downscaled.data, downscaled.w, downscaled.h, 0, STBIR_1CHANNEL);
+
+	const int xpos = (BANNER_IMAGE_WIDTH / 2) - (downscaled.w / 2);
+	ypos -= (downscaled.h / 2);
+
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos-1, ypos-1); // left top
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos-1, ypos+1); // left bottom
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos-1, ypos);   // left centre
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos+1, ypos);   // right centre
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos,   ypos-1); // center top
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos,   ypos+1); // center bottom
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos+1, ypos-1); // right top
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos+1, ypos+1); // right bottom
+
+	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=text_color}, out, xpos, ypos);
+
+	free(upscaled.data);
+	free(downscaled.data);
+}
+
+enum DRAFT_TYPE {
+	DRAFT_TYPE_NOT_APPLICABLE,
+
+	DRAFT_TYPE_DEVOTION_GIANT,
+	DRAFT_TYPE_DEVOTION_SPHINX,
+	DRAFT_TYPE_DEVOTION_DEMON,
+	DRAFT_TYPE_DEVOTION_DRAGON,
+	DRAFT_TYPE_DEVOTION_TITAN,
+	DRAFT_TYPE_DEVOTION_GOD,
+
+	DRAFT_TYPE_COMMUNITY_CHOICE,
+
+	DRAFT_TYPE_HERO_20,
+	DRAFT_TYPE_HERO_40,
+	DRAFT_TYPE_HERO_60,
+
+	DRAFT_TYPE_COUNT
+};
+
+static const char* to_cstring(const DRAFT_TYPE dt) {
+	switch(dt) {
+		case DRAFT_TYPE_DEVOTION_GIANT:  return "Devotion - Giant";
+		case DRAFT_TYPE_DEVOTION_SPHINX: return "Devotion - Sphinx";
+		case DRAFT_TYPE_DEVOTION_DEMON:  return "Devotion - Demon";
+		case DRAFT_TYPE_DEVOTION_DRAGON: return "Devotion - Dragon";
+		case DRAFT_TYPE_DEVOTION_TITAN:  return "Devotion - Titan";
+		case DRAFT_TYPE_DEVOTION_GOD:    return "Devotion - God";
+
+		case DRAFT_TYPE_COMMUNITY_CHOICE: return "Community Choice";
+
+		case DRAFT_TYPE_HERO_20: return "Hero - 20";
+		case DRAFT_TYPE_HERO_40: return "Hero - 40";
+		case DRAFT_TYPE_HERO_60: return "Hero - 60";
+
+		case DRAFT_TYPE_NOT_APPLICABLE: // Fall through
+		default:
+			break;
+	}
+	
+	return NULL;
+}
+
+struct Draft_Type {
+	DRAFT_TYPE value;
+	const char* name;
+};
+
+static std::vector<Draft_Type> get_draft_types_for_autocomplete(const std::string& input) {
+	fprintf(stdout, "%s\n", __FUNCTION__);
+	std::vector<Draft_Type> result;
+	for(int i = (int)DRAFT_TYPE_DEVOTION_GIANT; i < (int)DRAFT_TYPE_COUNT; ++i) {
+		const char* name = to_cstring((DRAFT_TYPE)i);
+		if(name == NULL) continue;
+		if(input.empty() || strncmp(name, input.c_str(), input.length()) == 0) {
+			result.push_back({(DRAFT_TYPE)i, name});
+		}
+	}
+	return result;
+}
+
+struct Icon {
+	DRAFT_TYPE type;
+	const char* file; // Relative path
+	int x, y;         // Position on the screen
+};
+
+static const Icon g_icons[] = {
+	{DRAFT_TYPE_DEVOTION_GIANT,   "gfx/banner/icons/devotion_giant.png",    30, 105},
+	{DRAFT_TYPE_DEVOTION_SPHINX,  "gfx/banner/icons/devotion_sphinx.png",   30, 105},
+	{DRAFT_TYPE_DEVOTION_DEMON,   "gfx/banner/icons/devotion_demon.png",    30, 105},
+	{DRAFT_TYPE_DEVOTION_DRAGON,  "gfx/banner/icons/devotion_dragon.png",   30, 105},
+	{DRAFT_TYPE_DEVOTION_TITAN,   "gfx/banner/icons/devotion_titan.png",    30, 105},
+	{DRAFT_TYPE_DEVOTION_GOD,     "gfx/banner/icons/devotion_god.png",      30, 105},
+	{DRAFT_TYPE_COMMUNITY_CHOICE, "gfx/banner/icons/community_choice.png", 290, 116},
+	{DRAFT_TYPE_HERO_20,          "gfx/banner/icons/hero_20.png",           30, 105},
+	{DRAFT_TYPE_HERO_40,          "gfx/banner/icons/hero_40.png",           30, 105},
+	{DRAFT_TYPE_HERO_60,          "gfx/banner/icons/hero_60.png",           30, 105},
+};
+
+static const size_t ICON_COUNT = sizeof(g_icons) / sizeof(Icon);
+
+const Icon* get_icon(DRAFT_TYPE type) {
+	for(size_t i = 0; i < ICON_COUNT; ++i) {
+		if(g_icons[i].type == type) return &g_icons[i];
+	}
+	return NULL;
+}
+
+static u8* file_slurp(const char* path, size_t* size) {
+	u8* file_contents = NULL;
+	FILE* f = fopen(path, "rb");
+	if(f != NULL) {
+		SCOPE_EXIT(fclose(f));
+		struct stat s;
+		int result = stat(path, &s);
+		if(result != -1) {
+			*size = s.st_size;
+			file_contents = (u8*) malloc(*size);
+			if(file_contents != NULL) {
+				size_t got = fread(file_contents, 1, *size, f);
+				if(got != *size) {
+					free(file_contents);
+					file_contents = NULL;
+				}
+			}
+		}
+	}
+	return file_contents;
+}
+
+struct Banner_Opts {
+	DRAFT_TYPE draft_type;
+	u32 league_color;
+	std::string datetime;
+	std::string title;
+	std::string subtitle;
+	std::vector<std::string> images;
+};
+
+static stbtt_fontinfo g_banner_font; 
+static bool g_banner_font_loaded = false;
+static const char* g_banner_font_file = "gfx/banner/SourceSansPro-Black.otf";
+
+struct Render_Banner_Result {
+	bool is_error;
+	std::string path;
+};
+
+const Render_Banner_Result render_banner(Banner_Opts* opts) {
+	if(g_banner_font_loaded == false) {
+		size_t size = 0;
+		const u8* buffer = file_slurp(g_banner_font_file, &size); // NOTE: Intentionally never freed
+		int result = stbtt_InitFont(&g_banner_font, buffer, stbtt_GetFontOffsetForIndex(buffer, 0));
+		if(result == 0) {
+			return {true, fmt::format("Internal error: Failed to load font file \"{}\". This is not your fault! Please try again.", g_banner_font_file)};
+		}
+		g_banner_font_loaded = true;
+	}
+
+	static const char* BANNER_FRAME_FILE    = "gfx/banner/frame.png";
+	static const char* BANNER_GRADIENT_FILE = "gfx/banner/gradient.png";
+	static const char* BANNER_SUBTITLE_FILE = "gfx/banner/subtitle.png";
+
+	static const int DATETIME_YPOS      = 15;
+	static const int DATETIME_FONT_SIZE = 40;
+
+	static const int FORMAT_TEXT_WIDTH_MAX = 800; // Scale down the format string if longer than this.
+	static const int FORMAT_TEXT_FONT_SIZE = 44;
+	static const int FORMAT_TEXT_YPOS      = 88;
+
+	static const int SUBTITLE_FRAME_YPOS     = 118;
+	static const int SUBTITLE_TEXT_WIDTH_MAX = 640;
+	static const int SUBTITLE_TEXT_YPOS      = 138;
+	static const int SUBTITLE_TEXT_FONT_SIZE = 28;
+
+	static const int PACK_DIVIDER_YPOS = 116; // Starting row to draw the divider between packs
+
+	Image banner;
+	init_image(&banner, BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
+	SCOPE_EXIT(free(banner.data));
+
+	// blit the background image(s)
+	if(opts->images.size() == 1) {
+		// A single piece of key art is to be used.
+		Image scaled;
+		init_image(&scaled, KEY_ART_WIDTH, KEY_ART_HEIGHT, 3, 0x00000000);
+		SCOPE_EXIT(free(scaled.data));
+		
+		Image img;
+		img.data = (void*) stbi_load(opts->images[0].c_str(), &img.w, &img.h, &img.channels, 3);
+		if(img.data == NULL) {
+			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", opts->images[0], stbi_failure_reason())};
+		}
+		SCOPE_EXIT(stbi_image_free(img.data));
+		stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
+				(u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_RGB);
+		blit_RGB_to_RGBA(&scaled, &banner, 0, BANNER_IMAGE_HEIGHT - scaled.h);
+	} else
+	if(opts->images.size() == 3) {
+		// Three pack images given.
+		Image scaled;
+		init_image(&scaled, PACK_IMAGE_WIDTH, PACK_IMAGE_HEIGHT, 3, 0x00000000);
+		SCOPE_EXIT(free(scaled.data));
+		for(size_t f = 0; f < opts->images.size(); ++f) {
+			Image img;
+			img.data = (void*) stbi_load(opts->images[f].c_str(), &img.w, &img.h, &img.channels, 3);
+			if(img.data == NULL) {
+				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", opts->images[f], stbi_failure_reason())};
+			}
+			SCOPE_EXIT(stbi_image_free(img.data));
+			stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
+					(u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_RGB);
+			blit_RGB_to_RGBA(&scaled, &banner, f * PACK_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT - scaled.h);
+		}
+
+		// Draw a thin line to separate each pack.
+		// FIXME: Replace this with a draw_rect function to avoid unnecessary heap allocations for each line.
+		Image line;
+		init_image(&line, 3, BANNER_IMAGE_HEIGHT-PACK_DIVIDER_YPOS, 4, 0xFF000000);
+		SCOPE_EXIT(free(line.data));
+		for(int i = 1; i < 3; ++i) {
+			blit_RGBA_to_RGBA(&line, &banner, (i * PACK_IMAGE_WIDTH)-1, PACK_DIVIDER_YPOS);		
+		}
+	} else {
+		return {true, fmt::format("Internal error: Unexpected or unsupported pack count: {}", opts->images.size())};
+	}
+
+	// Blit the gradient. TODO: This could be done in code instead of using an image...
+	{
+		Image grad;
+		grad.data = (void*) stbi_load(BANNER_GRADIENT_FILE, &grad.w, &grad.h, &grad.channels, 1);
+		if(grad.data == NULL) {
+			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_GRADIENT_FILE, stbi_failure_reason())};
+		}
+		SCOPE_EXIT(stbi_image_free(grad.data));
+		blit_A8_to_RGBA(&grad, grad.w, {.c=0xFF000000}, &banner, 0, 0);
+	}
+
+	// Blit the title box and frame and color it.
+	{
+		Image frame;
+		frame.data = (void*) stbi_load(BANNER_FRAME_FILE, &frame.w, &frame.h, &frame.channels, 1);
+		if(frame.data == NULL) {
+			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_FRAME_FILE, stbi_failure_reason())};
+		}
+		SCOPE_EXIT(stbi_image_free(frame.data));
+		blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 0, 0);
+	}
+
+	// Blit the date/time text
+	{
+		Text_Dim dim = get_text_dimensions(&g_banner_font, DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
+		Image img;
+		init_image(&img, dim.w, dim.h, 1, 0x00000000);
+		SCOPE_EXIT(free(img.data));
+		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), DATETIME_FONT_SIZE, {.c=0xFFFFFFFF}, &img, 0, 0);
+		if(img.w < (BANNER_IMAGE_WIDTH - 10)) {
+			blit_A8_to_RGBA(&img, img.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(img.w/2), DATETIME_YPOS);
+		} else {
+			// Scale it to fit.
+			f32 ratio = ((f32)(BANNER_IMAGE_WIDTH-10) / dim.w);
+			int height = ceil(((f32)dim.h * ratio));
+			Image scaled;
+			init_image(&scaled, (BANNER_IMAGE_WIDTH-10), height, 1, 0x00000000);
+			SCOPE_EXIT(free(scaled.data));
+			stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
+			                        (u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_1CHANNEL);
+			blit_A8_to_RGBA(&scaled, scaled.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(scaled.w/2), DATETIME_YPOS);
+		}
+	}
+	
+	// Blit the title text
+	draw_shadowed_text(&g_banner_font, FORMAT_TEXT_FONT_SIZE, FORMAT_TEXT_WIDTH_MAX, (const u8*)opts->title.c_str(), 0xFF000000, 0xFFFFFFFF, &banner, FORMAT_TEXT_YPOS);
+
+	if(opts->subtitle.length() > 0) {
+		// Blit the subtitle box
+		Image sub;
+		sub.data = (void*) stbi_load(BANNER_SUBTITLE_FILE, &sub.w, &sub.h, &sub.channels, 1);
+		if(sub.data == NULL) {
+			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_SUBTITLE_FILE, stbi_failure_reason())};
+		}
+		SCOPE_EXIT(stbi_image_free(sub.data));
+		blit_A8_to_RGBA_no_alpha(&sub, sub.w, {.c=opts->league_color}, &banner, (BANNER_IMAGE_WIDTH/2)-(sub.w/2), SUBTITLE_FRAME_YPOS);
+		// Blit the devotion/hero/etc. icon
+		const Icon* icon = get_icon(opts->draft_type);
+		if(icon != NULL) {
+			Image icon_image;
+			icon_image.data = (void*) stbi_load(icon->file, &icon_image.w, &icon_image.h, &icon_image.channels, 4);
+			if(icon_image.data == NULL) {
+				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", icon->file, stbi_failure_reason())}; 
+			}
+			SCOPE_EXIT(stbi_image_free(icon_image.data));
+			blit_RGBA_to_RGBA(&icon_image, &banner, icon->x, icon->y);
+			//stbi_image_free(icon_image.data);
+		}
+
+		// Draw the subtitle text
+		draw_shadowed_text(&g_banner_font, SUBTITLE_TEXT_FONT_SIZE, SUBTITLE_TEXT_WIDTH_MAX, (const u8*)opts->subtitle.c_str(), 0xFF000000, 0xFF04CDFF, &banner, SUBTITLE_TEXT_YPOS);
+	}
+
+	// Save the file
+	// TODO: Only need to save RGB, this saves having to clear the alpha channel
+	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
+	image_max_alpha(&banner); // TODO: How do I write only the RGB channels?
+	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
+	if(stbi_write_png(file_path.c_str(), banner.w, banner.h, 4, (u8*)banner.data, banner.w*4) == 0) {
+		return {true, "Internal error: Failed to save generated banner to storage. Please try again."};
+	}
+
+	return {false, file_path};
+}
+
+
+
 
 static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
 	auto ids = database_get_draft_post_ids(guild_id, draft_code);
@@ -1690,6 +2659,7 @@ static void add_sign_up_buttons_to_message(dpp::message& message, const std::sha
 
 	time_t now = time(NULL);
 
+	// FIXME: This works, but it should probably check the draft status instead, right?
 	if(draft_event->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER) {
 		minutemage_locked = false;
 	}
@@ -1989,7 +2959,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 	text += fmt::format(":bell: This is the pre-draft reminder for {}: {} :bell:**\n\n", draft_event.value->draft_code, draft_event.value->format);
 	text += "Please confirm your status on the signup sheet below.\n\n";
 	text += "Minutemage sign ups are now open. If needed, a minutemage will be selected at random to fill an empty seat.\n\n";
-	text += fmt::format("If playing, **check your XMage install is up-to-date** by starting the launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
+	text += fmt::format("If playing, check your XMage install is up-to-date by starting the launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
 
 	const auto xmage_version = database_get_xmage_version();
 	if(xmage_version == true) {
@@ -2083,13 +3053,14 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 	int confirmed_count = 0;
 	for(const auto& sign_up : sign_ups.value) {
 		if((sign_up.status & SIGNUP_STATUS_PLAYING) > 0) {
-			confirmed_count++;
+			if((sign_up.status & SIGNUP_STATUS_REMOVED) != SIGNUP_STATUS_REMOVED) {
+				confirmed_count++;
+			}
 		}
 	}
 
-	if((confirmed_count % 2) == 1) {
-		// Odd number of players.
-
+	// Do we need to find more players?
+	if(((confirmed_count % 2) == 1) || (confirmed_count < POD_SEATS_MIN)) {
 		dpp::message message;
 		message.set_type(dpp::message_type::mt_default);
 		message.set_guild_id(guild_id);
@@ -2097,30 +3068,68 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 		message.set_allowed_mentions(true, true, true, true, {}, {});
 		std::string text;
 
+		// Sometimes there are only 4 confirmed sign ups so we need to ping for two people.
+		size_t heroes_needed = (confirmed_count < POD_SEATS_MIN) ? (POD_SEATS_MIN - confirmed_count) : 1;
+
+		// Count how many minutemage sign ups there are.
 		std::vector<const Draft_Signup_Status*> minutemages;
 		for(const auto& sign_up : sign_ups.value) {
 			if(sign_up.status == SIGNUP_STATUS_MINUTEMAGE) {
 				minutemages.push_back(&sign_up);
 			}
 		}
-		if(minutemages.size() > 0) {
-			u64 member_id = 0;
-			if(minutemages.size() == 1) {
-				member_id = minutemages[0]->member_id;
-			} else {
-				// Select a minutemage at random.
-				int index = rand() % minutemages.size();
-				member_id = minutemages[index]->member_id;
-			}
 
-			text = fmt::format(":superhero: Paging minutemage <@{}>! You are needed on {} for {}.",
-				member_id,
-				draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
-				draft_event.value->format);
-		} else {
-			// Ping the @Minutemage role.
-			text = fmt::format(":superhero: <@&{}> One more needed on {} for {}.",
+		// Ping minutemages first, if any.
+		if(minutemages.size() > 0) {
+			if(minutemages.size() <= heroes_needed) {
+				// Easiest case - All minutemages (any maybe more!) are needed to fire.
+				text += ":superhero: Paging minutemage";
+				if(minutemages.size() == 1) {
+					text += " ";
+				} else {
+					text += "s ";
+				}
+
+				for(size_t i = 0; i < minutemages.size(); ++i) {
+					text += fmt::format("<@{}>", minutemages[i]->member_id);
+					if(i != minutemages.size()-1) {
+						text += " ";
+					}
+				}
+
+				text += fmt::format("! You are needed on {} for {}.", 
+					draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
+					draft_event.value->format);
+
+				heroes_needed -= minutemages.size();
+				if(heroes_needed > 0) {
+					text += "\n";
+				}
+			} else
+			if(minutemages.size() > heroes_needed) {
+				// More minutemages than needed - Select enough at random.
+				text += ":superhero: Paging minutemages ";
+
+				for(size_t i = 0; i < heroes_needed; ++i) {
+					const int r = rand() & minutemages.size();	
+					text += fmt::format("<@{}> ", minutemages[r]->member_id);
+					minutemages.erase(minutemages.begin() + r);
+				}
+
+				text += fmt::format("! You are needed on {} for {}.", 
+					draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
+					draft_event.value->format);
+
+				heroes_needed = 0;
+			}
+		}
+
+		log(LOG_LEVEL_INFO, "%lu still needed", heroes_needed);
+		if(heroes_needed > 0) {
+			// Ping the @minutemage role.
+			text += fmt::format(":superhero: <@&{}> {} more minutemages needed on {} for {}.",
 				MINUTEMAGE_ROLE_ID,
+				heroes_needed,
 				draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
 				draft_event.value->format);
 		}
@@ -2154,14 +3163,16 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 
 	text += "Once the Playing list shows all available players and they are confirmed to be playing:\n";
 	text += "   **/show_allocations** - Show the pod allocations here in this team-only channel.\n";
+	// TODO: On the next line, #in-the-moment-draft should be a link
 	text += "   **/post_allocations** - Create threads for each pod and post the pod allocations to #-in-the-moment-draft channel.\n";
 	text += "\n";
 
-	text += "Once all pods have been filled:\n";
-	text += "   **/fire** - Post the pre-draft reminder message and fully lock the draft.\n";
+	text += "Once all pods have been filled, either on XMage or Draftmancer:\n";
+	text += "   **/fire** - Post the pre-draft reminders and fully lock the draft.\n";
 	text += "\n";
 
 	text += "The follow commands are available once the draft has been fired:\n";
+	text += "   **/timer**   - Start a timer for deck submission. Use this when the draft was on Draftmancer.\n";
 	text += "	**/dropper** - Increment the drop counter for a member.\n";
 	text += "\n";
 
@@ -2175,8 +3186,9 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
 	std::string preferred_name;
 	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
-	if(member.nickname.length() > 0) {
-		preferred_name = member.nickname;
+	const std::string nickname = member.get_nickname();
+	if(nickname.length() > 0) {
+		preferred_name = nickname;
 	} else {
 		const dpp::user* user = dpp::find_user(member_id);
 		if(user != nullptr) {
@@ -2321,6 +3333,23 @@ static void output_sql() {
 	fprintf(stdout, "\n\n");
 
 
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS temp_roles(\n");
+	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
+	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "role_id BIGINT NOT NULL UNIQUE\n");
+	fprintf(stdout, ");");
+	fprintf(stdout, "\n\n");
+
+
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS temp_members(\n");
+	fprintf(stdout, "guild_id BIGINT NOT NULL,\n"); // TODO: Not needed?
+	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
+	fprintf(stdout, "role_id BIGINT NOT NULL UNIQUE,\n");
+	fprintf(stdout, "FOREIGN KEY (role_id) REFERENCES temp_roles(role_id) ON DELETE CASCADE\n");
+	fprintf(stdout, ");");
+	fprintf(stdout, "\n\n");
+
+
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS noshows(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
@@ -2335,6 +3364,46 @@ static void output_sql() {
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
+}
+
+static std::vector<std::string> get_pack_images(const char* format) {
+	Set_List list = get_set_list_from_string(format);
+	int pack_to_use = 0;
+	const char* previous_set_code = NULL;
+	std::vector<std::string> result;
+
+	// TODO: If the list has no pack art for any of the sets, use the format string to reverse lookup a set code and use key art
+	// i.e. Invasion Remastered -> INVR.png
+	if(list.count == 0) {
+		// No match found. Do a reverse lookup and find the art.
+		const MTG_Draftable_Set* set = get_set_from_name(format);
+		if(set != NULL && set->key_art == true) {
+			result.push_back(fmt::format("gfx/pack_art/key/{}.png", set->code));
+		}
+	} else {
+		for(int i = 0; i < list.count; ++i) {
+			if(previous_set_code != NULL) {
+				if(strcmp(list.set[i]->code, previous_set_code) == 0) {
+					// Same code as last loop
+					if(list.set[i]->pack_images > pack_to_use) {
+						pack_to_use++;
+						pack_to_use %= list.set[i]->pack_images;
+					} else {
+						pack_to_use = 0;
+					}
+				} else {
+					pack_to_use = 0; // Reset
+				}
+			}
+			//fprintf(stdout, "%s:%s:%d pack:%d\n", list.set[i]->code, list.set[i]->name, list.set[i]->pack_images, pack_to_use+1);
+
+			result.push_back(fmt::format("gfx/pack_art/crop/{}/{}.png", list.set[i]->code, pack_to_use+1));
+
+			previous_set_code = list.set[i]->code;
+		}
+	}
+
+	return result;
 }
 
 
@@ -2355,10 +3424,19 @@ int main(int argc, char* argv[]) {
 		if(strcmp(argv[1], "-sql") == 0) {
 			// Dump SQL schema to stdout and return.
 			output_sql();
+			return EXIT_SUCCESS;
 		}
 
-		return EXIT_SUCCESS;
 	}
+
+#if 0
+	if(argc > 1) {
+		if(strcmp(argv[1], "-sets") == 0) {
+			print_set_list_code();
+			return EXIT_SUCCESS;
+		}
+	}
+#endif
 
 	// Load the bot.ini config file. This file has sensitive information and so isn't versioned.
 	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
@@ -2392,12 +3470,40 @@ int main(int argc, char* argv[]) {
 	log(LOG_LEVEL_INFO, "Build mode: %s",             g_build_mode);
     log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
+	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
 
 	// Download and install the latest IANA time zone database.
+	// TODO: Only do this if /tmp/tzdata doesn't exist?
 	log(LOG_LEVEL_INFO, "Downloading IANA time zone database.");
 	const std::string tz_version = date::remote_version();
 	(void)date::remote_download(tz_version);
 	(void)date::remote_install(tz_version);
+
+#if 0
+	// TESING time zone stuff
+	//auto t = date::make_zoned("America/New_York", system_clock::now()); // Time in New York 
+	auto new_york = date::make_zoned("America/New_York",
+		date::local_days{date::year{2023}/10/21} +
+		std::chrono::hours(19) + 
+		std::chrono::minutes(50));
+
+	auto aus = date::make_zoned("Australia/Sydney", new_york);
+	auto bris = date::make_zoned("Australia/Brisbane", new_york);
+
+	std::string str = format("%a %b %d %H:%M %Z", new_york); // 24 Hour time, %p is for PM in the examples below
+	std::cout << str << std::endl; 
+	std::cout << format("%a %b %d %I:%M %p %Z", new_york) << std::endl;
+	std::cout << format("%a %b %d %I:%M %p %Z", aus) << std::endl;
+	std::cout << format("%a %b %d %I:%M %p %Z", bris) << std::endl;
+#if 0
+    		auto zoned_time = date::make_zoned(draft_event.time_zone,
+				date::local_days{date::year{date.year}/date.month/date.day} +
+				std::chrono::hours(start_time.hour) +
+				std::chrono::minutes(start_time.minute));
+			draft_event.time = std::chrono::system_clock::to_time_t(zoned_time.get_sys_time());
+#endif
+	return 0;
+#endif
 
 	// Create the bot and connect to Discord.
 	// TODO: We don't need all intents, so just request what we need...
@@ -2443,6 +3549,8 @@ int main(int argc, char* argv[]) {
 						}
 						bot.interaction_response_create(event.command.id, event.command.token, response);
 					}
+				} else {
+					log(LOG_LEVEL_ERROR, "Unhandled autocomplete for %s", opt.name);
 				}
 			}
 		}
@@ -2479,11 +3587,31 @@ int main(int argc, char* argv[]) {
 		if(g_commands_registered == false) {
 			// Create slash commands
 			{
+				dpp::slashcommand cmd("banner", "Create a banner image for a draft.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				// Required
+				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code for this draft. i.e. 123.4-PC.", true));
+				cmd.add_option(dpp::command_option(dpp::co_string, "date", "Date of the draft in YYYY-MM-DD format. i.e. 2023-11-15.", true));
+				cmd.add_option(dpp::command_option(dpp::co_string, "format", "The format of the draft. i.e. TSP/PLC/FUT or 'Artifact Chaos'.", true));
+
+				// Optional
+				//cmd.add_option(dpp::command_option(dpp::co_number, "draft_type", "Devotion, hero draft or community choice draft.", false).set_auto_complete(true));
+				auto draft_type_opt = dpp::command_option(dpp::co_integer, "draft_type", "Deovtion, hero, or community choice draft.", false);
+				for(int i = (int)DRAFT_TYPE_DEVOTION_GIANT; i < (int)DRAFT_TYPE_COUNT; ++i) {
+					draft_type_opt.add_choice(dpp::command_option_choice(to_cstring((DRAFT_TYPE)i), (std::int64_t)i));
+				}
+				cmd.add_option(draft_type_opt);
+
+				cmd.add_option(dpp::command_option(dpp::co_string, "subheading", "Add a subheading. i.e. 'First draft of the season!'", false));
+				cmd.add_option(dpp::command_option(dpp::co_attachment, "art", "Art to use as the background. Will be resized to 900x470 pixels.", false));
+				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
 				dpp::slashcommand cmd("create_draft", "Create a new draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				// Required
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code for this draft. i.e. 123.4-PC.", true));
-				cmd.add_option(dpp::command_option(dpp::co_string, "format", "The format of the draft. i.e. TSP/PLC/FUT or 'Artifact Chaos'", true));
+				cmd.add_option(dpp::command_option(dpp::co_string, "format", "The format of the draft. i.e. TSP/PLC/FUT or 'Artifact Chaos'.", true));
 				//cmd.add_option(dpp::command_option(dpp::co_string, "description", "A short description of the draft format. i.e. Time Spiral/Planar Chaos/Future Sight.", true));
 				cmd.add_option(dpp::command_option(dpp::co_string, "date", "Date of the draft in YYYY-MM-DD format. i.e. 2023-03-15.", true));
 				cmd.add_option(dpp::command_option(dpp::co_attachment, "banner", "Banner image for the draft.", true));
@@ -2549,7 +3677,14 @@ int main(int argc, char* argv[]) {
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
-				//dpp::slashcommand cmd("fire_draft", "Fire a draft.", bot.me.id);
+				dpp::slashcommand cmd("fire", "Create a role with all draft participants, and separate roles for each pod.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
+				dpp::slashcommand cmd("timer", "Post the Draftmancer specific reminders and a timer for deck submission.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
 				dpp::slashcommand cmd("dropper", "Add a player to the droppers list.", bot.me.id);
@@ -2572,6 +3707,166 @@ int main(int argc, char* argv[]) {
 		const auto command_name = event.command.get_command_name();
 		const auto guild_id = event.command.get_guild().id;
 
+		if(command_name == "banner") {
+			Banner_Opts opts;
+			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
+			//opts.images = a vector of images
+
+			// Required options
+			auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
+			XDHS_League league;
+			if(get_league_from_draft_code(draft_code.c_str(), &league) == false) {
+				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus.");
+				return;
+			}
+
+			// Swap bytes so to the color format used by the blit_ functions.
+			opts.league_color = (0xFF << 24) |
+								((league.color >> 16) & 0xFF) |
+								((league.color & 0xFF) << 16) |
+								((league.color & 0x0000FF00));
+
+			auto format = std::get<std::string>(event.get_parameter("format"));
+			if(format.length() > FORMAT_STRING_LEN_MAX) {
+				event.reply(fmt::format("Format string exceeds maximum allowed length of {} bytes.", FORMAT_STRING_LEN_MAX));
+				return;
+			}
+
+			Date date;
+			auto date_string = std::get<std::string>(event.get_parameter("date"));
+			{
+				const char* result = parse_date_string(date_string.c_str(), &date);
+				if(result != NULL) {
+					event.reply(fmt::format("Error parsing date: {}", result));
+					return;
+				}
+			}
+
+			// Create the default zoned time for this region.
+			auto zoned_time = date::make_zoned(league.time_zone,
+			                                   date::local_days{date::year{date.year} / date.month / date.day} +
+											   std::chrono::hours(league.time.hour) +
+											   std::chrono::minutes(league.time.minute));
+
+			opts.datetime = date::format("%a %b %d @ %H:%M %Z", zoned_time).c_str();
+
+			switch(league.id) {
+				case LEAGUE_ID_AMERICAS_CHRONO: 
+				case LEAGUE_ID_AMERICAS_BONUS:  {
+					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
+				} break;
+
+				case LEAGUE_ID_EURO_CHRONO: {
+					// Nothing extra to add.
+				} break;
+
+				case LEAGUE_ID_ASIA_CHRONO: {
+					// Euro and Australia
+					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("Australia/Sydney", zoned_time));
+				} break;
+
+				case LEAGUE_ID_PACIFIC_CHRONO: {
+					// America and Australia
+					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
+
+					opts.datetime += date::format(" || %a %b %d @ %H:%M %Z", date::make_zoned("Australia/Sydney", zoned_time));
+				} break;
+
+				case LEAGUE_ID_ATLANTIC_BONUS: {
+					// Euro and American - Date is the same
+					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/New_York", zoned_time));
+					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
+				} break;
+
+				case LEAGUE_ID_EURO_BONUS: {
+					// Nothing extra to add.
+				} break;
+			}
+
+			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league.id)), draft_code, format);
+			
+			// Optional options
+			{
+				auto opt = event.get_parameter("draft_type");
+				if(std::holds_alternative<int64_t>(opt)) {
+					opts.draft_type = (DRAFT_TYPE)std::get<int64_t>(opt);
+				}
+			}
+			{
+				auto opt = event.get_parameter("subheading");
+				if(std::holds_alternative<std::string>(opt)) {
+					opts.subtitle = std::get<std::string>(opt);
+				}
+			}
+
+			if(opts.subtitle.length() == 0 && opts.draft_type == DRAFT_TYPE_COMMUNITY_CHOICE) {
+				opts.subtitle = "Community Choice";
+			}
+
+			// As downloading a large image can take some time, and we have 3 seconds to respond, reply with something now and then update the reply as we progress.
+			event.reply("Creating banner...");
+			// NOTE: From here to the end of the funtion event.edit_response() must be used, not event.reply()
+
+			{
+				// If an image was provided, download it and write to storage for later use.
+				auto opt = event.get_parameter("art");
+				if(std::holds_alternative<dpp::snowflake>(event.get_parameter("art"))) {
+					auto art_id = std::get<dpp::snowflake>(event.get_parameter("art"));
+					auto itr = event.command.resolved.attachments.find(art_id);
+					auto art = itr->second;
+            		//event.reply(fmt::format("Downloading background art: {}", art.url));
+		            size_t image_full_size = 0;
+		            u8* image_full_data = NULL;
+		            SCOPE_EXIT(free(image_full_data));
+		            auto download_result = download_file(art.url.c_str(), &image_full_size, &image_full_data);
+		            if(download_result != DOWNLOAD_IMAGE_RESULT_OK) {
+		                event.edit_response("Internal error: Downloading art image failed. This is not your fault! Please try again.");
+		                return;
+        		    }
+
+					if(image_full_size > DOWNLOAD_BYTES_MAX) {
+						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
+						return;
+					}
+
+					std::string temp_file = fmt::format("/tmp/EventBot_Art_{}", random_string(16));
+					FILE* file = fopen(temp_file.c_str(), "wb");
+					if(file) {
+						SCOPE_EXIT(fclose(file));
+						size_t wrote = fwrite(image_full_data, 1, image_full_size, file);
+						if(wrote == image_full_size) {
+							opts.images.push_back(temp_file);
+						} else {
+							event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+							return;
+						}
+					} else {
+						event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+						return;
+					}
+				}
+			}
+
+			// No art was provided so try find art from the format name.
+			if(opts.images.size() == 0) {
+				opts.images = get_pack_images(format.c_str());
+			}
+
+			if(opts.images.size() == 0) {
+				event.edit_response(fmt::format("No art could be found for the format \"{}\" and you didn't provide an art image.", format));
+				return;
+			}
+
+			const Render_Banner_Result result = render_banner(&opts);
+			if(result.is_error == true) {
+				event.edit_response(result.path);
+				return;
+			}
+
+			dpp::message message;
+			message.add_file("banner.png", dpp::utility::read_file(result.path));
+			event.edit_response(message);
+		} else
 		if(command_name == "create_draft") {
 			Draft_Event draft_event;
 
@@ -2585,7 +3880,7 @@ int main(int argc, char* argv[]) {
 			}
 			strcpy(draft_event.draft_code, draft_code.c_str());
 
-			strcpy(draft_event.league_name, league.name);
+			strcpy(draft_event.league_name, to_cstring(league.id));
 
 			auto format = std::get<std::string>(event.get_parameter("format"));
 			if(format.length() > FORMAT_STRING_LEN_MAX) {
@@ -2602,9 +3897,7 @@ int main(int argc, char* argv[]) {
 			{
 				const char* result = parse_date_string(date_string.c_str(), &date);
 				if(result != NULL) {
-					char errstr[128];
-					snprintf(errstr, 128, "Error parsing date: %s", result);
-					event.reply(errstr);
+					event.reply(fmt::format("Error parsing date: {}", result));
 					return;
 				}
 			}
@@ -2644,8 +3937,8 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					auto blurb = std::get<std::string>(opt);
 					if(blurb.length() > DRAFT_BLURB_LENGTH_MAX) {
-						char errstr[128];
-						snprintf(errstr, 128, "blurb_%lu exceeds maximum length of %lu bytes.", i, DRAFT_BLURB_LENGTH_MAX);
+						event.reply(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX));
+						return;
 					}
 					strcpy(&draft_event.blurbs[i][0], blurb.c_str()); 
 				}
@@ -2687,9 +3980,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					guide_url = std::get<std::string>(opt);
 					if(guide_url.length() > URL_LENGTH_MAX) {
-						char errstr[128];
-						snprintf(errstr, 128, "guide_url exceeds maximum allowed length of %lu bytes.", URL_LENGTH_MAX);
-						event.reply(errstr);
+						event.reply(fmt::format("guide_url exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX));
 						return;
 					}
 				}
@@ -2703,9 +3994,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					card_list = std::get<std::string>(opt);
 					if(card_list.length() > URL_LENGTH_MAX) {
-						char errstr[128];
-						snprintf(errstr, 128, "card_list exceeds maximum allowed length of %lu bytes.", URL_LENGTH_MAX);
-						event.reply(errstr);
+						event.reply(fmt::format("card_list exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX));
 						return;
 					}
 				}
@@ -2718,9 +4007,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					set_list = std::get<std::string>(opt);
 					if(set_list.length() > SET_LIST_LENGTH_MAX) {
-						char errstr[128];
-						snprintf(errstr, 128, "set_list exceeds maximum allowed length of %lu bytes.", SET_LIST_LENGTH_MAX);
-						event.reply(errstr);
+						event.reply(fmt::format("set_list exceeds maximum allowed length of {} bytes.", SET_LIST_LENGTH_MAX));
 						return;
 					}
 				}
@@ -2733,9 +4020,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					xmage_server = std::get<std::string>(opt);
 					if(xmage_server.length() > XMAGE_SERVER_LENGTH_MAX) {
-						char errstr[128];
-						snprintf(errstr, 128, "xmage_server string exceeds maximum allowed length of %lu bytes.", XMAGE_SERVER_LENGTH_MAX);
-						event.reply(errstr);
+						event.reply(fmt::format("xmage_server string exceeds maximum allowed length of {} bytes.", XMAGE_SERVER_LENGTH_MAX));
 						return;
 					}
 				}
@@ -2756,9 +4041,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<double>(opt)) {
 					double duration = std::get<double>(opt);
 					if(duration < 0.0) {
-						char errstr[128];
-						snprintf(errstr, 128, "Duration must be a positive number.");
-						event.reply(errstr);
+						event.reply(fmt::format("Duration must be a positive number."));
 						return;
 					}
 					draft_event.duration = duration;
@@ -2791,15 +4074,13 @@ int main(int argc, char* argv[]) {
 			strcpy(draft_event.pings, ping_string);
 
 			// Add the event to the database.
-			if(database_add_draft(guild_id, &draft_event) != true) {
-				log(LOG_LEVEL_ERROR, "Adding draft to database failed");
+			if(database_add_draft(guild_id, &draft_event) == true) {
+				const dpp::user& issuing_user = event.command.get_issuing_user();
+				event.reply(fmt::format("{} created {}. Use ``/post_draft`` to post it.", issuing_user.global_name, draft_code));
+			} else {
+				event.reply(fmt::format("⚠️ There was an error saving the details of the draft to the database. This is not your fault! Please try again, but in the meantime <@{}> has been alerted.", TANDEM_DISCORD_ID));
+				log(LOG_LEVEL_ERROR, "Adding draft to database failed.");
 			}
-
-			char reply_string[128];
-			const dpp::user& issuing_user = event.command.get_issuing_user();
-			snprintf(reply_string, 128, "%s created %s. Use ``/post_draft`` to post it.", issuing_user.username.c_str(), draft_code.c_str());
-			event.reply(reply_string);
-
 		} else
 		if(command_name == "post_draft") {
 			// TODO: If the event is already posted, update it.
@@ -2810,7 +4091,7 @@ int main(int argc, char* argv[]) {
 			if(result == true) {
 				text = fmt::format("Draft {} posted.", draft_code);
 			} else {
-				text = fmt::format("Paging @TandEm: There was an error posting draft {}!", draft_code);
+				text = fmt::format("⚠️ There was an error posting the draft. This is not your fault! Please try again, but in the meantime <@{}> has been alerted.", TANDEM_DISCORD_ID);
 			}
 			event.reply(text);
 		} else
@@ -2908,13 +4189,19 @@ int main(int argc, char* argv[]) {
 			event.reply(fmt::format("{} removed from {}.", preferred_name, g_current_draft_code));
 		} else
 		if(command_name == "post_allocations") {
+			// TODO: Create a role with the draft_code as it's name and add everyone to it. Do the same for each Pod
 			const auto guild_id = event.command.get_guild().id;
 
+			// TODO: Use new parse_draft_code
 			XDHS_League league;
 			get_league_from_draft_code(g_current_draft_code.c_str(), &league);
 			char league_code[3];
 			make_2_digit_league_code(&league, league_code);
 			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code);
+			if(sign_ups != true) {
+				log(LOG_LEVEL_ERROR, "database_get_sign_ups failed");
+				return;
+			}	
 
 			if(sign_ups.count < POD_SEATS_MIN) {
 				event.reply(fmt::format("At least {} players needed. Use /add_player.", POD_SEATS_MIN));
@@ -2939,7 +4226,72 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
+
+			std::string all_sign_ups;
+			all_sign_ups += "#,id,name,status,time,rank,is_shark,points,devotion,win_rate\n";
+			for(u64 player = 0; player < sign_ups.count; ++player) {
+				all_sign_ups += fmt::format("{},<@{}>,{},{},{},{},{},{},{},{}\n",
+					(player+1),
+					sign_ups.value[player].member_id,
+					sign_ups.value[player].preferred_name,
+					(int)sign_ups.value[player].status,
+					sign_ups.value[player].time,
+					(sign_ups.value[player].rank_is_null == true ? 0 : sign_ups.value[player].rank),
+					(sign_ups.value[player].is_shark_is_null == true ? 0 : sign_ups.value[player].is_shark),
+					(sign_ups.value[player].points_is_null == true ? -1 : sign_ups.value[player].points),
+					(sign_ups.value[player].devotion_is_null == true ? 0 : sign_ups.value[player].devotion),
+					(sign_ups.value[player].win_rate_is_null == true ? 0.0f : sign_ups.value[player].win_rate)
+					);
+
+			}
+			log(LOG_LEVEL_INFO, all_sign_ups.c_str());
+			event.reply(all_sign_ups);
+
+			// Create a role that contains everyone in this pod.
+			// TODO: In case this isn't the first invocation of post_allocations we need a way
+			// to clear old roles and recreate them...
+			// Create a role with everyone in this draft.
+			dpp::role role;
+			role.set_guild_id(guild_id);
+			role.set_name(g_current_draft_code);
+			role.set_color(league.color);
+			bot.role_create(role, [&bot, guild_id, sign_ups](const dpp::confirmation_callback_t& callback) {
+				if(!callback.is_error()) {
+					dpp::role role = std::get<dpp::role>(callback.value);
+					const auto result = database_add_temp_role(guild_id, g_current_draft_code.c_str(), role.id);
+					if(result == true) {
+						for(u64 i = 0; i < sign_ups.count; ++i) {
+							// Give each sign up this role.
+							u64 member_id = sign_ups.value[i].member_id;
+							u64 role_id = role.id;
+							dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // TODO: This can throw exceptions!
+							std::vector<dpp::snowflake> roles = member.get_roles();
+							roles.push_back(role_id);
+							member.set_roles(roles);
+							bot.guild_edit_member(member, [&bot, guild_id, member_id, role_id](const dpp::confirmation_callback_t& callback){
+								if(!callback.is_error()) {
+									auto result = database_add_temp_member_role(guild_id, member_id, role_id);
+									if(result == true) {
+										log(LOG_LEVEL_INFO, "Added %lu to %lu", member_id, role_id);
+									}
+								} else {
+									log(LOG_LEVEL_ERROR, "%s: guild_id:%lu member_id:%lu role_id:%lu",
+										callback.get_error().message.c_str(),
+										guild_id,
+										member_id,
+										role_id
+										);
+								}
+							});
+						}
+					}
+				} else {
+					log(LOG_LEVEL_ERROR, "Failed to create role for %s.", g_current_draft_code.c_str());
+				}
+			});
+
 			// Flag all potential hosts and flag everyone as not allocated.
+#if 0
 			int host_indexes[64];
 			int host_count = 0;
 
@@ -2964,7 +4316,63 @@ int main(int argc, char* argv[]) {
 			for(int i = 0; i < host_count; ++i) {
 				hosts.push_back(&sign_ups.value[host_indexes[i]]);
 			}
+#endif
 
+/*
+#1: The host of that pod - If the only available hosts (@XDHS Team members and @Hosts) are both in the leaderboard Top 3, the lowest-ranked host will host Pod 2.
+#2: Players who are required to play in that pod via the Rule of 3
+#3: Players with "Shark" status for the current Season (must play in pod 1)
+#4: New XDHS players and Goblins (1-4 drafts played) have priority for Pod 2
+#5: Players who reacted with their preferred emoji ( :Pod1~1:  or :Pod2~1: ) in #-pre-register
+#6: Players who didn't react in #-pre-register (first among these to join the draft table on XMage gets the spot)
+The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
+*/
+
+			// Create a message to tell everyone their allocation, and then create threads for each pod.
+			// Reference: bot.thread_create_with_message("123P-C", IN_THE_MOMENT_DRAFT_CHANNEL_ID, 1090316907871211561, 1440, 0, [&bot](const dpp::confirmation_callback_t& event) {
+			log(LOG_LEVEL_INFO, "Creating %d pod(s)", pods.table_count);
+			for(int pod = 0; pod < pods.table_count; ++pod) { // TODO: Create in reverse order?
+				dpp::message post;
+				post.set_type(dpp::message_type::mt_default);
+				post.set_guild_id(guild_id);
+				post.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+				post.set_allowed_mentions(true, true, true, false, {}, {});
+				post.set_content(fmt::format("Pod {} Allocations: **WIP!**", pod+1));
+				// TODO: Need to pass in an array of members in this pod and why there were allocated here
+				bot.message_create(post, [&bot, guild_id, pod](const dpp::confirmation_callback_t& callback) {
+					if(!callback.is_error()) {
+						// Message posted. Create a thread attached to it.
+						const dpp::message& message = std::get<dpp::message>(callback.value);
+						bot.thread_create_with_message(fmt::format("{} - Pod {}", g_current_draft_code, pod + 1), IN_THE_MOMENT_DRAFT_CHANNEL_ID, message.id, 1440, 0, [&bot, pod](const dpp::confirmation_callback_t& callback) {
+							if(!callback.is_error()) {
+								dpp::thread thread = std::get<dpp::thread>(callback.value);
+								// TODO: Add the thread ID to the database with the draft code so when the draft is deleted the threads are archived.
+								// TODO: thread_member_add() for each member allocated to this pod.
+
+								// TESTING: Try post a message in the thread.
+								dpp::message post;
+								post.set_type(dpp::message_type::mt_default);
+								post.set_guild_id(thread.guild_id);
+								post.set_channel_id(thread.id);
+								post.set_content(fmt::format("Thread for Pod {}", pod+1));
+								bot.message_create(post, [](const dpp::confirmation_callback_t& callback) {
+									if(!callback.is_error()) {
+									} else {
+										log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
+									}
+								});
+							} else {
+								log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
+							}
+						});
+					} else {
+						log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
+					}
+				});
+			}
+
+
+#if 0
 			std::string text;
 			for(auto& sign_up : sign_ups.value) {
 				sign_up.is_host = false;
@@ -2985,8 +4393,39 @@ int main(int argc, char* argv[]) {
 				
 				text += "\n";
 			}
+			event.reply(text);
+#endif
+		} else
+		if(command_name == "fire") {
+			// TODO: Check the draft status is locked, just to be safe
+			const auto guild_id = event.command.get_guild().id;
 
+			const auto draft = database_get_event(guild_id, g_current_draft_code);
+			if(draft == false) return; // TODO: Error message.
+			
+			std::string text;
+			text += "## While drafting, please remember to:\n";
+			text += "* **Keep Discord open, with notifications on.** Pay attention to pings and messages in this channel. We may need to restart the draft if there's a disconnect or other issue.\n";
+			text += "* **Double click to actively select your pick before the timer runs out.** This is good etiquette to keep the draft moving at a reasonable pace.\n";
 
+			if(!draft.value->draftmancer_draft) {
+				// XMage
+				text += "* **Save your deck during deck construction.** Very important if we need to play side matches or host a new tournament.\n";
+			} else {
+				// Draftmancer
+				text += fmt::format("* Join the link posted by the host for your pod, and _also_ log into the {} XMage server. Make sure your usernames match everywhere.\n", draft.value->xmage_server);
+				text += "* During the draft, you can hold Alt while hovering over a card to show the Oracle text.\n";
+			}
+
+			event.reply(text);
+
+			// TODO: Need to lock the draft entirely.... what if we have a dropper and they quit the draft?
+		} else
+		if(command_name == "timer") {
+			// TODO: Ping everyone in this pod? How would we know what pod this is for?
+			const auto guild_id = event.command.get_guild().id;
+			time_t now = time(0) + DECK_CONSTRUCTION_MINUTES;
+			std::string text = fmt::format("* Now the draft has finished, you can build your deck either on Draftmancer or XMage. Export as MTGA format from Draftmancer, then import to XMage from the clipboard. Don't forget to choose your favorite basic land art!\n* Make sure not to double-click cards while editing your deck in XMage (that will remove the card from your deck rather than moving it to the sideboard, and you'll have to reimport to fix it). Drag and drop instead.\n* Save your deck when done building and join the XMage table for your pod when it goes up.\n\nYour timer for deck construction expires <t:{}:R>", now);
 			event.reply(text);
 		} else
 		if(command_name == "dropper") {
@@ -2999,11 +4438,11 @@ int main(int argc, char* argv[]) {
 		} else
 		if(command_name == "finish") {
 			std::string text;
-			text += "### Thanks everyone for drafting with us!\n";
+			text += "## Thanks everyone for drafting with us!\n";
 			text += fmt::format("* You can share a screenshot of your deck in <#{}>.\n", DECK_SCREENSHOTS_CHANNEL_ID);
 			text += fmt::format("* If you want feedback on your draft, just ask or give yourself the Civilized Scholar role in <#{}>).\n", ROLE_SELF_ASSIGNMENT_CHANNEL_ID);
 			text += fmt::format("* You can also upload your draftlog to <https://magic.flooey.org/draft/upload> and share it in <#{}>.\n", P1P1_AND_DRAFT_LOG_CHANNEL_ID);
-			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with FeedbackBot ""/feedback"".\n", FEEDBACK_CHANNEL_ID);
+			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with the /feedback command.\n", FEEDBACK_CHANNEL_ID);
 			text += fmt::format("* Check out <#{}> to see upcoming events, and sign up in <#{}>!", CALENDAR_CHANNEL_ID, PRE_REGISTER_CHANNEL_ID);
 			event.reply(text);
 		}
@@ -3139,7 +4578,7 @@ int main(int argc, char* argv[]) {
 
 		// Send the pre-draft reminder message if it hasn't already been sent.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending pre-draft reminder message for {}.", draft_code.value.c_str()));
+			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
 			// TODO: Unlock the minute mage signups
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
@@ -3148,7 +4587,7 @@ int main(int argc, char* argv[]) {
 
 		// Ping the tentatives if they haven't already been pinged.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_TENTATIVES_PINGED)) && (draft.value->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Sending tentative reminder message for: {}", draft_code.value.c_str()));
+			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending tentative reminder message, if needed.", draft_code.value.c_str()));
 			// Redraw the sign up posts so the Tentative button shows as locked.
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);
 			redraw_signup(bot, GUILD_ID, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
@@ -3158,22 +4597,25 @@ int main(int argc, char* argv[]) {
 
 		// Lock the draft.
 		if((draft.value->status < DRAFT_STATUS_LOCKED) && now >= draft.value->time) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Locking draft: {}", draft_code.value.c_str()));
-			post_host_guide(bot, draft_code.value.c_str());
+			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Locking sign ups and pinging for a minutemage, if needed.", draft_code.value.c_str()));
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_LOCKED);
-			// Ping minutemages if there is an odd number of confirmed sign ups.
-			ping_minutemages(bot, GUILD_ID, draft_code.value.c_str());
+			post_host_guide(bot, draft_code.value.c_str());
 			// Redraw the signup buttons so they all (except Minutemage) appear locked.
 			redraw_signup(bot, GUILD_ID, draft.value->signups_id, draft.value->channel_id, draft.value);
 			redraw_signup(bot, GUILD_ID, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
+			// Ping minutemages if there is an odd number of confirmed sign ups.
+			ping_minutemages(bot, GUILD_ID, draft_code.value.c_str());
 		}
 
 		// Delete the draft after a few hours.
 		if((draft.value->status < DRAFT_STATUS_COMPLETE) && now - draft.value->time > SECONDS_AFTER_DRAFT_TO_DELETE_POSTS) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Deleting completed draft: {}", draft_code.value.c_str()));
+			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Deleting completed draft.", draft_code.value.c_str()));
 			delete_draft_posts(bot, GUILD_ID, draft_code.value);
 			database_clear_draft_post_ids(GUILD_ID, draft_code.value);
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_COMPLETE);
+
+			// TODO: Delete any roles created
+			// TODO: Delete/archive any threads created.
 		}
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
