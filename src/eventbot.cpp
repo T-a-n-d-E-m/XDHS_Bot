@@ -117,7 +117,7 @@ static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 1155769474520199279;
 static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 1155771897225674752;
 static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 1155772743485235200;
 static const u64 FEEDBACK_CHANNEL_ID             = 1155773361104887880;
-static const u64 CALENDAR_CHANNEL_ID			 = 1155774664732323952;
+static const u64 CALENDAR_CHANNEL_ID             = 1155774664732323952;
 static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
 static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
 static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
@@ -134,7 +134,7 @@ static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 647073844649000962;
 static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
 static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 796861143594958868; 
 static const u64 FEEDBACK_CHANNEL_ID             = 822015209756950528;
-static const u64 CALENDAR_CHANNEL_ID			 = 794227134892998666;
+static const u64 CALENDAR_CHANNEL_ID             = 794227134892998666;
 static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
 static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
 static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
@@ -3402,7 +3402,7 @@ static std::vector<std::string> get_pack_images(const char* format) {
 
 
 int main(int argc, char* argv[]) {
-#ifdef 0
+#if 0
 	// Verify the allocate_pod_seats() function is doing the right thing.
 	for(int i = 6; i < 66; i+=2) {
 		Draft_Pods pods = allocate_pod_seats(i);
@@ -3822,7 +3822,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			dpp::message message;
-			message.add_file("banner.png", dpp::utility::read_file(result.path));
+			message.add_file(fmt::format("{} - {}.png", draft_code, format), dpp::utility::read_file(result.path));
 			event.edit_response(message);
 		} else
 		if(command_name == "create_draft") {
