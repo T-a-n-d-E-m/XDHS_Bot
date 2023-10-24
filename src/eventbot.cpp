@@ -67,11 +67,11 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
-#include "date/tz.h"                   // Howard Hinnant's date and timezone library.
-#include "../../BadgeBot/log.h"        // Not versioned - shared from a private repo
-#include "../../BadgeBot/config.h"     // Not versioned - shared from a private repo
-#include "../../BadgeBot/scope_exit.h" // Not versioned - shared from a private repo
-#include "../../BadgeBot/utf8.h"       // Not versioned - shared from a private repo
+#include "date/tz.h"  // Howard Hinnant's date and timezone library.
+#include "log.h"
+#include "config.h"
+#include "scope_exit.h"
+#include "utf8.h"
 
 // Some useful shorthands for common types.
 using  u8 = std::uint8_t;
