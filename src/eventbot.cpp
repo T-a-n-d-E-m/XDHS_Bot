@@ -59,7 +59,10 @@
 #include "stb_image.h"
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
 #include "stb_image_resize2.h"
+#pragma GCC diagnostic pop
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
