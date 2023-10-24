@@ -1544,7 +1544,7 @@ static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draf
 
 	Draft_Signup_Status result;
 
-	MYSQL_OUTPUT_INIT(3);
+	MYSQL_OUTPUT_INIT(4);
 	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id,     sizeof(result.member_id));
 	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING,   result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT(2, MYSQL_TYPE_LONGLONG, &result.timestamp,     sizeof(result.timestamp));
