@@ -26,6 +26,8 @@
 // TODO: Cleanup inconsistent use of char* and std::string in database functions.
 // TODO: All the blit_ functions can be rewritten to use SIMD ops
 // FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
+// TODO: Alert hosts when a drafter is a first time player
+// TODO: Get rid of all asserts - can't have the bot going offline, ever
 
 // C libraries
 #include <alloca.h>
@@ -286,8 +288,8 @@ struct MTG_Draftable_Set {
 	bool key_art;
 };
 
-// Not an complete list - just the sets we draft (or explicitly DON'T) at XDHS.
-// This is probably not the best way to handle this as new sets (official or not) need to keep this updated.
+// Not an complete list of all Magic sets - Just the sets we draft or may draft.
+// TODO: This is probably not the best way to handle this as new sets (official or not) need to keep this updated.
 // Perhaps move it to the database and use a /add_set command?
 static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"LEA", "Limited Edition Alpha",                       1, false},
@@ -309,51 +311,52 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"TMP", "Tempest",                                     3, false},
 	{"STH", "Stronghold",                                  1, false},
 	{"EXO", "Exodus",                                      1, false},
-	{"USG", "Urza's Saga",                                 0, false},
-	{"ULG", "Urza's Legacy",                               0, false},
-	{"UDS", "Urza's Destiny",                              0, false},
-	{"PTK", "Portal Three Kingdoms",                       0, false},
-	{"MMQ", "Mercadian Masques",                           0, false},
-	{"NEM", "Nemesis",                                     0, false},
-	{"PCY", "Prophecy",                                    0, false},
-	{"INV", "Invasion",                                    0, false},
-	{"PLS", "Planeshift",                                  0, false},
-	{"APC", "Apocalypse",                                  0, false},
-	{"ODY", "Odyssey",                                     0, false},
-	{"TOR", "Torment",                                     0, false},
-	{"JUD", "Judgment",                                    0, false},
-	{"ONS", "Onslaught",                                   0, false},
-	{"LGN", "Legions",                                     0, false},
-	{"SCG", "Scourge",                                     0, false},
-	{"MRD", "Mirrodin",                                    0, false},
-	{"DST", "Darksteel",                                   0, false},
-	{"5DN", "Fifth Dawn",                                  0, false},
-	{"CHK", "Champions of Kamigawa",                       0, false},
-	{"BOK", "Betrayers of Kamigawa",                       0, false},
-	{"SOK", "Saviors of Kamigawa",                         0, false},
-	{"RAV", "Ravnida: City of Guilds",                     5, false},
-	{"GPT", "Guildpact",                                   0, false},
-	{"DIS", "Dissension",                                  0, false},
-	{"CSP", "Coldsnap",                                    0, false},
-	{"TSP", "Time Spiral",                                 0, false},
-	{"PLC", "Planar Choas",                                0, false},
-	{"FUT", "Future Sight",                                0, false},
-	{"ME1", "Masters Edition",                             0, false},
-	{"LRW", "Lorwyn",                                      0, false},
-	{"MOR", "Morningtide",                                 0, false},
-	{"SHM", "Shadowmoor",                                  0, false},
-	{"EVE", "Eventide",                                    0, false},
-	{"ME2", "Masters Edition II",                          0, false},
-	{"ALA", "Shards of Alara",                             0, false},
-	{"CON", "Conflux",                                     0, false},
-	{"ARB", "Alara Reborn",                                0, false},
-	{"M10", "Magic 2010",                                  0, false},
-	{"ME3", "Masters Edition III",                         0, false},
-	{"ZEN", "Zendikar",                                    0, false},
-	{"WWK", "Worldwake",                                   0, false},
-	{"ROE", "Rise of the Eldrazi",                         0, false},
-	{"M11", "Magic 2011",                                  0, false},
-	{"ME4", "Masters Edition IV",                          0, false},
+	{"USG", "Urza's Saga",                                 3, false},
+	{"ULG", "Urza's Legacy",                               1, false},
+	{"UDS", "Urza's Destiny",                              1, false},
+	{"PTK", "Portal Three Kingdoms",                       1, false},
+	{"MMQ", "Mercadian Masques",                           3, false},
+	{"NEM", "Nemesis",                                     1, false},
+	{"PCY", "Prophecy",                                    1, false},
+	{"INV", "Invasion",                                    3, false},
+	{"PLS", "Planeshift",                                  1, false},
+	{"APC", "Apocalypse",                                  1, false},
+	{"ODY", "Odyssey",                                     3, false},
+	{"TOR", "Torment",                                     1, false},
+	{"JUD", "Judgment",                                    1, false},
+	{"ONS", "Onslaught",                                   3, false},
+	{"LGN", "Legions",                                     3, false},
+	{"SCG", "Scourge",                                     3, false},
+	{"MRD", "Mirrodin",                                    3, false},
+	{"DST", "Darksteel",                                   1, false},
+	{"5DN", "Fifth Dawn",                                  1, false},
+	{"CHK", "Champions of Kamigawa",                       3, false},
+	{"BOK", "Betrayers of Kamigawa",                       1, false},
+	{"SOK", "Saviors of Kamigawa",                         1, false},
+	{"RAV", "Ravnica: City of Guilds",                     5, false},
+	{"GPT", "Guildpact",                                   1, false},
+	{"DIS", "Dissension",                                  1, false},
+	{"CSP", "Coldsnap",                                    3, false},
+	{"TSP", "Time Spiral",                                 3, false},
+	{"PLC", "Planar Choas",                                1, false},
+	{"FUT", "Future Sight",                                1, false},
+	{"10E", "Tenth Edition",                               3, false},
+	{"ME1", "Masters Edition",                             1, false},
+	{"LRW", "Lorwyn",                                      3, false},
+	{"MOR", "Morningtide",                                 1, false},
+	{"SHM", "Shadowmoor",                                  3, false},
+	{"EVE", "Eventide",                                    1, false},
+	{"ME2", "Masters Edition II",                          1, false},
+	{"ALA", "Shards of Alara",                             3, false},
+	{"CON", "Conflux",                                     1, false},
+	{"ARB", "Alara Reborn",                                1, false},
+	{"M10", "Magic 2010",                                  3, false},
+	{"ME3", "Masters Edition III",                         1, false},
+	{"ZEN", "Zendikar",                                    3, false},
+	{"WWK", "Worldwake",                                   1, false},
+	{"ROE", "Rise of the Eldrazi",                         3, false},
+	{"M11", "Magic 2011",                                  3, false},
+	{"ME4", "Masters Edition IV",                          1, false},
 	{"SOM", "Scars of Mirrodin",                           5, false},
 	{"MBS", "Mirrodin Besieged",                           3, false},
 	{"NPH", "New Phyrexia",                                3, false},
@@ -364,7 +367,7 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"M13", "Magic 2013",                                  5, false},
 	{"RTR", "Return to Ravnica",                           5, false},
 	{"GTC", "Gatecrash",                                   5, false},
-	{"DGM", "Dragon's Maze",                               1, false},
+	{"DGM", "Dragon's Maze",                               3, false},
 	{"MMA", "Modern Masters",                              3, false},
 	{"M14", "Magic 2014",                                  5, false},
 	{"THS", "Theros",                                      4, false},
@@ -503,7 +506,7 @@ static const MTG_Draftable_Set* get_set_from_code(const char* code) {
 
 
 // Parse the set_codes string (e.g. TMP,EXO,ELD,ISD,...) and expand them into full set names (e.g. Tempest, Exodus, Eldraine, Innistrad, ...) writing the results into the out variable.
-static const void make_set_list(const char* set_codes, const size_t len, char* out, size_t out_len) {
+static const void expand_set_list(const char* set_codes, const size_t len, char* out, size_t out_len) {
 	if((set_codes == NULL) || (len == 0) || (out == NULL) || (out_len == 0)) return;
 
 	// Make a mutable copy of the set_codes string
@@ -552,6 +555,7 @@ struct Set_List {
 	const MTG_Draftable_Set* set[PACKS_PER_DRAFT_MAX];
 };
 
+// Parse a string like "TSP/FUT/PLC" and get pointers to an MTG_Draftable_Set for each.
 static Set_List get_set_list_from_string(const char* format) {
 	size_t len = strlen(format);
 	char* str = (char*)alloca(len+1);
@@ -759,14 +763,15 @@ static const XDHS_League g_xdhs_leagues[] = {
 static const size_t LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
 
 // Parse a draft code and find the league it is for. Makes a copy into 'league' and returns true if found, false otherwise.
-static bool get_league_from_draft_code(const char* draft_code, XDHS_League* league) {
+// TODO: Replace this with parse_league_code
+static const XDHS_League* get_league_from_draft_code(const char* draft_code) {
 	// SSS.W-RT S=season, W=week, R=region, T=type
-	if(draft_code == NULL) return false;
+	if(draft_code == NULL) return NULL;
 
 	while(isdigit(*draft_code)) {draft_code++;} // Skip the numeric part
-	if(*draft_code++ != '.') return false;
+	if(*draft_code++ != '.') return NULL;
 	while(isdigit(*draft_code)) {draft_code++;} // Skip the numeric part
-	if(*draft_code++ != '-') return false;
+	if(*draft_code++ != '-') return NULL;
 	char region_code = *draft_code++;
 	char league_type = *draft_code;
 
@@ -774,12 +779,11 @@ static bool get_league_from_draft_code(const char* draft_code, XDHS_League* leag
 		const XDHS_League* ptr = &g_xdhs_leagues[i];
 		if((ptr->region_code == region_code) && (ptr->league_type == league_type)) {
 			// Found it!
-			memcpy(league, ptr, sizeof(XDHS_League));
-			return true;
+			return ptr;
 		}
 	}
 
-	return false;
+	return NULL;
 }
 
 // FIXME: Get rid of this!
@@ -796,8 +800,6 @@ static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT");
 struct Draft_Code {
 	u16 season; // max 3 digits
 	u8 week; // max 2 digits
-	char region_code; // TODO: Already in league so remove
-	char league_type; // TODO: Already in league so remove
 	const XDHS_League *league;
 };
 
@@ -827,11 +829,11 @@ static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
 	out->week = strtol(start, NULL, 10);
 	start = end++;
 
-	out->region_code = *end++;
-	out->league_type = *end;
+	const char region_code = *end++;
+	const char league_type = *end;
 
 	for(size_t i = 0; i < LEAGUE_COUNT; ++i) {
-		if((g_xdhs_leagues[i].region_code == out->region_code) && (g_xdhs_leagues[i].league_type == out->league_type)) {
+		if((g_xdhs_leagues[i].region_code == region_code) && (g_xdhs_leagues[i].league_type == league_type)) {
 			out->league = &g_xdhs_leagues[i];
 			return true;
 		}
@@ -2354,6 +2356,9 @@ struct Draft_Type {
 	const char* name;
 };
 
+#if 0
+// NOTE: 2023-10-24: Due to a bug in DPP++ autocomplete does not work when mapping sting->int
+// but when (if!) this bug is fixed I'll want to use this code again.
 static std::vector<Draft_Type> get_draft_types_for_autocomplete(const std::string& input) {
 	fprintf(stdout, "%s\n", __FUNCTION__);
 	std::vector<Draft_Type> result;
@@ -2366,6 +2371,7 @@ static std::vector<Draft_Type> get_draft_types_for_autocomplete(const std::strin
 	}
 	return result;
 }
+#endif
 
 struct Icon {
 	DRAFT_TYPE type;
@@ -2449,7 +2455,9 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 		g_banner_font_loaded = true;
 	}
 
-	static const char* BANNER_FRAME_FILE    = "gfx/banner/frame.png";
+	static const char* BANNER_FRAME_TOP_FILE    = "gfx/banner/frame_top.png";
+	static const char* BANNER_FRAME_SIDE_FILE   = "gfx/banner/frame_side.png"; // left and right
+	static const char* BANNER_FRAME_BOTTOM_FILE = "gfx/banner/frame_bottom.png";
 	static const char* BANNER_GRADIENT_FILE = "gfx/banner/gradient.png";
 	static const char* BANNER_SUBTITLE_FILE = "gfx/banner/subtitle.png";
 
@@ -2528,15 +2536,39 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 		blit_A8_to_RGBA(&grad, grad.w, {.c=0xFF000000}, &banner, 0, 0);
 	}
 
-	// Blit the title box and frame and color it.
+	// Blit the title box frames and color them
 	{
-		Image frame;
-		frame.data = (void*) stbi_load(BANNER_FRAME_FILE, &frame.w, &frame.h, &frame.channels, 1);
-		if(frame.data == NULL) {
-			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_FRAME_FILE, stbi_failure_reason())};
+		{
+			// Top
+			Image frame;
+			frame.data = (void*) stbi_load(BANNER_FRAME_TOP_FILE, &frame.w, &frame.h, &frame.channels, 1);
+			if(frame.data == NULL) {
+				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_FRAME_TOP_FILE, stbi_failure_reason())};
+			}
+			SCOPE_EXIT(stbi_image_free(frame.data));
+			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 9, 60);
 		}
-		SCOPE_EXIT(stbi_image_free(frame.data));
-		blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 0, 0);
+		{
+			// Bottom
+			Image frame;
+			frame.data = (void*) stbi_load(BANNER_FRAME_BOTTOM_FILE, &frame.w, &frame.h, &frame.channels, 1);
+			if(frame.data == NULL) {
+				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_FRAME_BOTTOM_FILE, stbi_failure_reason())};
+			}
+			SCOPE_EXIT(stbi_image_free(frame.data));
+			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 9, 578);
+		}
+		{
+			// Left & right
+			Image frame;
+			frame.data = (void*) stbi_load(BANNER_FRAME_SIDE_FILE, &frame.w, &frame.h, &frame.channels, 1);
+			if(frame.data == NULL) {
+				return {true, fmt::format("Internal error: Failed to load image \"{}\". Reason: {}", BANNER_FRAME_SIDE_FILE, stbi_failure_reason())};
+			}
+			SCOPE_EXIT(stbi_image_free(frame.data));
+			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 9, 116);
+			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 882, 116);
+		}
 	}
 
 	// Blit the date/time text
@@ -2843,8 +2875,8 @@ static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string&
 
 	// Set list
 	if(strlen(draft_event.value->set_list) > 0) {
-		char buffer[1024];
-		make_set_list(draft_event.value->set_list, strlen(draft_event.value->set_list), buffer, 1024);
+		char buffer[1024]; // FIXME: Magic number
+		expand_set_list(draft_event.value->set_list, strlen(draft_event.value->set_list), buffer, 1024);
 		draft_details += fmt::format("\n{}", buffer); // NOTE: This single newline is intentional.
 	}
 
@@ -3391,7 +3423,13 @@ static std::vector<std::string> get_pack_images(const char* format) {
 					pack_to_use = 0; // Reset
 				}
 			}
-			result.push_back(fmt::format("gfx/pack_art/crop/{}/{}.png", list.set[i]->code, pack_to_use+1));
+
+			// Conflux needs a special case as its files are in CON_.
+			if(strcmp(list.set[i]->code, "CON") != 0) {
+				result.push_back(fmt::format("gfx/pack_art/crop/{}/{}.png", list.set[i]->code, pack_to_use+1));
+			} else {
+				result.push_back(fmt::format("gfx/pack_art/crop/CON_/{}.png", pack_to_use+1));
+			}
 
 			previous_set_code = list.set[i]->code;
 		}
@@ -3546,6 +3584,11 @@ int main(int argc, char* argv[]) {
 		if(g_commands_registered == false) {
 			// Create slash commands
 			{
+				dpp::slashcommand cmd("cpu_burner", "Create banner art for every set that has >= 3 images.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
 				dpp::slashcommand cmd("banner", "Create a banner image for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				// Required
@@ -3665,24 +3708,51 @@ int main(int argc, char* argv[]) {
 		const auto command_name = event.command.get_command_name();
 		const auto guild_id = event.command.get_guild().id;
 
+		if(command_name == "cpu_burner") {
+			event.reply("Here we go!");
+			Banner_Opts opts;
+			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
+			opts.league_color = 0xFFD500FF;
+			opts.datetime = "DATETIME / DATETIME / DATETIME / DATETIME";
+			for(size_t i = 0; i < SET_COUNT; ++i) {
+				const MTG_Draftable_Set* set = &g_draftable_sets[i];
+				if(set->pack_images == 1) {
+					std::string format = fmt::format("{}/{}/{}", set->code, set->code, set->code);
+					opts.images = get_pack_images(format.c_str());
+					opts.title = fmt::format("BANNER TEST / SS.W-LT: {}", format);
+					log(LOG_LEVEL_DEBUG, "Rendering: %s", format.c_str());
+					const Render_Banner_Result banner = render_banner(&opts);
+					if(banner.is_error != true) {
+						dpp::message message;
+						message.set_type(dpp::message_type::mt_default);
+						message.set_guild_id(GUILD_ID);
+						message.set_channel_id(885048614190190593); // #bot-commands
+						message.set_allowed_mentions(false, false, false, false, {}, {});
+						message.set_content(format);
+						message.add_file("banner.png", dpp::utility::read_file(banner.path));
+						bot.message_create(message);
+					}
+					opts.images.clear();
+				}
+			}
+		} else
 		if(command_name == "banner") {
 			Banner_Opts opts;
 			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
-			//opts.images = a vector of images
 
 			// Required options
 			auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
-			XDHS_League league;
-			if(get_league_from_draft_code(draft_code.c_str(), &league) == false) {
+			const XDHS_League* league = get_league_from_draft_code(draft_code.c_str());
+			if(league == NULL) {
 				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus.");
 				return;
 			}
 
 			// Swap bytes so to the color format used by the blit_ functions.
 			opts.league_color = (0xFF << 24) |
-								((league.color >> 16) & 0xFF) |
-								((league.color & 0xFF) << 16) |
-								((league.color & 0x0000FF00));
+								((league->color >> 16) & 0xFF) |
+								((league->color & 0xFF) << 16) |
+								((league->color & 0x0000FF00));
 
 			auto format = std::get<std::string>(event.get_parameter("format"));
 			if(format.length() > FORMAT_STRING_LEN_MAX) {
@@ -3701,14 +3771,14 @@ int main(int argc, char* argv[]) {
 			}
 
 			// Create the default zoned time for this region.
-			auto zoned_time = date::make_zoned(league.time_zone,
+			auto zoned_time = date::make_zoned(league->time_zone,
 			                                   date::local_days{date::year{date.year} / date.month / date.day} +
-											   std::chrono::hours(league.time.hour) +
-											   std::chrono::minutes(league.time.minute));
+											   std::chrono::hours(league->time.hour) +
+											   std::chrono::minutes(league->time.minute));
 
 			opts.datetime = date::format("%a %b %d @ %H:%M %Z", zoned_time).c_str();
 
-			switch(league.id) {
+			switch(league->id) {
 				case LEAGUE_ID_AMERICAS_CHRONO: 
 				case LEAGUE_ID_AMERICAS_BONUS:  {
 					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
@@ -3741,7 +3811,7 @@ int main(int argc, char* argv[]) {
 				} break;
 			}
 
-			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league.id)), draft_code, format);
+			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league->id)), draft_code, format);
 			
 			// Optional options
 			{
@@ -3762,8 +3832,8 @@ int main(int argc, char* argv[]) {
 			}
 
 			// As downloading a large image can take some time, and we have 3 seconds to respond, reply with something now and then update the reply as we progress.
-			event.reply("Creating banner...");
-			// NOTE: From here to the end of the funtion event.edit_response() must be used, not event.reply()
+			event.reply(":hourglass_flowing_sand: Creating banner...");
+			// NOTE: From here to the end of the function event.edit_response() must be used, not event.reply()
 
 			{
 				// If an image was provided, download it and write to storage for later use.
@@ -3772,7 +3842,7 @@ int main(int argc, char* argv[]) {
 					auto art_id = std::get<dpp::snowflake>(event.get_parameter("art"));
 					auto itr = event.command.resolved.attachments.find(art_id);
 					auto art = itr->second;
-            		//event.reply(fmt::format("Downloading background art: {}", art.url));
+            		event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
 		            size_t image_full_size = 0;
 		            u8* image_full_data = NULL;
 		            SCOPE_EXIT(free(image_full_data));
@@ -3790,6 +3860,7 @@ int main(int argc, char* argv[]) {
 					std::string temp_file = fmt::format("/tmp/EventBot_Art_{}", random_string(16));
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
+						event.edit_response(":hourglass_flowing_sand: Saving image");
 						SCOPE_EXIT(fclose(file));
 						size_t wrote = fwrite(image_full_data, 1, image_full_size, file);
 						if(wrote == image_full_size) {
@@ -3815,13 +3886,18 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
+			event.edit_response(":hourglass_flowing_sand: Rendering banner");
+			auto start = std::chrono::high_resolution_clock::now();
 			const Render_Banner_Result result = render_banner(&opts);
 			if(result.is_error == true) {
 				event.edit_response(result.path);
 				return;
 			}
+			auto end = std::chrono::high_resolution_clock::now();
+			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
 			dpp::message message;
+			message.set_content(fmt::format(":hourglass_flowing_sand: {} ms", elapsed.count()));
 			message.add_file(fmt::format("{} - {}.png", draft_code, format), dpp::utility::read_file(result.path));
 			event.edit_response(message);
 		} else
@@ -3831,14 +3907,14 @@ int main(int argc, char* argv[]) {
 			// Required options
 			auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
 			// First, check if the draft code is valid and if it is get a copy of the XDHS_League it applies to.
-			XDHS_League league;
-			if(get_league_from_draft_code(draft_code.c_str(), &league) == false) {
+			const XDHS_League* league = get_league_from_draft_code(draft_code.c_str());
+			if(league == NULL) {
 				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\tSS is the season\n\tW is the week in the season\n\tR is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\tT is the league type: (C)hrono or (B)onus.");
 				return;
 			}
 			strcpy(draft_event.draft_code, draft_code.c_str());
 
-			strcpy(draft_event.league_name, to_cstring(league.id));
+			strcpy(draft_event.league_name, to_cstring(league->id));
 
 			auto format = std::get<std::string>(event.get_parameter("format"));
 			if(format.length() > FORMAT_STRING_LEN_MAX) {
@@ -3848,7 +3924,7 @@ int main(int argc, char* argv[]) {
 			strcpy(draft_event.format, format.c_str());
 
 			// Get the time zone string
-			strcpy(draft_event.time_zone, league.time_zone);
+			strcpy(draft_event.time_zone, league->time_zone);
 
 			Date date;
 			auto date_string = std::get<std::string>(event.get_parameter("date"));
@@ -3862,8 +3938,8 @@ int main(int argc, char* argv[]) {
 
 			// Is the default start time for this league overridden?
 			Start_Time start_time;
-			start_time.hour = league.time.hour;
-			start_time.minute = league.time.minute;
+			start_time.hour = league->time.hour;
+			start_time.minute = league->time.minute;
 			{
 				auto opt = event.get_parameter("start_time");
 				if(std::holds_alternative<std::string>(opt)) {
@@ -3907,7 +3983,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			// Check if the default league color has been overridden.
-			draft_event.color = league.color;
+			draft_event.color = league->color;
 			{
 				auto opt = event.get_parameter("color");
 				if(std::holds_alternative<std::string>(opt)) {
@@ -4013,7 +4089,7 @@ int main(int argc, char* argv[]) {
 			char* ping_string_ptr = ping_string;
 			const dpp::guild& guild = event.command.get_guild();
 			for(size_t i = 0; i < LEAGUE_PINGS_MAX; ++i) {
-				const char* role_name = league.ping[i];
+				const char* role_name = league->ping[i];
 				if(role_name == NULL) break;
 				for(auto& role_id : guild.roles) { // A std::vector<dpp::snowflake>
 					dpp::role* role = find_role(role_id);
@@ -4146,10 +4222,9 @@ int main(int argc, char* argv[]) {
 			const auto guild_id = event.command.get_guild().id;
 
 			// TODO: Use new parse_draft_code
-			XDHS_League league;
-			get_league_from_draft_code(g_current_draft_code.c_str(), &league);
+			const XDHS_League* league = get_league_from_draft_code(g_current_draft_code.c_str());
 			char league_code[3];
-			make_2_digit_league_code(&league, league_code);
+			make_2_digit_league_code(league, league_code);
 			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code);
 			if(sign_ups != true) {
 				log(LOG_LEVEL_ERROR, "database_get_sign_ups failed");
@@ -4207,7 +4282,7 @@ int main(int argc, char* argv[]) {
 			dpp::role role;
 			role.set_guild_id(guild_id);
 			role.set_name(g_current_draft_code);
-			role.set_color(league.color);
+			role.set_color(league->color);
 			bot.role_create(role, [&bot, guild_id, sign_ups](const dpp::confirmation_callback_t& callback) {
 				if(!callback.is_error()) {
 					dpp::role role = std::get<dpp::role>(callback.value);
