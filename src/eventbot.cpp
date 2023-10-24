@@ -4451,7 +4451,7 @@ The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
 		} else
 		if(command_name == "timer") {
 			// TODO: Ping everyone in this pod? How would we know what pod this is for?
-			const auto guild_id = event.command.get_guild().id;
+			//const auto guild_id = event.command.get_guild().id;
 			time_t now = time(0) + DECK_CONSTRUCTION_MINUTES;
 			std::string text = fmt::format("* Now the draft has finished, you can build your deck either on Draftmancer or XMage. Export as MTGA format from Draftmancer, then import to XMage from the clipboard. Don't forget to choose your favorite basic land art!\n* Make sure not to double-click cards while editing your deck in XMage (that will remove the card from your deck rather than moving it to the sideboard, and you'll have to reimport to fix it). Drag and drop instead.\n* Save your deck when done building and join the XMage table for your pod when it goes up.\n\nYour timer for deck construction expires <t:{}:R>", now);
 			event.reply(text);
