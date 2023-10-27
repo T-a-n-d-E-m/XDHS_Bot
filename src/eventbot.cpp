@@ -165,7 +165,7 @@ static void sig_handler(int signo) {
         case SIGABRT: // Fall through
         case SIGHUP:  // Fall through
         case SIGTERM:
-            log(LOG_LEVEL_INFO, strsignal(signo));
+            log(LOG_LEVEL_INFO, "Caught signal %d", strsignal(signo));
             g_quit = true;
         	break;
 
@@ -662,10 +662,6 @@ static void expand_format_string(const char* format, size_t len, char* out, size
 		}
 	}
 }
-struct Start_Time {
-	int hour;
-	int minute;
-};
 
 // The maximum number of leagues to be pinged when a draft signup is posted. Increase this if a league ever needs to ping more than two roles.
 static const size_t LEAGUE_PINGS_MAX = 2; 
@@ -693,6 +689,11 @@ static const char* to_cstring(const LEAGUE_ID id) {
 
 	return NULL;
 }
+
+struct Start_Time {
+	int hour;
+	int minute;
+};
 
 struct XDHS_League {
 	LEAGUE_ID id;
@@ -763,7 +764,7 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Euro", NULL},
 	}
 };
-static const size_t LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
+static const size_t XDHS_LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
 
 // Parse a draft code and find the league it is for. Makes a copy into 'league' and returns true if found, false otherwise.
 // TODO: Replace this with parse_league_code
@@ -778,7 +779,7 @@ static const XDHS_League* get_league_from_draft_code(const char* draft_code) {
 	char region_code = *draft_code++;
 	char league_type = *draft_code;
 
-	for(size_t i = 0; i < LEAGUE_COUNT; ++i) {
+	for(size_t i = 0; i < XDHS_LEAGUE_COUNT; ++i) {
 		const XDHS_League* ptr = &g_xdhs_leagues[i];
 		if((ptr->region_code == region_code) && (ptr->league_type == league_type)) {
 			// Found it!
@@ -789,16 +790,9 @@ static const XDHS_League* get_league_from_draft_code(const char* draft_code) {
 	return NULL;
 }
 
-// FIXME: Get rid of this!
-static void make_2_digit_league_code(const XDHS_League* league, char out[3]) {
-	out[0] = league->region_code;
-	out[1] = league->league_type;
-	out[2] = 0;
-}
-
 
 // The maximum allowed byte length of a draft code.
-static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.GG-LT");
+static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.WW-RT");
 
 struct Draft_Code {
 	u16 season; // max 3 digits
@@ -835,7 +829,7 @@ static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
 	const char region_code = *end++;
 	const char league_type = *end;
 
-	for(size_t i = 0; i < LEAGUE_COUNT; ++i) {
+	for(size_t i = 0; i < XDHS_LEAGUE_COUNT; ++i) {
 		if((g_xdhs_leagues[i].region_code == region_code) && (g_xdhs_leagues[i].league_type == league_type)) {
 			out->league = &g_xdhs_leagues[i];
 			return true;
@@ -1167,15 +1161,17 @@ struct Database_Result {
 // For database_ functions that return no data. We could use template specialization here this is simpler.
 struct Database_No_Value {};
 
-static const char* DATABASE_NAME = "XDHS"; // TODO: Move this to options?
+static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to use different databases, right?
 
 // Connect to the MySQL database specified in the bot.ini file and request access to the XDHS table.
+// TODO: Connection pools for each thread
 #define MYSQL_CONNECT()                                      \
 	MYSQL* mysql = mysql_init(NULL);                         \
 	if(mysql == NULL) {                                      \
 		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");     \
 		return {false, 0, {}};                               \
 	}                                                        \
+	SCOPE_EXIT(mysql_close(mysql));                          \
 	MYSQL* connection = mysql_real_connect(mysql,            \
 		g_config.mysql_host,                                 \
 		g_config.mysql_username,                             \
@@ -1186,8 +1182,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: Move this to options?
 	if(connection == NULL) {                                 \
 		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed"); \
 		return {false, 0, {}};                               \
-	}                                                        \
-	SCOPE_EXIT(mysql_close(connection));
+	}
 
 
 // Prepare a MySQL statement using the provided query.
@@ -1226,7 +1221,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: Move this to options?
 		return {false, 0, {}};                                                                             \
 	}
 
-// A query with no input params
+// A query with no output params
 #define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
@@ -2222,8 +2217,7 @@ static Text_Dim get_text_dimensions(stbtt_fontinfo* font, const int size, const 
 	return dim;
 }
 
-// FIXME: Move color to the end as it's optional
-static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int size, const Pixel color, Image* canvas, int x, int y) {
+static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int size, Image* canvas, int x, int y, const Pixel color) {
 	f32 scale = stbtt_ScaleForPixelHeight(font, size);
 	int ascent, descent, linegap;
 	stbtt_GetFontVMetrics(font, &ascent, &descent, &linegap);
@@ -2280,7 +2274,7 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 
 	Image upscaled;
 	init_image(&upscaled, dim.w, dim.h, 1, 0x00000000);
-	render_text_to_image(font, str, upscaled_font_size, {.c=shadow_color}, &upscaled, 0, 0);
+	render_text_to_image(font, str, upscaled_font_size, &upscaled, 0, 0, {.c=shadow_color});
 
 	Image downscaled;
 	if((upscaled.w / upscale_factor) < max_width) {
@@ -2464,19 +2458,19 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 	static const char* BANNER_GRADIENT_FILE = "gfx/banner/gradient.png";
 	static const char* BANNER_SUBTITLE_FILE = "gfx/banner/subtitle.png";
 
-	static const int DATETIME_YPOS      = 15;
-	static const int DATETIME_FONT_SIZE = 40;
+	static const int BANNER_DATETIME_YPOS      = 15;
+	static const int BANNER_DATETIME_FONT_SIZE = 40;
 
-	static const int FORMAT_TEXT_WIDTH_MAX = 800; // Scale down the format string if longer than this.
-	static const int FORMAT_TEXT_FONT_SIZE = 44;
-	static const int FORMAT_TEXT_YPOS      = 88;
+	static const int BANNER_TITLE_WIDTH_MAX = 800; // Scale down the format string if longer than this.
+	static const int BANNER_TITLE_FONT_SIZE = 44;
+	static const int BANNER_TITLE_TEXT_YPOS = 88;
 
-	static const int SUBTITLE_FRAME_YPOS     = 118;
-	static const int SUBTITLE_TEXT_WIDTH_MAX = 640;
-	static const int SUBTITLE_TEXT_YPOS      = 138;
-	static const int SUBTITLE_TEXT_FONT_SIZE = 28;
+	static const int BANNER_SUBTITLE_FRAME_YPOS = 118;
+	static const int BANNER_SUBTITLE_WIDTH_MAX  = 640;
+	static const int BANNER_SUBTITLE_YPOS       = 138;
+	static const int BANNER_SUBTITLE_FONT_SIZE  = 28;
 
-	static const int PACK_DIVIDER_YPOS = 116; // Starting row to draw the divider between packs
+	static const int BANNER_PACK_DIVIDER_YPOS = 116; // Starting row to draw the divider between packs
 
 	Image banner;
 	init_image(&banner, BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
@@ -2519,10 +2513,10 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 		// Draw a thin line to separate each pack.
 		// FIXME: Replace this with a draw_rect function to avoid unnecessary heap allocations for each line.
 		Image line;
-		init_image(&line, 3, BANNER_IMAGE_HEIGHT-PACK_DIVIDER_YPOS, 4, 0xFF000000);
+		init_image(&line, 3, BANNER_IMAGE_HEIGHT-BANNER_PACK_DIVIDER_YPOS, 4, 0xFF000000);
 		SCOPE_EXIT(free(line.data));
 		for(int i = 1; i < 3; ++i) {
-			blit_RGBA_to_RGBA(&line, &banner, (i * PACK_IMAGE_WIDTH)-1, PACK_DIVIDER_YPOS);		
+			blit_RGBA_to_RGBA(&line, &banner, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);		
 		}
 	} else {
 		return {true, fmt::format("Internal error: Unexpected or unsupported pack count: {}", opts->images.size())};
@@ -2576,13 +2570,13 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 
 	// Blit the date/time text
 	{
-		Text_Dim dim = get_text_dimensions(&g_banner_font, DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
+		Text_Dim dim = get_text_dimensions(&g_banner_font, BANNER_DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
 		Image img;
 		init_image(&img, dim.w, dim.h, 1, 0x00000000);
 		SCOPE_EXIT(free(img.data));
-		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), DATETIME_FONT_SIZE, {.c=0xFFFFFFFF}, &img, 0, 0);
+		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), BANNER_DATETIME_FONT_SIZE, &img, 0, 0, {.c=0xFFFFFFFF});
 		if(img.w < (BANNER_IMAGE_WIDTH - 10)) {
-			blit_A8_to_RGBA(&img, img.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(img.w/2), DATETIME_YPOS);
+			blit_A8_to_RGBA(&img, img.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(img.w/2), BANNER_DATETIME_YPOS);
 		} else {
 			// Scale it to fit.
 			f32 ratio = ((f32)(BANNER_IMAGE_WIDTH-10) / dim.w);
@@ -2592,12 +2586,12 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 			SCOPE_EXIT(free(scaled.data));
 			stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
 			                        (u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_1CHANNEL);
-			blit_A8_to_RGBA(&scaled, scaled.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(scaled.w/2), DATETIME_YPOS);
+			blit_A8_to_RGBA(&scaled, scaled.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(scaled.w/2), BANNER_DATETIME_YPOS);
 		}
 	}
 	
 	// Blit the title text
-	draw_shadowed_text(&g_banner_font, FORMAT_TEXT_FONT_SIZE, FORMAT_TEXT_WIDTH_MAX, (const u8*)opts->title.c_str(), 0xFF000000, 0xFFFFFFFF, &banner, FORMAT_TEXT_YPOS);
+	draw_shadowed_text(&g_banner_font, BANNER_TITLE_FONT_SIZE, BANNER_TITLE_WIDTH_MAX, (const u8*)opts->title.c_str(), 0xFF000000, 0xFFFFFFFF, &banner, BANNER_TITLE_TEXT_YPOS);
 
 	if(opts->subtitle.length() > 0) {
 		// Blit the subtitle box
@@ -2607,7 +2601,7 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_SUBTITLE_FILE, stbi_failure_reason())};
 		}
 		SCOPE_EXIT(stbi_image_free(sub.data));
-		blit_A8_to_RGBA_no_alpha(&sub, sub.w, {.c=opts->league_color}, &banner, (BANNER_IMAGE_WIDTH/2)-(sub.w/2), SUBTITLE_FRAME_YPOS);
+		blit_A8_to_RGBA_no_alpha(&sub, sub.w, {.c=opts->league_color}, &banner, (BANNER_IMAGE_WIDTH/2)-(sub.w/2), BANNER_SUBTITLE_FRAME_YPOS);
 		// Blit the devotion/hero/etc. icon
 		const Icon* icon = get_icon(opts->draft_type);
 		if(icon != NULL) {
@@ -2622,7 +2616,7 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 		}
 
 		// Draw the subtitle text
-		draw_shadowed_text(&g_banner_font, SUBTITLE_TEXT_FONT_SIZE, SUBTITLE_TEXT_WIDTH_MAX, (const u8*)opts->subtitle.c_str(), 0xFF000000, 0xFF04CDFF, &banner, SUBTITLE_TEXT_YPOS);
+		draw_shadowed_text(&g_banner_font, BANNER_SUBTITLE_FONT_SIZE, BANNER_SUBTITLE_WIDTH_MAX, (const u8*)opts->subtitle.c_str(), 0xFF000000, 0xFF04CDFF, &banner, BANNER_SUBTITLE_YPOS);
 	}
 
 	// Save the file
@@ -3485,7 +3479,9 @@ int main(int argc, char* argv[]) {
     (void)signal(SIGABRT, sig_handler);
     (void)signal(SIGHUP,  sig_handler);
     (void)signal(SIGTERM, sig_handler);
-    (void)signal(SIGKILL, sig_handler);
+    // NOTE: SIGKILL is uncatchable
+
+	mysql_library_init(0, NULL, NULL);
 
 	srand(time(NULL));
 
@@ -3501,7 +3497,7 @@ int main(int argc, char* argv[]) {
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
 	log(LOG_LEVEL_INFO, "Downloading IANA time zone database.");
-	const std::string tz_version = date::remote_version();
+	const std::string tz_version = date::remote_version(); // FIXME?: Valgrind says this leaks...
 	(void)date::remote_download(tz_version);
 	(void)date::remote_install(tz_version);
 
@@ -3586,11 +3582,13 @@ int main(int argc, char* argv[]) {
 		// We only want to re-create the slash commands when the bot is first started, not when Discord reconnects a guild, so check if we've already created the slash commands on this execution.
 		if(g_commands_registered == false) {
 			// Create slash commands
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("cpu_burner", "Create banner art for every set that has >= 3 images.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif // DEBUG
 			{
 				dpp::slashcommand cmd("banner", "Create a banner image for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3711,6 +3709,7 @@ int main(int argc, char* argv[]) {
 		const auto command_name = event.command.get_command_name();
 		const auto guild_id = event.command.get_guild().id;
 
+#ifdef DEBUG
 		if(command_name == "cpu_burner") {
 			event.reply("Here we go!");
 			Banner_Opts opts;
@@ -3739,17 +3738,20 @@ int main(int argc, char* argv[]) {
 				}
 			}
 		} else
+#endif // DEBUG
 		if(command_name == "banner") {
 			Banner_Opts opts;
 			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
 
 			// Required options
-			auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
-			const XDHS_League* league = get_league_from_draft_code(draft_code.c_str());
-			if(league == NULL) {
+			auto draft_code_str = std::get<std::string>(event.get_parameter("draft_code"));
+			Draft_Code draft_code;
+			if(parse_draft_code(draft_code_str.c_str(), &draft_code) == false) {
 				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus.");
 				return;
 			}
+
+			const XDHS_League* league = draft_code.league;
 
 			// Swap bytes so to the color format used by the blit_ functions.
 			opts.league_color = (0xFF << 24) |
@@ -3814,7 +3816,7 @@ int main(int argc, char* argv[]) {
 				} break;
 			}
 
-			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league->id)), draft_code, format);
+			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league->id)), draft_code_str, format);
 			
 			// Optional options
 			{
@@ -3901,21 +3903,23 @@ int main(int argc, char* argv[]) {
 
 			dpp::message message;
 			message.set_content(fmt::format(":hourglass_flowing_sand: {} ms", elapsed.count()));
-			message.add_file(fmt::format("{} - {}.png", draft_code, format), dpp::utility::read_file(result.path));
+			message.add_file(fmt::format("{} - {}.png", draft_code_str, format), dpp::utility::read_file(result.path));
 			event.edit_response(message);
 		} else
 		if(command_name == "create_draft") {
 			Draft_Event draft_event;
 
 			// Required options
-			auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
+			auto draft_code_str = std::get<std::string>(event.get_parameter("draft_code"));
 			// First, check if the draft code is valid and if it is get a copy of the XDHS_League it applies to.
-			const XDHS_League* league = get_league_from_draft_code(draft_code.c_str());
-			if(league == NULL) {
+			Draft_Code draft_code;
+			if(parse_draft_code(draft_code_str.c_str(), &draft_code) == false) {
 				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\tSS is the season\n\tW is the week in the season\n\tR is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\tT is the league type: (C)hrono or (B)onus.");
 				return;
 			}
-			strcpy(draft_event.draft_code, draft_code.c_str());
+			strcpy(draft_event.draft_code, draft_code_str.c_str());
+
+			const XDHS_League* league = draft_code.league;
 
 			strcpy(draft_event.league_name, to_cstring(league->id));
 
@@ -4108,7 +4112,7 @@ int main(int argc, char* argv[]) {
 			// Add the event to the database.
 			if(database_add_draft(guild_id, &draft_event) == true) {
 				const dpp::user& issuing_user = event.command.get_issuing_user();
-				event.reply(fmt::format("{} created {}. Use ``/post_draft`` to post it.", issuing_user.global_name, draft_code));
+				event.reply(fmt::format("{} created {}. Use ``/post_draft`` to post it.", issuing_user.global_name, draft_code_str));
 			} else {
 				event.reply(fmt::format("⚠️ There was an error saving the details of the draft to the database. This is not your fault! Please try again, but in the meantime <@{}> has been alerted.", TANDEM_DISCORD_ID));
 				log(LOG_LEVEL_ERROR, "Adding draft to database failed.");
@@ -4224,23 +4228,28 @@ int main(int argc, char* argv[]) {
 			// TODO: Create a role with the draft_code as it's name and add everyone to it. Do the same for each Pod
 			const auto guild_id = event.command.get_guild().id;
 
-			// TODO: Use new parse_draft_code
-			const XDHS_League* league = get_league_from_draft_code(g_current_draft_code.c_str());
+			Draft_Code draft_code;
+			(void)parse_draft_code(g_current_draft_code.c_str(), &draft_code);
+			const XDHS_League* league = draft_code.league;
 			char league_code[3];
-			make_2_digit_league_code(league, league_code);
+			league_code[0] = league->region_code;
+			league_code[1] = league->league_type;
+			league_code[2] = 0;
+
 			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code);
 			if(sign_ups != true) {
-				log(LOG_LEVEL_ERROR, "database_get_sign_ups failed");
+				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s) failed", guild_id, g_current_draft_code, league_code);
+				event.reply("Internal error: A database query has failed. This is not your fault! Please try again.");
 				return;
 			}	
 
 			if(sign_ups.count < POD_SEATS_MIN) {
-				event.reply(fmt::format("At least {} players needed. Use /add_player.", POD_SEATS_MIN));
+				event.reply(fmt::format("At least {} players needed. Recruit more players and use /add_player to add them to the sign up list.", POD_SEATS_MIN));
 				return;
 			}
 
 			if((sign_ups.count % 2) == 1) {
-				event.reply("Odd number of sign ups. Use /add_player or /remove_player.");
+				event.reply("Odd number of sign ups. Recruit more players and use /add_player or /remove_player.");
 				return;
 			}
 
@@ -4257,6 +4266,15 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
+/* Pod Priority Rules
+#1: The host of that pod - If the only available hosts (@XDHS Team members and @Hosts) are both in the leaderboard Top 3, the lowest-ranked host will host Pod 2.
+#2: Players who are required to play in that pod via the Rule of 3 or Extended Rule of 3
+#3: Players with "Shark" status for the current Season (must play in pod 1)
+#4: New XDHS players and Goblins (1-4 drafts played) have priority for Pod 2
+#5: Players who reacted with their preferred emoji ( :Pod1~1:  or :Pod2~1: ) in #-pre-register
+#6: Players who didn't react in #-pre-register (first among these to join the draft table on XMage gets the spot)
+The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
+*/
 
 			std::string all_sign_ups;
 			all_sign_ups += "#,id,name,status,time,rank,is_shark,points,devotion,win_rate\n";
@@ -4349,15 +4367,6 @@ int main(int argc, char* argv[]) {
 			}
 #endif
 
-/* Pod Priority Rules
-#1: The host of that pod - If the only available hosts (@XDHS Team members and @Hosts) are both in the leaderboard Top 3, the lowest-ranked host will host Pod 2.
-#2: Players who are required to play in that pod via the Rule of 3
-#3: Players with "Shark" status for the current Season (must play in pod 1)
-#4: New XDHS players and Goblins (1-4 drafts played) have priority for Pod 2
-#5: Players who reacted with their preferred emoji ( :Pod1~1:  or :Pod2~1: ) in #-pre-register
-#6: Players who didn't react in #-pre-register (first among these to join the draft table on XMage gets the spot)
-The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
-*/
 
 			// Create a message to tell everyone their allocation, and then create threads for each pod.
 			// Reference: bot.thread_create_with_message("123P-C", IN_THE_MOMENT_DRAFT_CHANNEL_ID, 1090316907871211561, 1440, 0, [&bot](const dpp::confirmation_callback_t& event) {
@@ -4646,6 +4655,13 @@ The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
     while(g_quit == false) {
         sleep(1);
     }
+
+	bot.shutdown();
+
+	mysql_library_end();
+
+
+	log(LOG_LEVEL_INFO, "Exiting");
 
     return g_exit_code;
 }

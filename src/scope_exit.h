@@ -17,6 +17,6 @@ ScopeExit<F> MakeScopeExit(F f) {
 }
 #define SCOPE_EXIT_JOIN_STRING_2(arg1, arg2) SCOPE_EXIT_DO_JOIN_STRING_2(arg1, arg2)
 #define SCOPE_EXIT_DO_JOIN_STRING_2(arg1, arg2) arg1 ## arg2
-#define SCOPE_EXIT(code) auto SCOPE_EXIT_JOIN_STRING_2(scope_exit_, __LINE__) = MakeScopeExit([=](){code;})
+#define SCOPE_EXIT(code) auto SCOPE_EXIT_JOIN_STRING_2(scope_exit_, __COUNTER__) = MakeScopeExit([=](){code;})
 
 #endif // SCOPE_EXIT_INCLUDED

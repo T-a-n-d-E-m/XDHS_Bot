@@ -23,6 +23,20 @@ struct config {
 #if defined(EVENTBOT)
 	char* xmage_server;
 #endif
+
+	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
+	// leak testing with Valgrind is easier if we free it ourselves.
+	~config() {
+		if(mysql_host != NULL)     free(mysql_host);
+		if(mysql_username != NULL) free(mysql_username);
+		if(mysql_password != NULL) free(mysql_password);
+		if(logfile_path != NULL)   free(logfile_path);
+		if(discord_token != NULL)  free(discord_token);
+#if defined(BADGEBOT_BOT)
+		if(imgur_client_secret != NULL) free(imgur_client_secret);
+#endif
+		if(xmage_server != NULL)   free(xmage_server);
+	}
 } g_config;
 
 
