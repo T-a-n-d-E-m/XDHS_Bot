@@ -23,11 +23,13 @@
 // 
 // For more information, please refer to <http://unlicense.org/>
 
-// TODO: Cleanup inconsistent use of char* and std::string in database functions.
-// TODO: All the blit_ functions can be rewritten to use SIMD ops
 // FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
-// TODO: Alert hosts when a drafter is a first time player
-// TODO: Get rid of all asserts - can't have the bot going offline, ever
+// TODO: Get rid of all asserts - can't have the bot going offline, ever!
+// TODO: Cleanup inconsistent use of char* and std::string in database functions.
+// TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
+// TODO: Thread pools for database connections
+// TODO: All the blit_ functions can be rewritten to use SIMD ops
+// TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 
 // C libraries
 #include <alloca.h>
@@ -39,7 +41,6 @@
 
 // C++ libraries
 #include <cinttypes>
-#include <iostream> // TESTING ONLY - REMOVE!
 
 // System libraries
 #include <curl/curl.h>
@@ -517,7 +518,7 @@ static const void expand_set_list(const char* set_codes, const size_t len, char*
 	memcpy(str, set_codes, len+1);
 	char* str_ptr = str;
 
-	char token[128]; // FIXME: A malicious or careless user could overflow this...
+	char token[256]; // FIXME: A malicious or careless user could overflow this...
 	char* token_ptr = token;
 
 	int token_count = 0;
@@ -804,7 +805,7 @@ static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
 	if(draft_code == NULL) return false;
 	const size_t len = strlen(draft_code);
 	if(len > DRAFT_CODE_LENGTH_MAX) return false;
-	char str[DRAFT_CODE_LENGTH_MAX]; // Mutable copy
+	char str[DRAFT_CODE_LENGTH_MAX+1]; // Mutable copy
 	memcpy(str, draft_code, len);
 
 	char* start = str;
@@ -814,17 +815,19 @@ static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
 	while(isdigit(*end)) end++;
 	if(*end != '.') return false;
 	*end = 0;
+	if(strlen(start) == 0) return false;
 	if(strlen(start) > 3) return false;
 	out->season = strtol(start, NULL, 10);
-	start = end++;
+	start = ++end;
 
 	// Week
 	while(isdigit(*end)) end++;
 	if(*end != '-') return false;
 	*end = 0;
+	if(strlen(start) == 0) return false;
 	if(strlen(start) > 2) return false;
 	out->week = strtol(start, NULL, 10);
-	start = end++;
+	end++;
 
 	const char region_code = *end++;
 	const char league_type = *end;
@@ -1041,7 +1044,9 @@ static_assert(std::is_trivially_copyable<Draft_Event>(), "struct Draft_Event is 
 
 
 enum POD_ALLOCATION_REASON {
-	POD_ALLOCATION_REASON_INVALID,
+	POD_ALLOCATION_REASON_UNALLOCATED,
+
+	POD_ALLOCATION_REASON_SINGLE_POD, // Only enough players for a single pod
 
 	POD_ALLOCATION_REASON_HOST,
 	POD_ALLOCATION_REASON_RO3,
@@ -1050,14 +1055,26 @@ enum POD_ALLOCATION_REASON {
 	POD_ALLOCATION_REASON_SHARK,
 	POD_ALLOCATION_REASON_NEWBIE, // Members with < 4 drafts player get priority for pod 2
 	POD_ALLOCATION_PREFERENCE,
-	POD_ALLOCATION_RANDOM
+	POD_ALLOCATION_RANDOM // Flexible players are randomly assigned to whatever empty seats are left
 };
 
-struct Pod_Player {
-	u64 member_id;
-	POD_ALLOCATION_REASON reason;
-	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
-};
+static const char* emoji_for_reason(POD_ALLOCATION_REASON r) {
+	switch(r) {
+		case POD_ALLOCATION_REASON_UNALLOCATED: return ":grey_question:"; // Should never happen
+		case POD_ALLOCATION_REASON_SINGLE_POD:  return ":one:";
+		case POD_ALLOCATION_REASON_HOST:        return ":tophat:";
+		case POD_ALLOCATION_REASON_RO3:         return ":three:";
+		case POD_ALLOCATION_REASON_ERO3:        return ":three:";
+		case POD_ALLOCATION_REASON_CONTENTION:  return ":trophy:";
+		case POD_ALLOCATION_REASON_SHARK:       return ":shark:";
+		case POD_ALLOCATION_REASON_NEWBIE:      return ":new:";
+		case POD_ALLOCATION_PREFERENCE:         return ":ballot_box_with_check:";
+		case POD_ALLOCATION_RANDOM:             return ":game_die:";
+		default:
+			break;
+	}
+	return NULL;
+}
 
 // Our drafts can have no fewer seats than this.
 static const int POD_SEATS_MIN = 6;
@@ -1071,38 +1088,86 @@ static const int PODS_MAX = 8;
 // The maximum number of players this bot can handle in a single tournament.
 static const int PLAYERS_MAX = 64;
 
-struct Table {
+struct Pod_Player {
+	POD_ALLOCATION_REASON reason;
+	u64 member_id;
+	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
+};
+static_assert(std::is_trivially_copyable<Pod_Player>(), "struct Draft_Event is not trivially copyable");
+
+struct Draft_Pod {
 	int seats; // How many seats at this table. Either 6, 8 or 10
+	int count; // How many seats have been filled with Pod_Players
 	Pod_Player players[POD_SEATS_MAX];
 };
 
-static void add_player_to_pod(Table* pod, const Pod_Player* player) {
-	memcpy((void*)&pod->players[pod->seats], player, sizeof(Pod_Player));
-	++pod->seats;
+static bool pod_is_full(Draft_Pod* pod) {
+	return pod->seats == pod->count;
 }
 
-struct Draft_Pods {
-	Draft_Pods() {
-		memset(this, 0, sizeof(Draft_Pods));
+struct Draft_Tournament {
+	Draft_Tournament() {
+		memset(this, 0, sizeof(Draft_Tournament));
 	}
 
-	int table_count; // Total number of tables.
-	Table tables[PODS_MAX];
+	int pod_count;
+	Draft_Pod pods[PODS_MAX];
 };
+
+static Draft_Pod* get_next_empty_draft_pod_high(Draft_Tournament* tournament) {
+	for(int i = 0; i < tournament->pod_count; ++i) {
+		Draft_Pod* pod = &tournament->pods[i];
+		if(pod_is_full(pod) == false) {
+			return pod;
+		}
+	}
+	return NULL;
+}
+
+static Draft_Pod* get_next_empty_draft_pod_low(Draft_Tournament* tournament) {
+	for(int i = tournament->pod_count - 1; i >= 0; i--) {
+		Draft_Pod* pod = &tournament->pods[i];
+		if(pod_is_full(pod) == false) {
+			return pod;
+		}
+	}
+	return NULL;
+}
+
+static Draft_Pod* get_random_empty_draft_pod(Draft_Tournament* tournament) {
+	// FIXME: This is a really bad way of doing this but  I just need something that works for now...
+	// FIXME: This could infinite loop if no pod is available.
+	while(true) {
+		int i = rand() % tournament->pod_count;
+		Draft_Pod* pod = &tournament->pods[i];
+		if(pod_is_full(pod) == false) {
+			return pod;
+		}
+	}
+}
+
+static void add_player_to_pod(Draft_Pod* pod, u64 member_id, POD_ALLOCATION_REASON reason, const char* preferred_name) {
+	// FIXME: Check capacity
+	Pod_Player* player = &pod->players[pod->count++];
+	player->reason = reason;
+	player->member_id = member_id;
+	strcpy(player->preferred_name, preferred_name);
+}
 
 // With player_count players, how many pods should be created?
 // Reference: https://i.imgur.com/tpNo13G.png
 // TODO: This needs to support a player_count of any size
 // FIXME: Brute forcing this is silly, but as I write this I can't work out the function to calculate the correct number of seats...
-static Draft_Pods allocate_pod_seats(int player_count) {
+static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 	// Round up player count to even number.
 	if((player_count % 2) == 1) player_count++;
 
 	// As we only need to consider an even number of players, we can halve the player count and use it as an array index.
 	player_count /= 2;
-	static const int tables_needed_for_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8}; 
+	//                                   Player count: 0 2 4 6 8 10 ...
+	static const int pods_needed_for_player_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8}; 
 
-	static const int seats_per_table[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
+	static const int seats_per_pod[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  0
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  2
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  4
@@ -1138,13 +1203,20 @@ static Draft_Pods allocate_pod_seats(int player_count) {
 		{ 8, 8, 8, 8, 8, 8, 8, 8}, // 64
 	};
 
-	Draft_Pods result;
-	result.table_count = tables_needed_for_count[player_count];
-	for(int table = 0; table < result.table_count; ++table) {
-		result.tables[table].seats = seats_per_table[player_count][table];
+	Draft_Tournament tournament;
+	tournament.pod_count = pods_needed_for_player_count[player_count];
+	for(int p = 0; p < tournament.pod_count; ++p) {
+		Draft_Pod* pod = &tournament.pods[p];
+		pod->seats = seats_per_pod[player_count][p];
+		pod->count = 0;
+		for(int s = 0; s < pod->seats; ++s) {
+			pod->players[s].reason = POD_ALLOCATION_REASON_UNALLOCATED;
+			pod->players[s].member_id = 0;
+			pod->players[s].preferred_name[0] = 0;
+		}
 	}
 
-	return result;
+	return tournament;
 }
 
 // All database_xxxx functions return this struct. If the member variable success is true value will contain the requested data and count will be the number of rows returned.
@@ -1576,12 +1648,12 @@ struct Draft_Sign_Up {
 	f32 win_rate;
 
 	bool is_host; // NOTE: Not written to by a database query - set elsewhere.
-	bool allocated; // Player has been allocated to a pod.
+	POD_ALLOCATION_REASON reason;
 };
 
-static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league) {
+// TODO: This function needs a more accurate name
+static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
 	MYSQL_CONNECT();
-	// TODO: This needs to know the season!
 	static const char* query = R"(
 		SELECT
 			draft_signups.member_id,
@@ -1594,7 +1666,7 @@ static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(c
 			devotion.value AS devotion,
 			win_rate_recent.overall AS win_rate
 		FROM draft_signups
-		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? -- League code from spread: PC, AC, EB etc 
+		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? AND leaderboards.season=?-- League code from spreadsheet: PC, AC, EB etc 
 		LEFT JOIN shark ON draft_signups.member_id=shark.id
 		LEFT JOIN devotion ON draft_signups.member_id=devotion.id
 		LEFT JOIN win_rate_recent ON draft_signups.member_id=win_rate_recent.id
@@ -1602,13 +1674,15 @@ static const Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(c
 			draft_signups.guild_id=?
 		AND
 			draft_signups.draft_code=?
+		ORDER BY draft_signups.time
 		;)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
@@ -1989,7 +2063,8 @@ struct Image {
 	void* data;
 };
 
-void init_image(Image* img, int width, int height, int channels, u32 color) {
+// TODO: Return a point to img or NULL if failed
+static void init_image(Image* img, int width, int height, int channels, u32 color) {
 	img->data = malloc(width * height * channels);// sizeof(Pixel));
 	if(img->data == NULL) {
 		// FIXME: Failing to allocate is possibly a real problem on the virtual server this runs on...
@@ -2005,6 +2080,7 @@ void init_image(Image* img, int width, int height, int channels, u32 color) {
 	img->h = height;
 
 	// TODO: Do I need to support 3 channel images here? Probably not...
+	// TODO: This should be moved to it's own function
 	if(channels == 4) {
 		Pixel* ptr = (Pixel*)img->data;
 		for(int i = 0; i < (width * height); ++i) {
@@ -3211,7 +3287,7 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 // Users on Discord have two names per guild: Their global name or an optional per-guild nickname.
 static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
 	std::string preferred_name;
-	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
+	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // FIXME: This can throw!
 	const std::string nickname = member.get_nickname();
 	if(nickname.length() > 0) {
 		preferred_name = nickname;
@@ -3437,18 +3513,6 @@ static std::vector<std::string> get_pack_images(const char* format) {
 
 
 int main(int argc, char* argv[]) {
-#if 0
-	// Verify the allocate_pod_seats() function is doing the right thing.
-	for(int i = 6; i < 66; i+=2) {
-		Draft_Pods pods = allocate_pod_seats(i);
-		int sum = 0;
-		for(int j = 0; j < pods.table_count; ++j) {
-			sum += pods.tables[j].seats;
-		}
-		if(sum != i) fprintf(stdout, "ERROR: %d has %d seats\n", i, sum);
-	}
-#endif
-
 	if(argc > 1) {
 		if(strcmp(argv[1], "-sql") == 0) {
 			// Dump SQL schema to stdout and return.
@@ -4225,23 +4289,43 @@ int main(int argc, char* argv[]) {
 			event.reply(fmt::format("{} removed from {}.", preferred_name, g_current_draft_code));
 		} else
 		if(command_name == "post_allocations") {
+			if(g_current_draft_code.length() == 0) {
+				event.reply(dpp::message{"No active draft"}.set_flags(dpp::m_ephemeral));
+				return;
+			}
+
 			// TODO: Create a role with the draft_code as it's name and add everyone to it. Do the same for each Pod
 			const auto guild_id = event.command.get_guild().id;
 
 			Draft_Code draft_code;
-			(void)parse_draft_code(g_current_draft_code.c_str(), &draft_code);
+			// TESTING: A bad draft code should be impossible at this point...
+			bool parse_result = parse_draft_code(g_current_draft_code.c_str(), &draft_code);
+			if(parse_result == false) {
+				log(LOG_LEVEL_ERROR, "Error parsing draft code");
+				return;
+			}
+
 			const XDHS_League* league = draft_code.league;
 			char league_code[3];
 			league_code[0] = league->region_code;
 			league_code[1] = league->league_type;
 			league_code[2] = 0;
 
-			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code);
+			log(LOG_LEVEL_INFO, "Draft Code:%s season:%d week:%d league_code:%s",
+				g_current_draft_code.c_str(),
+				draft_code.season,
+				draft_code.week,
+				league_code
+				);
+
+			// TESTME: What happens on the first draft of the season and the leaderboard is empty?
+			// FIXME: Does this need to be a shared_ptr / on the heap? This function might exit before Discord can finish making all the pod roles and assigning members to them.
+			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code, draft_code.season);
 			if(sign_ups != true) {
-				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s) failed", guild_id, g_current_draft_code, league_code);
+				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s, %d) failed", guild_id, g_current_draft_code, league_code, draft_code.season);
 				event.reply("Internal error: A database query has failed. This is not your fault! Please try again.");
 				return;
-			}	
+			}
 
 			if(sign_ups.count < POD_SEATS_MIN) {
 				event.reply(fmt::format("At least {} players needed. Recruit more players and use /add_player to add them to the sign up list.", POD_SEATS_MIN));
@@ -4258,78 +4342,351 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
-			Draft_Pods pods = allocate_pod_seats(sign_ups.count);
+			// TODO: Can this be done by MySQL as part of the query?
+			for(auto& member : sign_ups.value) {
+				if(member.rank_is_null == true) {
+					member.rank = 9999;
+				}
+				if(member.is_shark_is_null == true) {
+					member.is_shark = false;
+				}
+				if(member.points_is_null == true) {
+					member.points = 0;
+				}
+				if(member.devotion_is_null == true) {
+					member.devotion = 0;
+				}
+				if(member.win_rate_is_null == true) {
+					member.win_rate = 0.0f;
+				}
+			}
 
-			if(pods.table_count == 0) {
+
+			// Mark all potential hosts and mark everyone as unallocated.
+			int host_count = 0;
+			for(size_t i = 0; i < sign_ups.value.size(); ++i) {
+				sign_ups.value[i].reason = POD_ALLOCATION_REASON_UNALLOCATED;
+				try {
+					const dpp::guild_member member = dpp::find_guild_member(guild_id, sign_ups.value[i].member_id);
+					const std::vector<dpp::snowflake> roles = member.get_roles();
+					for(const auto role : roles) {
+						if((role == XDHS_TEAM_ROLE_ID) || (role == XDHS_HOST_ROLE_ID)) {
+							sign_ups.value[i].is_host = true;
+							host_count++;
+						}
+					}
+				} catch(dpp::cache_exception& e) {
+					log(LOG_LEVEL_ERROR, "Caught exception: %s", e.what());
+				}
+			}
+
+			for(const auto& player : sign_ups.value) {
+				log(LOG_LEVEL_INFO, fmt::format("Player:{} status:{} rank:{} is_shark:{} points:{} devotion:{} win_rate:{}",
+					player.preferred_name, (int)player.status, player.rank, player.is_shark, player.points, player.devotion, player.win_rate).c_str());	
+			}
+
+			// FIXME: Does this need to be a shared_ptr / on the heap? This function might exit before Discord can finish making all the pod roles and assigning members to them.
+			Draft_Tournament tournament = set_up_pod_count_and_sizes(sign_ups.count);
+
+			if(tournament.pod_count == 0) {
 				// Shouldn't be possible with the above checks.
 				event.reply("Insufficient players to form a pod.");
 				return;
 			}
 
-/* Pod Priority Rules
-#1: The host of that pod - If the only available hosts (@XDHS Team members and @Hosts) are both in the leaderboard Top 3, the lowest-ranked host will host Pod 2.
-#2: Players who are required to play in that pod via the Rule of 3 or Extended Rule of 3
-#3: Players with "Shark" status for the current Season (must play in pod 1)
-#4: New XDHS players and Goblins (1-4 drafts played) have priority for Pod 2
-#5: Players who reacted with their preferred emoji ( :Pod1~1:  or :Pod2~1: ) in #-pre-register
-#6: Players who didn't react in #-pre-register (first among these to join the draft table on XMage gets the spot)
-The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
-*/
+			/* Pod Priority Rules - https://discord.com/channels/528728694680715324/828170430040768523/828197583255765043
+				#1: The host of that pod - If the only available hosts (@XDHS Team members and @Hosts) are both in the leaderboard Top 3, the lowest-ranked host will host Pod 2.
+				#2: Players who are required to play in that pod via the Rule of 3 or Extended Rule of 3
+				For the last draft of the season, any player who is mathematically live for Top 3 after final draft points are scored must play in Pod 1.
+				#3: Players with "Shark" status for the current Season (must play in pod 1)
+				#4: New XDHS players and Goblins (1-4 drafts played) have priority for Pod 2
+				#5: Players who reacted with their preferred emoji ( :Pod1~1:  or :Pod2~1: ) in #-pre-register
+				#6: Players who didn't react in #-pre-register (first among these to join the draft table on XMage gets the spot)
+				
+				The tiebreaker for #3/4/5 is determined by the order output from the randomizer. NOTE: This is not how it is done here. Instead we use sign up time - first in, first served!
+			 */
 
-			std::string all_sign_ups;
-			all_sign_ups += "#,id,name,status,time,rank,is_shark,points,devotion,win_rate\n";
-			for(u64 player = 0; player < sign_ups.count; ++player) {
-				all_sign_ups += fmt::format("{},<@{}>,{},{},{},{},{},{},{},{}\n",
-					(player+1),
-					sign_ups.value[player].member_id,
-					sign_ups.value[player].preferred_name,
-					(int)sign_ups.value[player].status,
-					sign_ups.value[player].time,
-					(sign_ups.value[player].rank_is_null == true ? 0 : sign_ups.value[player].rank),
-					(sign_ups.value[player].is_shark_is_null == true ? 0 : sign_ups.value[player].is_shark),
-					(sign_ups.value[player].points_is_null == true ? -1 : sign_ups.value[player].points),
-					(sign_ups.value[player].devotion_is_null == true ? 0 : sign_ups.value[player].devotion),
-					(sign_ups.value[player].win_rate_is_null == true ? 0.0f : sign_ups.value[player].win_rate)
-					);
+			/* Assigning hosts
+
+			Allocate everyone to a pod.
+
+			Check that each pod has at least one host assigned.
+			If not, for each pod > 1 without a host, look back through the pods looking for a pod with more than 1 host. Sort the hosts in that pod based on their requirements to be in the pod (Ro3, Sharks etc) and swap the host with the lowest priority and win rate with the player with the highest win rate.
+
+			If no suitable host is found, the draft organizer will have to nominate a temporary host.
+
+			We probably want to work out each players players pod placement and then try to allocate the best host from there, right? Like if someone is a shark or has a Ro3 placement the should host pod 1, whereas someone not in contention for a place on the leaderboard would be better in Pod 2, even if that's not their preference...
+
+			*/
+
+			log(LOG_LEVEL_INFO, "%d pods", tournament.pod_count);
+
+			if(tournament.pod_count == 1) {
+				// Easiest case - Only a single pod. Just add everyone to pod 1.
+				for(auto& player : sign_ups.value) {
+					player.reason = POD_ALLOCATION_REASON_SINGLE_POD;
+					add_player_to_pod(&tournament.pods[0], player.member_id, POD_ALLOCATION_REASON_SINGLE_POD, player.preferred_name);
+				}
+			} else {
+
+				static const int RULE_OF_THREE_START_WEEK = 3;
+				static const int EXTENDED_RULE_OF_THREE_START_WEEK = 6;
+				static const int WEEKS_IN_CURRENT_SEASON = 9; // TODO: Get this from the spreadsheet
+
+				if(draft_code.week < RULE_OF_THREE_START_WEEK) {
+					// No Rule of Three, nothing to do here.
+					log(LOG_LEVEL_INFO, "Week: %d, no Rule of Three", draft_code.week);
+				} else
+				if(draft_code.week >= RULE_OF_THREE_START_WEEK && draft_code.week < EXTENDED_RULE_OF_THREE_START_WEEK) {
+					// Rule of Three
+					log(LOG_LEVEL_INFO, "Week: %d, Rule of Three", draft_code.week);
+
+					for(auto& player : sign_ups.value) {
+						if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.rank <= 3) {
+							player.reason = POD_ALLOCATION_REASON_RO3;
+
+							add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+						}
+					}
+				} else
+				if(draft_code.week >= EXTENDED_RULE_OF_THREE_START_WEEK && draft_code.week != WEEKS_IN_CURRENT_SEASON) {
+					// Extended Rule of Three
+					log(LOG_LEVEL_INFO, "Week: %d, Extended Rule of Three", draft_code.week);
+
+					// Find the score of the player ranked 3rd.
+					int point_threshold = -9999;
+					for(auto& player : sign_ups.value) {
+						if(player.rank == 3) {
+							point_threshold = player.points;
+							break;
+						}
+					}
+
+					for(auto& player : sign_ups.value) {
+						if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.points >= point_threshold) {
+							player.reason = POD_ALLOCATION_REASON_ERO3;
+
+							add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+						}
+					}
+				} else {
+					// Last draft of the season. Everyone in contention for a trophy must be in pod 1.
+					log(LOG_LEVEL_INFO, "Week: %d, Last draft of the season", draft_code.week);
+
+					// Find the points for third place
+					int point_threshold = -9999;
+					for(auto& player : sign_ups.value) {
+						if(player.rank == 3) {
+							point_threshold = player.points;
+							break;
+						}
+					}
+
+					for(auto& player : sign_ups.value) {
+						// FIXME: This can be compressed to a group of ||'s, but for testing I'm expanding it to individual ifs
+						// NOTE: If sign_ups is sorted by rank, as soon as we hit a player where +9 to their score doesn't put them in third place we can stop.
+						if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED) {
+							if(player.points + 0 >= point_threshold) {
+								player.reason = POD_ALLOCATION_REASON_CONTENTION;
+								add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+							} else
+							if(player.points + 3 >= point_threshold) {
+								player.reason = POD_ALLOCATION_REASON_CONTENTION;
+								add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+							} else
+							if(player.points + 6 >= point_threshold) {
+								player.reason = POD_ALLOCATION_REASON_CONTENTION;
+								add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+							} else
+							if(player.points + 9 >= point_threshold) {
+								player.reason = POD_ALLOCATION_REASON_CONTENTION;
+								add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+							}
+						}
+					}
+				}
+
+				// Sharks
+				for(auto& player : sign_ups.value) {
+					if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.is_shark == true) {
+						player.reason = POD_ALLOCATION_REASON_SHARK;
+						add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+					}
+				}
+
+				// At this point we have marked all people who should be in Pod 1. Find and assign hosts for all pods.
+
+				// Anyone with devotion <= 4 and status == CASUAL has pod 2+ priority
+				for(auto& player : sign_ups.value) {
+					if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.devotion <= 4 && player.status == SIGNUP_STATUS_CASUAL) {
+						player.reason = POD_ALLOCATION_REASON_NEWBIE;
+						add_player_to_pod(get_next_empty_draft_pod_low(&tournament), player.member_id, player.reason, player.preferred_name);
+					}
+				}
+
+				// Try to give COMPETITIVE and CASUAL players their preferred pod.
+				for(auto& player : sign_ups.value) {
+					if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.status == SIGNUP_STATUS_COMPETITIVE) {
+						player.reason = POD_ALLOCATION_PREFERENCE;
+						add_player_to_pod(get_next_empty_draft_pod_high(&tournament), player.member_id, player.reason, player.preferred_name);
+					} else
+					if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.status == SIGNUP_STATUS_CASUAL) {
+						player.reason = POD_ALLOCATION_PREFERENCE;
+						add_player_to_pod(get_next_empty_draft_pod_low(&tournament), player.member_id, player.reason, player.preferred_name);
+					}
+				}
+
+				// Randomly assign FLEXIBLE players to whatever seats are available.
+				for(auto& player : sign_ups.value) {
+					if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.status == SIGNUP_STATUS_FLEXIBLE) {
+						player.reason = POD_ALLOCATION_RANDOM;
+						add_player_to_pod(get_random_empty_draft_pod(&tournament), player.member_id, player.reason, player.preferred_name);
+					}
+				}
 
 			}
-			log(LOG_LEVEL_INFO, all_sign_ups.c_str());
-			event.reply(all_sign_ups);
 
-			// Create a role that contains everyone in this pod.
+			// Check that all players have been allocated somewhere.
+			for(auto& player : sign_ups.value) {
+				if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED) {
+					log(LOG_LEVEL_ERROR, "Player %s has not been allocated to a pod", player.preferred_name);
+				} else {
+					log(LOG_LEVEL_INFO, "Player %s reason: %s", player.preferred_name, emoji_for_reason(player.reason));
+				}
+			}
+
+			// Check that each pod has all seats filled
+			for(int p = 0; p < tournament.pod_count; ++p) {
+				const Draft_Pod *pod = &tournament.pods[p];
+				if(pod->seats != pod->count) {
+					log(LOG_LEVEL_ERROR, "Pod %d has %d empty seats", p, pod->seats - pod->count);
+				} else {
+					// Verify each seat has a valid player
+					for(int s = 0; s < pod->seats; ++s) {
+						if(pod->players[s].reason == POD_ALLOCATION_REASON_UNALLOCATED) {
+							log(LOG_LEVEL_ERROR, "Pod %d seat %d is unallocated", p, s);
+						}
+					}
+				}
+			}
+
+			std::string pod_allocations[PODS_MAX];
+			for(int p = 0; p < tournament.pod_count; ++p) {
+				pod_allocations[p] += fmt::format("## Pod {} Allocations:\n", p+1);	
+				const Draft_Pod* pod = &tournament.pods[p];
+				for(int s = 0; s < pod->seats; ++s) {
+					// TODO: These need to be pings
+					pod_allocations[p] += fmt::format("  {} <@{}>\n", emoji_for_reason(pod->players[s].reason), pod->players[s].member_id);
+				}
+			}
+
 			// TODO: In case this isn't the first invocation of post_allocations we need a way
 			// to clear old roles and recreate them...
-			// Create a role with everyone in this draft.
-			dpp::role role;
-			role.set_guild_id(guild_id);
-			role.set_name(g_current_draft_code);
-			role.set_color(league->color);
-			bot.role_create(role, [&bot, guild_id, sign_ups](const dpp::confirmation_callback_t& callback) {
+
+			dpp::message message;
+			message.set_content(fmt::format("# Pod allocations for {}\nPlease click into your assigned pod thread.", g_current_draft_code.c_str()));
+			event.reply(message);
+
+			// Create a role with the same name as the draft code and add every sign up to it. This allows hosts to ping everyone all at once, if necessary.
+			dpp::role draft_role;
+			draft_role.set_guild_id(guild_id);
+			draft_role.set_name("current draft");
+			draft_role.set_color(league->color);
+			bot.role_create(draft_role, [&bot, guild_id, tournament, league, sign_ups, pod_allocations](const dpp::confirmation_callback_t& callback) {
 				if(!callback.is_error()) {
-					dpp::role role = std::get<dpp::role>(callback.value);
-					const auto result = database_add_temp_role(guild_id, g_current_draft_code.c_str(), role.id);
+					// FIXME: Do we need to store the roles in the database? Can't we simply delete all roles that start with a draft code or something?
+					dpp::role draft_role = std::get<dpp::role>(callback.value);
+					const auto result = database_add_temp_role(guild_id, g_current_draft_code.c_str(), draft_role.id);
 					if(result == true) {
-						for(u64 i = 0; i < sign_ups.count; ++i) {
-							// Give each sign up this role.
-							u64 member_id = sign_ups.value[i].member_id;
-							u64 role_id = role.id;
-							dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // TODO: This can throw exceptions!
-							std::vector<dpp::snowflake> roles = member.get_roles();
-							roles.push_back(role_id);
-							member.set_roles(roles);
-							bot.guild_edit_member(member, [&bot, guild_id, member_id, role_id](const dpp::confirmation_callback_t& callback){
+						for(int P = 0; P < tournament.pod_count; ++P) {
+							// Create a role for this pod
+							dpp::role pod_role;
+							pod_role.set_guild_id(guild_id);
+							pod_role.set_name(fmt::format("Pod-{}", P+1));
+							pod_role.set_color(league->color);
+							bot.role_create(pod_role, [&bot, draft_role, guild_id, tournament, P](const dpp::confirmation_callback_t& callback) {
 								if(!callback.is_error()) {
-									auto result = database_add_temp_member_role(guild_id, member_id, role_id);
+									dpp::role pod_role = std::get<dpp::role>(callback.value);
+									// TODO: Add temp role to database
+									const auto result = database_add_temp_role(guild_id, g_current_draft_code.c_str(), pod_role.id);
 									if(result == true) {
-										log(LOG_LEVEL_INFO, "Added %lu to %lu", member_id, role_id);
+										// Give all members in this pod the draft_role and pod_role
+										const Draft_Pod* pod = &tournament.pods[P];
+										for(int player = 0; player < pod->count; ++player) {
+											u64 member_id = pod->players[player].member_id;
+											u64 draft_role_id = draft_role.id;
+											u64 pod_role_id = pod_role.id;
+											try {
+												dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
+												std::vector<dpp::snowflake> roles = member.get_roles();
+												roles.push_back(draft_role_id);
+												roles.push_back(pod_role_id);
+												member.set_roles(roles);
+												bot.guild_edit_member(member, [&bot, guild_id, member_id, draft_role_id, pod_role_id](const dpp::confirmation_callback_t& callback){
+													if(!callback.is_error()) {
+													} else {
+														// TODO: Log and report error
+													}
+												});
+											} catch(dpp::cache_exception& e) {
+												log(LOG_LEVEL_ERROR, "Caught exception: %s", e.what());
+											}
+
+										}
+									} else {
+										// TODO Log and report error
 									}
 								} else {
-									log(LOG_LEVEL_ERROR, "%s: guild_id:%lu member_id:%lu role_id:%lu",
-										callback.get_error().message.c_str(),
-										guild_id,
-										member_id,
-										role_id
-										);
+									// TODO: Log and report error
+								}
+							});
+
+							// First we need to create a message to attach the thread to.
+							dpp::message post;
+							post.set_type(dpp::message_type::mt_default);
+							post.set_guild_id(guild_id);
+							post.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+							post.set_allowed_mentions(true, true, true, false, {}, {});
+							post.set_content(pod_allocations[P]);
+							// TODO: Need to pass in an array of members in this pod and why there were allocated here
+							bot.message_create(post, [&bot, guild_id, P, tournament](const dpp::confirmation_callback_t& callback) {
+								if(!callback.is_error()) {
+									// Message posted. Create a thread attached to it.
+									const dpp::message& message = std::get<dpp::message>(callback.value);
+									bot.thread_create_with_message(fmt::format("{} - Pod {}", g_current_draft_code, P + 1), IN_THE_MOMENT_DRAFT_CHANNEL_ID, message.id, 1440, 0, [&bot, P, tournament](const dpp::confirmation_callback_t& callback) {
+										if(!callback.is_error()) {
+											dpp::thread thread = std::get<dpp::thread>(callback.value);
+											// TODO: Add the thread ID to the database with the draft code so when the draft is deleted the threads are archived.
+											//database_add_temp_thread_id(thread_id, draft_code)
+
+											// Just in case a member has the bot blocked, add them to the thread so they can see it.
+											const Draft_Pod* pod = &tournament.pods[P];
+											for(int player = 0; player < pod->count; ++player) {
+												bot.thread_member_add(thread.id, pod->players[player].member_id, [&bot](const dpp::confirmation_callback_t& callback) {
+													if(callback.is_error()) {
+														// TODO: Log and report error
+													}
+												});
+											}
+
+											// Post a message in the new thread.
+											dpp::message post;
+											post.set_type(dpp::message_type::mt_default);
+											post.set_guild_id(thread.guild_id);
+											post.set_channel_id(thread.id);
+											post.set_content(fmt::format("Pod {} players. TODO: Explanation about what the threads are for", P+1)); // TODO: Write a sentence about what should be posted in this thread as opposed to the #-in-the-moment-draft thread
+											bot.message_create(post, [](const dpp::confirmation_callback_t& callback) {
+												if(!callback.is_error()) {
+												} else {
+													log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
+												}
+											});
+										} else {
+											log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
+										}
+									});
+								} else {
+									log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
 								}
 							});
 						}
@@ -4338,103 +4695,6 @@ The tiebreaker for #3/4/5 is determined by the order output from the randomizer.
 					log(LOG_LEVEL_ERROR, "Failed to create role for %s.", g_current_draft_code.c_str());
 				}
 			});
-
-			// Flag all potential hosts and flag everyone as not allocated.
-#if 0
-			int host_indexes[64];
-			int host_count = 0;
-
-			for(size_t i = 0; i < sign_ups.value.size(); ++i) {
-				sign_ups.value[i].is_host = false;
-				sign_ups.value[i].allocated = false;
-				const dpp::guild_member member = dpp::find_guild_member(guild_id, sign_ups.value[i].member_id);
-				for(auto role : member.roles) {
-					if((role == XDHS_TEAM_ROLE_ID) || (role == XDHS_HOST_ROLE_ID)) {
-						sign_ups.value[i].is_host = true;
-						host_indexes[host_count] = i;
-						++host_count;
-					}
-				}
-			}
-
-			if(host_count < pods.table_count) {
-				// TODO: Now what?
-			}
-
-			std::vector<Draft_Sign_Up*> hosts;
-			for(int i = 0; i < host_count; ++i) {
-				hosts.push_back(&sign_ups.value[host_indexes[i]]);
-			}
-#endif
-
-
-			// Create a message to tell everyone their allocation, and then create threads for each pod.
-			// Reference: bot.thread_create_with_message("123P-C", IN_THE_MOMENT_DRAFT_CHANNEL_ID, 1090316907871211561, 1440, 0, [&bot](const dpp::confirmation_callback_t& event) {
-			log(LOG_LEVEL_INFO, "Creating %d pod(s)", pods.table_count);
-			for(int pod = 0; pod < pods.table_count; ++pod) { // TODO: Create in reverse order?
-				dpp::message post;
-				post.set_type(dpp::message_type::mt_default);
-				post.set_guild_id(guild_id);
-				post.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
-				post.set_allowed_mentions(true, true, true, false, {}, {});
-				post.set_content(fmt::format("Pod {} Allocations: **WIP!**", pod+1));
-				// TODO: Need to pass in an array of members in this pod and why there were allocated here
-				bot.message_create(post, [&bot, guild_id, pod](const dpp::confirmation_callback_t& callback) {
-					if(!callback.is_error()) {
-						// Message posted. Create a thread attached to it.
-						const dpp::message& message = std::get<dpp::message>(callback.value);
-						bot.thread_create_with_message(fmt::format("{} - Pod {}", g_current_draft_code, pod + 1), IN_THE_MOMENT_DRAFT_CHANNEL_ID, message.id, 1440, 0, [&bot, pod](const dpp::confirmation_callback_t& callback) {
-							if(!callback.is_error()) {
-								dpp::thread thread = std::get<dpp::thread>(callback.value);
-								// TODO: Add the thread ID to the database with the draft code so when the draft is deleted the threads are archived.
-								// TODO: thread_member_add() for each member allocated to this pod.
-
-								// TESTING: Try post a message in the thread.
-								dpp::message post;
-								post.set_type(dpp::message_type::mt_default);
-								post.set_guild_id(thread.guild_id);
-								post.set_channel_id(thread.id);
-								post.set_content(fmt::format("Thread for Pod {}", pod+1));
-								bot.message_create(post, [](const dpp::confirmation_callback_t& callback) {
-									if(!callback.is_error()) {
-									} else {
-										log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
-									}
-								});
-							} else {
-								log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
-							}
-						});
-					} else {
-						log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
-					}
-				});
-			}
-
-
-#if 0
-			std::string text;
-			for(auto& sign_up : sign_ups.value) {
-				sign_up.is_host = false;
-				const dpp::guild_member member = dpp::find_guild_member(guild_id, sign_up.member_id);
-				for(auto role : member.roles) {
-					if((role == XDHS_TEAM_ROLE_ID) || (role == XDHS_HOST_ROLE_ID)) {
-						sign_up.is_host = true;
-					}
-				}
-
-				if(sign_up.is_host == true) text += ":cowboy:";
-				if(sign_up.is_shark_is_null == false && sign_up.is_shark == true) text += ":shark:";
-				if(sign_up.status == 1) text += ":one:";
-				if(sign_up.status == 2) text += ":two:";
-				if(sign_up.status == 3) text += ":person_shrugging:";
-
-				text += sign_up.preferred_name;
-				
-				text += "\n";
-			}
-			event.reply(text);
-#endif
 		} else
 		if(command_name == "fire") {
 			// TODO: Check the draft status is locked, just to be safe
