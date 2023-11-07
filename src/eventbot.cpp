@@ -53,7 +53,6 @@
 // System libraries
 #include <curl/curl.h>
 #include <mysql.h>
-#include <utf8proc.h>
 
 // User libraries
 #include <dpp/dpp.h>
