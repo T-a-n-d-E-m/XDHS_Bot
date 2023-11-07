@@ -40,5 +40,5 @@ Installation as a systemd service on Debian 11 (Bullseye):
 Requires:
 
 DPP: https://github.com/brainboxdotcc/DPP
-
-fmt https://github.com/fmtlib/fmt
+fmt: https://github.com/fmtlib/fmt
+curl: (Use package manager)
