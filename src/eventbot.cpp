@@ -4588,7 +4588,7 @@ int main(int argc, char* argv[]) {
 			{
 				auto opt = event.get_parameter("draftmancer_draft");
 				if(std::holds_alternative<bool>(opt)) {
-					draft_event.draftmancer_draft = std::get<bool>(opt);
+					draft_event.value->draftmancer_draft = std::get<bool>(opt);
 				}
 			}
 
