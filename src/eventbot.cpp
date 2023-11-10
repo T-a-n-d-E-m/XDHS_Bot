@@ -2414,37 +2414,6 @@ struct Image {
 };
 static_assert(std::is_trivially_copyable<Image>(), "struct Image is not trivially copyable");
 
-// TODO: Return a pointer to img or NULL if failed?
-static void init_image(Image* img, int width, int height, int channels, u32 color) {
-	img->data = malloc(width * height * channels);// sizeof(Pixel));
-	if(img->data == NULL) {
-		// FIXME: Failing to allocate is possibly a real problem on the virtual server this runs on...
-		img->w = 0;
-		img->h = 0;
-		img->channels = 0;
-		fprintf(stdout, "out of memory\n");
-		return;
-	}
-
-	img->channels = channels;
-	img->w = width;
-	img->h = height;
-
-	// TODO: Do I need to support 3 channel images here? Probably not...
-	// TODO: This should be moved to it's own function
-	if(channels == 4) {
-		Pixel* ptr = (Pixel*)img->data;
-		for(int i = 0; i < (width * height); ++i) {
-			ptr[i].c = color;
-		}
-	} else
-	if(channels == 1) {
-		u8* ptr = (u8*)img->data;
-		for(int i = 0; i < (width * height); ++i) {
-			ptr[i] = (u8)color;	
-		}
-	}
-}
 
 static Result<Image> make_image(int width, int height, int channels, u32 color) {
 	Image result;
