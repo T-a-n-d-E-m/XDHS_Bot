@@ -471,7 +471,7 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"ORI", "Magic Origins",                               4, false},
 	{"BFZ", "Battle for Zendikar",                         5, false},
 	{"OGW", "Oath of the Gatewatch",                       3, false},
-	{"SOI", "Shadows Over Innistrad",                      3, false},
+	{"SOI", "Shadows over Innistrad",                      3, false},
 	{"EMA", "Eternal Masters",                             3, false},
 	{"EMN", "Eldritch Moon",                               3, false},
 	{"CN2", "Conspiracy: Take the Crown",                  3, false},
@@ -517,7 +517,7 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"BRO", "The Brothers' War",                           1, false},
 	{"DMR", "Dominaria Remastered",                        1, false},
 	{"ONE", "Phyrexia: All Will Be One",                   1, false},
-	{"SIR", "Shadows Over Innistrad Remastered",           0, false}, // TODO: NEED ART!
+	{"SIR", "Shadows over Innistrad Remastered",           0,  true},
 	{"MOM", "March of the Machine",                        1, false},
 	{"LTR", "The Lord of the Rings: Tales of Middle-earth",1, false},
 	{"WOE", "Wilds of Eldraine",                           1, false},
@@ -3927,11 +3927,12 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	std::vector<std::string> result;
 
 	// TODO: If the first set and the third set are the same, but the second is different, use pack art 1 and 2
+
 	if(list.count == 0) {
 		// No match found. Do a reverse lookup and find the art.
 		const MTG_Draftable_Set* set = get_set_from_name(format);
 		if(set != NULL && set->key_art == true) {
-			result.push_back(fmt::format("gfx/pack_art/key/{}.png", set->code));
+			result.push_back(fmt::format("gfx/pack_art/key/{}.png", set->name));
 		}
 	} else {
 		for(int i = 0; i < list.count; ++i) {
@@ -3949,7 +3950,7 @@ static std::vector<std::string> get_pack_images(const char* format) {
 				}
 			}
 
-			// Conflux needs a special case as its files are in CON_.
+			// Conflux needs a special case as its files are in CON_ - CON is a reserved directory name on Windows.
 			if(strcmp(list.set[i]->code, "CON") != 0) {
 				result.push_back(fmt::format("gfx/pack_art/crop/{}/{}.png", list.set[i]->code, pack_to_use+1));
 			} else {
