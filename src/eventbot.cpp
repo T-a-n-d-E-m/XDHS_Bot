@@ -23,21 +23,24 @@
 // 
 // For more information, please refer to <http://unlicense.org/>
 
+// TODO: Remove player needs to auto complete names 
+// TODO: Make most commands ephemeral so it doesn't matter where they are used. - Done?
 // FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
-// TODO: Make most commands ephemeral so it doesn't matter where they are used.
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
-// TODO: Cleanup inconsistent use of char* and std::string in database functions.
-// TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
-// TODO: Thread pools for database connections
-// TODO: All the blit_ functions can be rewritten to use SIMD ops
-// TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
-// FIXME: Can the minutemage who is selected to make even numbers actually change their status or does locking the draft prevent them doing anything? The function that pings the minutemage should add them automatically to the flexible list.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
 // Note: Only one minutemage will be asked to fill a seat.
-// TODO: Rename "Event" to draft where appropriate
+
+// Nice functionality, but not needed before going live
+// TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
+// TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
-// TODO: Reverse lookup for banner art needs to looks for the set name as a file. e.g. "Time Spiral Remastered.png"
+
+// Code/performance improvements
+// TODO: Thread pools for database connections
+// TODO: All the blit_ functions can be rewritten to use SIMD ops
+// TODO: Cleanup inconsistent use of char* and std::string in database functions.
+// TODO: Rename "Event" to draft where appropriate
 
 // C libraries
 #include <alloca.h>
@@ -98,9 +101,6 @@ using f32 = float;
 using f64 = double;
 
 #define BIT_SET(value,mask) (((value) & (mask)) == (mask))
-
-// The IANA time zone of the system running EventBot - used for time conversions.
-static const char* SERVER_TIME_ZONE = "Australia/Brisbane";
 
 // FIXME: This is an awful hack so I don't have to deal with timezone conversion stuff. Add this to timestamps inserted in the database by Badge Bot by this amount. This is the UTC offset of where the server running this code is.
 static const int SERVER_TIME_ZONE_OFFSET = (60*60*10);
@@ -1778,7 +1778,8 @@ enum SIGNUP_STATUS : int {
 
 	SIGNUP_STATUS_INVALID     = -1,
 
-	SIGNUP_STATUS_PLAYING     = SIGNUP_STATUS_COMPETITIVE | SIGNUP_STATUS_CASUAL | SIGNUP_STATUS_FLEXIBLE
+	SIGNUP_STATUS_PLAYING     = SIGNUP_STATUS_COMPETITIVE | SIGNUP_STATUS_CASUAL | SIGNUP_STATUS_FLEXIBLE,
+	SIGNUP_STATUS_NOT_PLAYING = SIGNUP_STATUS_TENTATIVE | SIGNUP_STATUS_MINUTEMAGE | SIGNUP_STATUS_DECLINE | SIGNUP_STATUS_REMOVED
 };
 
 
@@ -1993,6 +1994,99 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
+
+#if 0
+// TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
+static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
+	MYSQL_CONNECT();
+	static const char* query = R"(
+		SELECT
+			draft_signups.member_id,
+			draft_signups.preferred_name,
+			draft_signups.status,
+			draft_signups.time,
+			leaderboards.rank,
+			shark.is_shark,
+			leaderboards.points,
+			devotion.value AS devotion,
+			win_rate_recent.overall AS win_rate
+		FROM draft_signups
+		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? AND leaderboards.season=?-- League code from spreadsheet: PC, AC, EB etc 
+		LEFT JOIN shark ON draft_signups.member_id=shark.id
+		LEFT JOIN devotion ON draft_signups.member_id=devotion.id
+		LEFT JOIN win_rate_recent ON draft_signups.member_id=win_rate_recent.id
+		WHERE
+			draft_signups.guild_id=?
+		AND
+			draft_signups.draft_code=?
+		AND draft_signups.status & (1|2|4) -- FIXME: Magic numbers
+		AND NOT draft_signups.status & (8|16|32|64) -- FIXME: Magic numbers
+		ORDER BY draft_signups.time
+		;)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Draft_Sign_Up result;
+
+	MYSQL_BIND output[9];
+	memset(output, 0, sizeof(output));
+	unsigned long length[9];
+	my_bool is_error[9];
+	my_bool is_null[9]; // NOTE: Not all are used here
+
+	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
+	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(2, MYSQL_TYPE_LONG, &result.status, sizeof(result.status));
+	MYSQL_OUTPUT(3, MYSQL_TYPE_LONGLONG, &result.time, sizeof(result.time));
+
+	output[4].buffer_type = MYSQL_TYPE_LONG;
+	output[4].buffer = (void*) &result.rank;
+	output[4].buffer_length = sizeof(result.rank);
+	output[4].is_null = &result.rank_is_null;
+	output[4].length = &length[4];
+	output[4].error = &is_error[4];
+
+	output[5].buffer_type = MYSQL_TYPE_TINY;
+	output[5].buffer = (void*) &result.is_shark;
+	output[5].buffer_length = sizeof(result.is_shark);
+	output[5].is_null = &result.is_shark_is_null;
+	output[5].length = &length[5];
+	output[5].error = &is_error[5];
+
+	output[6].buffer_type = MYSQL_TYPE_LONG;
+	output[6].buffer = (void*) &result.points;
+	output[6].buffer_length = sizeof(result.points);
+	output[6].is_null = &result.points_is_null;
+	output[6].length = &length[6];
+	output[6].error = &is_error[6];
+
+	output[7].buffer_type = MYSQL_TYPE_LONG;
+	output[7].buffer = (void*) &result.devotion;
+	output[7].buffer_length = sizeof(result.devotion);
+	output[7].is_null = &result.devotion_is_null;
+	output[7].length = &length[7];
+	output[7].error = &is_error[7];
+
+	output[8].buffer_type = MYSQL_TYPE_FLOAT;
+	output[8].buffer = (void*) &result.win_rate;
+	output[8].buffer_length = sizeof(result.win_rate);
+	output[8].is_null = &result.win_rate_is_null;
+	output[8].length = &length[8];
+	output[8].error = &is_error[8];
+
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Draft_Sign_Up> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+#endif
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix) {
 	MYSQL_CONNECT();
@@ -3039,6 +3133,29 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	return MAKE_RESULT(file_path);
 }
 
+// Users on Discord have two names per guild: Their global name or an optional per-guild nickname.
+static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
+	std::string preferred_name;
+	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // FIXME: This can throw!
+	const std::string nickname = member.get_nickname();
+	if(nickname.length() > 0) {
+		preferred_name = nickname;
+	} else {
+		const dpp::user* user = dpp::find_user(member_id);
+		if(user != nullptr) {
+			if(user->global_name.length() > 0) {
+				preferred_name = user->global_name;
+			} else {
+				preferred_name = user->username;
+			}
+		} else {
+			// TODO: Now what? Return an error message?
+			log(LOG_LEVEL_ERROR, "Failed to find preferred name for member %lu.", member_id);
+		}
+	}
+	return preferred_name;
+}
+
 
 static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
 	auto ids = database_get_draft_post_ids(guild_id, draft_code);
@@ -3092,7 +3209,7 @@ static void add_sign_up_buttons_to_message(dpp::message& message, const std::sha
 	bool minutemage_locked = true;
 
 	time_t now = time(NULL);
-	time_t draft_start = unpack_and_make_timestamp(draft_event->time, SERVER_TIME_ZONE);
+	time_t draft_start = unpack_and_make_timestamp(draft_event->time, draft_event->time_zone);
 
 	// FIXME: This works, but it should probably check the draft status instead, right?
 	if(draft_start - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER) {
@@ -3246,7 +3363,7 @@ static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_E
 	embed.set_image(draft_event->banner_url);
 
 	time_t now = time(NULL);
-	time_t draft_start = unpack_and_make_timestamp(draft_event->time, SERVER_TIME_ZONE);
+	time_t draft_start = unpack_and_make_timestamp(draft_event->time, draft_event->time_zone);
 	if(now >= draft_start) {
 		dpp::embed_footer footer;
 		footer.set_text("🔒 Sign up for this draft is now locked. 🔒");
@@ -3638,6 +3755,7 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 		}
 
 		// Ping minutemages first, if any.
+		int heroes_added = 0;
 		if(minutemages.size() > 0) {
 			if(minutemages.size() <= heroes_needed) {
 				// Easiest case - All minutemages (and maybe more!) are needed to fire.
@@ -3653,6 +3771,11 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 					if(i != minutemages.size()-1) {
 						text += " ";
 					}
+
+					// Add them to the playing list as a flexible player.
+					const std::string preferred_name = get_members_preferred_name(guild_id, minutemages[i]->member_id);
+					(void)database_sign_up_to_a_draft(guild_id, draft_code, minutemages[i]->member_id, preferred_name, time(NULL), SIGNUP_STATUS_FLEXIBLE);
+					heroes_added++;
 				}
 
 				text += fmt::format("! You are needed on {} for {}.", 
@@ -3663,6 +3786,7 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 				if(heroes_needed > 0) {
 					text += "\n";
 				}
+
 			} else
 			if(minutemages.size() > heroes_needed) {
 				// More minutemages than needed - Select enough at random.
@@ -3671,6 +3795,13 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 				for(size_t i = 0; i < heroes_needed; ++i) {
 					const int r = rand() & minutemages.size();	
 					text += fmt::format("<@{}> ", minutemages[r]->member_id);
+
+					// Add them to the playing list as a flexible player.
+					const std::string preferred_name = get_members_preferred_name(guild_id, minutemages[i]->member_id);
+					(void)database_sign_up_to_a_draft(guild_id, draft_code, minutemages[i]->member_id, preferred_name, time(NULL), SIGNUP_STATUS_FLEXIBLE);
+					heroes_added++;
+
+					// Remove them so they can't be added twice
 					minutemages.erase(minutemages.begin() + r);
 				}
 
@@ -3680,6 +3811,11 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 
 				heroes_needed = 0;
 			}
+		}
+
+		if(heroes_added > 0) {
+			redraw_signup(bot, guild_id, draft_event.value->signups_id, draft_event.value->channel_id, draft_event.value);
+			redraw_signup(bot, guild_id, draft_event.value->reminder_id, draft_event.value->channel_id, draft_event.value);
 		}
 
 		if(heroes_needed > 0) {
@@ -3726,29 +3862,6 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 	text += fmt::format("	**/finish** - Post the post-draft reminder message to <#{}> draft.\n", IN_THE_MOMENT_DRAFT_CHANNEL_ID);
 
 	send_message(bot, CURRENT_DRAFT_MANAGEMENT_ID, text);
-}
-
-// Users on Discord have two names per guild: Their global name or an optional per-guild nickname.
-static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
-	std::string preferred_name;
-	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // FIXME: This can throw!
-	const std::string nickname = member.get_nickname();
-	if(nickname.length() > 0) {
-		preferred_name = nickname;
-	} else {
-		const dpp::user* user = dpp::find_user(member_id);
-		if(user != nullptr) {
-			if(user->global_name.length() > 0) {
-				preferred_name = user->global_name;
-			} else {
-				preferred_name = user->username;
-			}
-		} else {
-			// TODO: Now what? Return an error message?
-			log(LOG_LEVEL_ERROR, "Failed to find preferred name for member %lu.", member_id);
-		}
-	}
-	return preferred_name;
 }
 
 static void set_bot_presence(dpp::cluster& bot) {
@@ -3926,7 +4039,7 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	const char* previous_set_code = NULL;
 	std::vector<std::string> result;
 
-	// TODO: If the first set and the third set are the same, but the second is different, use pack art 1 and 2
+	// TODO: If the first set and the third set are the same, but the second is different, use pack art 1 and 2?
 
 	if(list.count == 0) {
 		// No match found. Do a reverse lookup and find the art.
@@ -4515,11 +4628,12 @@ int main(int argc, char* argv[]) {
 				auto opt = event.get_parameter("start_time");
 				if(std::holds_alternative<std::string>(opt)) {
 					std::string start_time_string = std::get<std::string>(opt);
-					const auto start_time = parse_start_time_string(start_time_string.c_str());
-					if(is_error(start_time)) {
-						event.reply(to_cstring(start_time.error));
+					const auto start_time_override = parse_start_time_string(start_time_string.c_str());
+					if(is_error(start_time_override)) {
+						event.reply(to_cstring(start_time_override.error));
 						return;
 					}
+					start_time = start_time_override.value;
 				}
 			}
 
@@ -4925,11 +5039,11 @@ int main(int argc, char* argv[]) {
 			const auto guild_id = event.command.get_guild().id;
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
-#if TESTING // Disabled so I can use the command any time.
-			if(draft.value->status != DRAFT_STATUS_LOCKED) {
+#if TESTING
+			if(!BIT_SET(draft.value->status, DRAFT_STATUS_LOCKED)) {
 				dpp::message message;
 				message.set_flags(dpp::m_ephemeral);
-				message.set_content("This command can only be used once the draft is locked.");
+				message.set_content(dpp::message{"This command can only be used once the draft is locked."}.set_flags(dpp::m_ephemeral));
 				event.reply(message);
 				return;
 			}
@@ -4958,10 +5072,10 @@ int main(int argc, char* argv[]) {
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
 #if TESTING
-			if(draft.value->status != DRAFT_STATUS_LOCKED) {
+			if(!BIT_SET(draft.value->status, DRAFT_STATUS_LOCKED)) {
 				dpp::message message;
 				message.set_flags(dpp::m_ephemeral);
-				message.set_content("This command can only be used once the draft is locked.");
+				message.set_content(dpp::message{"This command can only be used once the draft is locked."}.set_flags(dpp::m_ephemeral));
 				event.reply(message);
 				return;
 			}
@@ -4999,11 +5113,8 @@ int main(int argc, char* argv[]) {
 			const auto guild_id = event.command.get_guild().id;
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
-			if(draft.value->status != DRAFT_STATUS_LOCKED) {
-				dpp::message message;
-				message.set_flags(dpp::m_ephemeral);
-				message.set_content("This command can only be used once the draft is locked.");
-				event.reply(message);
+			if(!BIT_SET(draft.value->status, DRAFT_STATUS_LOCKED)) {
+				event.reply(dpp::message{"This command can only be used once the draft is locked."}.set_flags(dpp::m_ephemeral));
 				return;
 			}
 
@@ -5025,28 +5136,28 @@ int main(int argc, char* argv[]) {
 			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code, draft_code.value.season);
 			if(sign_ups != true) {
 				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s, %d) failed", guild_id, g_current_draft_code, league_code, draft_code.value.season);
-				event.reply("Internal EventBot error: A database query has failed. This is not your fault! Please try again.");
+				event.reply(dpp::message{"Internal EventBot error: A database query has failed. This is not your fault! Please try again."}.set_flags(dpp::m_ephemeral));
 				return;
 			}
 
-			// FIXME: Filter out players that have been REMOVED
-
-			// FIXME: Is this counting minutemages?
+			// Remove all players with SIGNUP_STATUS_NOT_PLAYING
+			auto erased_count = std::erase_if(sign_ups.value, [](const Draft_Sign_Up x) {
+				return x.status & SIGNUP_STATUS_NOT_PLAYING;
+			});
+			(void)erased_count;
 
 			if(sign_ups.count < POD_SEATS_MIN) {
-				// TODO: This needs to be ephemeral
-				event.reply(fmt::format("At least {} players needed. Recruit more players and use /add_player to add them to the sign up sheet.", POD_SEATS_MIN));
+				event.reply(dpp::message{fmt::format("At least {} players needed. Recruit more players and use /add_player to add them to the sign up sheet.", POD_SEATS_MIN)}.set_flags(dpp::m_ephemeral));
 				return;
 			}
 
 			if((sign_ups.count % 2) == 1) {
-				// TODO: This needs to be ephemeral
-				event.reply("An even number of sign ups is required before using this command. Recruit more players and use /add_player to add them to the sign up sheet, or use /remove_player to remove someone.");
+				event.reply(dpp::message{"An even number of sign ups is required before using this command. Recruit more players and use /add_player to add them to the sign up sheet, or use /remove_player to remove someone."}.set_flags(dpp::m_ephemeral));
 				return;
 			}
 
 			if(sign_ups.count > PLAYERS_MAX) {
-				event.reply("Maximum player count of {} exceeded. You're on your own!");
+				event.reply(dpp::message{"Maximum player count of {} exceeded. You're on your own!"}.set_flags(dpp::m_ephemeral));
 				return;
 			}
 
@@ -5088,7 +5199,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			for(const auto& player : sign_ups.value) {
-				log(LOG_LEVEL_INFO, fmt::format("Player:{} status:{} rank:{} is_shark:{} points:{} devotion:{} win_rate:{}",
+				log(LOG_LEVEL_DEBUG, fmt::format("Player:{} status:{} rank:{} is_shark:{} points:{} devotion:{} win_rate:{}",
 					player.preferred_name, (int)player.status, player.rank, player.is_shark, player.points, player.devotion, player.win_rate).c_str());	
 			}
 
@@ -5394,7 +5505,7 @@ int main(int argc, char* argv[]) {
 												if(!is_draftmancer) {
 													text += "* **Save your deck during deck construction.** Very important if we need to play side matches or host a new tournament.\n";
 												} else {
-													text += fmt::format("* Log into the {} XMage server. Make sure your usernames match everywhere.\n", draft.value->xmage_server);
+													text += fmt::format("* **Log into the {} XMage server.** Make sure your usernames match everywhere.\n", draft.value->xmage_server);
 													text += "* During the draft, you can hold Alt while hovering over a card to show the Oracle text.\n";
 												}
 												text += "\nGood luck and have fun!";
@@ -5579,7 +5690,8 @@ int main(int argc, char* argv[]) {
 
 		// If the draft has been locked, alert the hosts when someone has clicked the minutemage button.
 		if(new_sign_up_status == SIGNUP_STATUS_MINUTEMAGE) {
-			if(now >= draft.value->time) {
+			time_t draft_start = unpack_and_make_timestamp(draft.value->time, draft.value->time_zone);
+			if(now >= draft_start) {
 				send_message(bot, IN_THE_MOMENT_DRAFT_CHANNEL_ID, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
 			}
 		}
@@ -5639,13 +5751,12 @@ int main(int argc, char* argv[]) {
 
 		time_t now = time(NULL);
 
-		time_t draft_start = unpack_and_make_timestamp(draft.value->time, SERVER_TIME_ZONE);
+		time_t draft_start = unpack_and_make_timestamp(draft.value->time, draft.value->time_zone);
 
 		// Send the pre-draft reminder message if it hasn't already been sent.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft_start - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
-			// TODO: Unlock the minute mage sign ups
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_REMINDER_SENT);
 		}
