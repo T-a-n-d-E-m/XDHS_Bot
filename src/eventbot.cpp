@@ -121,6 +121,9 @@ static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 // How long we allow for deck construction
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 
+// The directory where the RELEASE build is run from.
+static const char* g_install_dir                 = "/opt/EventBot";
+
 // The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
 #ifdef DEBUG
@@ -140,7 +143,9 @@ static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
 static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
 static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
 static bool g_commands_registered                = false; // Have the bot slash commands been registered for this guild?
-#else
+#endif
+
+#ifdef RELEASE
 // The bot will be running in release mode on the XDHS public server.
 static const char* g_build_mode                  = "Release";
 static const u64 GUILD_ID                        = 528728694680715324;
@@ -157,6 +162,7 @@ static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
 static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
 static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
 static bool g_commands_registered                = false; // Have the bot slash commands been registered for this guild?;
+
 #endif
 
 // Some serious errors will ping this person as the error needs attention ASAP.
@@ -1145,7 +1151,9 @@ enum DRAFT_STATUS {
 static const char* to_cstring(DRAFT_STATUS status) {
 	switch(status) {
 		case DRAFT_STATUS_INVALID:           return "DRAFT_STATUS_INVALID";
+
 		case DRAFT_STATUS_CREATED:           return "DRAFT_STATUS_CREATED";
+		case DRAFT_STATUS_POSTED:            return "DRAFT_STATUS_POSTED";
 		case DRAFT_STATUS_REMINDER_SENT:     return "DRAFT_STATUS_REMINDER_SENT";
 		case DRAFT_STATUS_TENTATIVES_PINGED: return "DRAFT_STATUS_TENTATIVES_PINGED";
 		case DRAFT_STATUS_LOCKED:            return "DRAFT_STATUS_LOCKED";
@@ -1157,14 +1165,14 @@ static const char* to_cstring(DRAFT_STATUS status) {
 	return NULL;
 }
 
-static std::string draft_status_to_string(DRAFT_STATUS status) {
+static std::string draft_status_to_string(int status) {
 	std::string result;
 
 	bool first = true;
-	for(int i = (int)DRAFT_STATUS_CREATED; i == (int)DRAFT_STATUS_END; i *= 2) {
+	for(int i = (int)DRAFT_STATUS_CREATED; i < (int)DRAFT_STATUS_END; i *= 2) {
 		if(status & i) {
 			if(first == false) {
-				result = " | ";
+				result += " | ";
 			} else {
 				first = false;
 			}
@@ -4140,6 +4148,21 @@ int main(int argc, char* argv[]) {
 
 	}
 
+	// Check the version of EventBot that's running is in the correct place. This is to prevent accidentally running the DEBUG version instead of the RELEASE version.
+	{
+		char cwd[FILENAME_MAX];
+#ifdef DEBUG
+		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, g_install_dir) == 0)) {
+			fprintf(stderr, "Running the DEBUG build of EventBot from '%s' is not supported!\n", g_install_dir);
+#endif
+#ifdef RELEASE
+		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, g_install_dir) != 0)) {
+			fprintf(stderr, "Running the RELEASE build of EventBot from anywhere other than '%s' is not supported!\n", g_install_dir);
+#endif
+			return EXIT_FAILURE;
+		}
+	}
+
 	// Load the bot.ini config file. This file has sensitive information and so isn't versioned.
 	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
 		return EXIT_FAILURE;
@@ -4865,6 +4888,7 @@ int main(int argc, char* argv[]) {
 			
 			std::string text;
 			text += "```";
+			text += fmt::format("           status: {}\n", draft_status_to_string(draft.value->status));
 			text += fmt::format("       draft_code: {}\n", draft.value->draft_code);
 			//text += fmt::format("           status: {}\n", to_cstring(draft.value->status));
 			text += fmt::format("            pings: {}\n", draft.value->pings); 
