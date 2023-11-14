@@ -23,9 +23,10 @@
 // 
 // For more information, please refer to <http://unlicense.org/>
 
+// FIXME: The #pre-register post is not locking when the hour warning messages goes out
+// TODO: The number at the top of the playing column needs to ignore removed players
 // TODO: Remove player needs to auto complete names 
 // TODO: Make most commands ephemeral so it doesn't matter where they are used. - Done?
-// FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
@@ -1137,6 +1138,8 @@ enum DRAFT_STATUS {
 	DRAFT_STATUS_LOCKED             = 16, // The draft is now partially locked and ready to be fired.
 	DRAFT_STATUS_FIRED              = 32, // The draft is now fully locked and play has commenced.
 	DRAFT_STATUS_COMPLETE           = 64, // The draft has concluded.
+
+	DRAFT_STATUS_END                = 128,
 };
 
 static const char* to_cstring(DRAFT_STATUS status) {
@@ -1152,6 +1155,25 @@ static const char* to_cstring(DRAFT_STATUS status) {
 			break;
 	}
 	return NULL;
+}
+
+static std::string draft_status_to_string(DRAFT_STATUS status) {
+	std::string result;
+
+	bool first = true;
+	for(int i = (int)DRAFT_STATUS_CREATED; i == (int)DRAFT_STATUS_END; i *= 2) {
+		if(status & i) {
+			if(first == false) {
+				result = " | ";
+			} else {
+				first = false;
+			}
+			result += to_cstring((DRAFT_STATUS)i) + strlen("DRAFT_STATUS_");
+		}
+	}
+
+	return result;
+	
 }
 
 // All data needed for a #-pre-register post is available in this structure.
@@ -2087,6 +2109,35 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 #endif
+
+struct Member {
+	u64 member_id;
+	const char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
+};
+
+static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const char* draft_code, std::string& prefix) {
+	MYSQL_CONNECT();
+	prefix += "%";
+	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT 25";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code,     strlen(draft_code));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Member result = {0};
+
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
+	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, &result.preferred_name[0], DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Member> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix) {
 	MYSQL_CONNECT();
@@ -3665,6 +3716,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 					log(LOG_LEVEL_DEBUG, "Created reminder sign up post: %lu", (u64)message.id);
 					// We need to store the message ID so we can edit both sign up sheets whenever a button is clicked.
 					(void)database_set_reminder_message_id(guild_id, draft_event->draft_code, message.id);
+					// FIXME: Will redrawing the original signup message here fix the race condition?
 				}
 			});
 
@@ -4155,6 +4207,8 @@ int main(int argc, char* argv[]) {
 		const u64 guild_id = event.command.get_guild().id;
 		for(auto& opt : event.options) {
 			if(opt.focused) {
+				log(LOG_LEVEL_DEBUG, "%s.%s", opt.name.c_str(), event.name.c_str());
+
 				if(opt.name == "draft_code") {
 					if(event.name == "post_draft") {
 						// Gets a list of all drafts that haven't been posted.
@@ -4340,9 +4394,6 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "noshow", "Record this as a No Show.", true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
-			{
-			}
-				//dpp::slashcommand cmd("add_host", "Specify a host for a pod");
 			{
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -5758,7 +5809,9 @@ int main(int argc, char* argv[]) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
+			//FIXME: Is there a race condition here? The minutemage button didn't get unlocked in #pre-register
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_REMINDER_SENT);
+			// Force redraw?
 		}
 
 		// Ping the tentatives if they haven't already been pinged.
