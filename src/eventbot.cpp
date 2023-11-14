@@ -26,18 +26,18 @@
 // FIXME: Tried to /remove_player but they were still counted in the player list when I used /post_allocations
 // TODO: Make most commands ephemeral so it doesn't matter where they are used.
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
-// TODO: Get rid of all asserts - can't have the bot going offline, ever!
 // TODO: Cleanup inconsistent use of char* and std::string in database functions.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Thread pools for database connections
 // TODO: All the blit_ functions can be rewritten to use SIMD ops
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
-// FIXME: Can the minutemage who is selected to make even numbers actually change their status or does locking the draft prevent them doing anything?
+// FIXME: Can the minutemage who is selected to make even numbers actually change their status or does locking the draft prevent them doing anything? The function that pings the minutemage should add them automatically to the flexible list.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
 // Note: Only one minutemage will be asked to fill a seat.
 // TODO: Rename "Event" to draft where appropriate
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
+// TODO: Reverse lookup for banner art needs to looks for the set name as a file. e.g. "Time Spiral Remastered.png"
 
 // C libraries
 #include <alloca.h>
@@ -186,6 +186,92 @@ static void sig_handler(int signo) {
     g_exit_code = signo;
 }
 
+enum GLOBAL_ERROR {
+	NO_ERROR,
+
+	ERROR_OUT_OF_MEMORY,
+
+	ERROR_INVALID_FUNCTION_PARAMETER,
+
+	// parse_date_string
+	ERROR_MALFORMED_DATE_STRING,
+	ERROR_DATE_IS_IN_PAST,
+	ERROR_INVALID_MONTH,
+	ERROR_INVALID_DAY_28,
+	ERROR_INVALID_DAY_29,
+	ERROR_INVALID_DAY_30,
+	ERROR_INVALID_DAY_31,
+
+	// parse_draft_code
+	ERROR_MALFORMED_DRAFT_CODE,
+	ERROR_LEAGUE_NOT_FOUND,
+
+	// parse_time_string
+	ERROR_MALFORMED_START_TIME_STRING,
+	ERROR_INVALID_HOUR,
+	ERROR_INVALID_MINUTE,
+
+	// render_banner
+	ERROR_LOAD_FONT_FAILED,
+	ERROR_LOAD_ART_FAILED,
+	ERROR_INVALID_PACK_COUNT,
+	ERROR_FAILED_TO_SAVE_BANNER,
+
+	// download_file
+	ERROR_CURL_INIT,
+	ERROR_DOWNLOAD_FAILED,
+};
+
+static const char* to_cstring(const GLOBAL_ERROR e) {
+	switch(e) {
+		case NO_ERROR: return "no error";
+
+		case ERROR_OUT_OF_MEMORY: return "Internal EventBot error: The server is out of memory.";
+
+		case ERROR_INVALID_FUNCTION_PARAMETER: return "Internal EventBot error: Invalid function parameter.";
+
+		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD"; 
+		case ERROR_DATE_IS_IN_PAST:       return "The date is in the past and time travel does not yet exist.";
+		case ERROR_INVALID_MONTH:         return "Month should be between 01 and 12.";
+		case ERROR_INVALID_DAY_28:        return "Day should be between 01 and 28 for the specified month.";
+		case ERROR_INVALID_DAY_29:        return "Day should be between 01 and 29 for the specified month.";
+		case ERROR_INVALID_DAY_30:        return "Day should be between 01 and 30 for the specified month.";
+		case ERROR_INVALID_DAY_31:        return "Day should be between 01 and 31 for the specified month.";
+
+		case ERROR_MALFORMED_DRAFT_CODE: return "**Malformed draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus.";
+		case ERROR_LEAGUE_NOT_FOUND:     return "No matching league found for draft code.";
+
+		case ERROR_MALFORMED_START_TIME_STRING: return "Malformed start time string. Start time should be written as HH:MM in 24 hour time.";
+		case ERROR_INVALID_HOUR:   return "Hour should be between 0 and 23.";
+		case ERROR_INVALID_MINUTE: return "Minute should be between 1 and 59.";
+
+		case ERROR_LOAD_FONT_FAILED:      return "Internal EventBot error: stbtt_InitFont() failed to load banner font.";
+		case ERROR_LOAD_ART_FAILED:       return "Internal EventBot error: stbi_load() failed to load art file.";
+		case ERROR_INVALID_PACK_COUNT:    return "Internal EventBot error: Unexpected background image count.";
+		case ERROR_FAILED_TO_SAVE_BANNER: return "Internal EventBot error: Failed to save generated banner to storage. If this is the first instance of seeing this error, please try again.";
+
+		case ERROR_CURL_INIT:       return "Internal EventBot error: curl_easy_init() failed.";
+		case ERROR_DOWNLOAD_FAILED: return "Internal EventBot error: Downloading file failed.";
+	}
+
+	return "unknown error";
+}
+
+template<typename T>
+struct Result {
+	GLOBAL_ERROR error;
+	T value;
+};
+
+#define MAKE_ERROR(code) {code, {}}
+#define MAKE_RESULT(result) {NO_ERROR, {result}}
+
+template<typename T>
+static inline bool is_error(const Result<T>& result) {
+	return result.error != NO_ERROR;
+}
+
+
 static std::string to_upper(const char* src) {
 	const size_t len = strlen(src);
 	std::string result;
@@ -207,17 +293,17 @@ static std::string random_string(const int len) {
 }
 
 
-
+// Reject any banner images that exceed this size.
 static const size_t DOWNLOAD_BYTES_MAX = (3 * 1024 * 1024);
 
-struct curl_mem_chunk {
-    size_t size;
-    u8* data;
+struct Heap_Buffer {
+	size_t size;
+	u8* data;
 };
 
 static size_t curl_write_memory_callback(void* data, size_t size, size_t nmemb, void* usr_ptr) {
     size_t real_size = size * nmemb;
-    curl_mem_chunk* mem = (curl_mem_chunk*)usr_ptr;
+    Heap_Buffer* mem = (Heap_Buffer*)usr_ptr;
 
     // TODO: Keep track of how much we've allocated so far and error out if over some maximum amount to prevent denial of service attacks from giant files being sent.
 
@@ -234,18 +320,12 @@ static size_t curl_write_memory_callback(void* data, size_t size, size_t nmemb, 
     return real_size;
 }
 
-enum DOWNLOAD_IMAGE_RESULT {
-    DOWNLOAD_IMAGE_RESULT_OK,
-    DOWNLOAD_IMAGE_RESULT_CURL_INIT_ERROR,
-    DOWNLOAD_IMAGE_RESULT_CURL_ERROR
-};
-
-static DOWNLOAD_IMAGE_RESULT download_file(const char* url, size_t* size, u8** data) {
-    curl_global_init(CURL_GLOBAL_DEFAULT); // TODO: Can this be done once at startup?
+static Result<Heap_Buffer> download_file(const char* url) {
+    //curl_global_init(CURL_GLOBAL_DEFAULT);
 
     CURL* curl = curl_easy_init();
     if(curl == NULL) {
-        return DOWNLOAD_IMAGE_RESULT_CURL_INIT_ERROR;
+        return MAKE_ERROR(ERROR_CURL_INIT);
     }
 
     // Disable checking SSL certs
@@ -257,32 +337,24 @@ static DOWNLOAD_IMAGE_RESULT download_file(const char* url, size_t* size, u8** d
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
-    curl_mem_chunk chunk;
-    chunk.size = 0;
-    chunk.data = NULL;
+	Heap_Buffer buffer = {0, NULL};
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_memory_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
 
     CURLcode result = curl_easy_perform(curl);
     if(result != CURLE_OK) {
         // TODO: Need to pass in a **error_str variable to get these error messages from curl?
 		log(LOG_LEVEL_ERROR, "curl_easy_perform() failed: %s", curl_easy_strerror(result));
-        return DOWNLOAD_IMAGE_RESULT_CURL_ERROR;
+        return MAKE_ERROR(ERROR_DOWNLOAD_FAILED);//DOWNLOAD_IMAGE_RESULT_CURL_ERROR;
     }
-
-    //printf("downloaded %lu bytes\n", chunk.size);
 
     curl_easy_cleanup(curl);
 
-    curl_global_cleanup(); // TODO: Can this be done once at shutdown?
+    //curl_global_cleanup();
 
-    *size = chunk.size;
-    *data = chunk.data;
-
-    return DOWNLOAD_IMAGE_RESULT_OK;
+    return MAKE_RESULT(buffer);
 }
-
 
 
 // Send a message to a channel. Mostly used for posting what the bot is currently doing.
@@ -399,7 +471,7 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"ORI", "Magic Origins",                               4, false},
 	{"BFZ", "Battle for Zendikar",                         5, false},
 	{"OGW", "Oath of the Gatewatch",                       3, false},
-	{"SOI", "Shadows Over Innistrad",                      3, false},
+	{"SOI", "Shadows over Innistrad",                      3, false},
 	{"EMA", "Eternal Masters",                             3, false},
 	{"EMN", "Eldritch Moon",                               3, false},
 	{"CN2", "Conspiracy: Take the Crown",                  3, false},
@@ -445,12 +517,15 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"BRO", "The Brothers' War",                           1, false},
 	{"DMR", "Dominaria Remastered",                        1, false},
 	{"ONE", "Phyrexia: All Will Be One",                   1, false},
+	{"SIR", "Shadows over Innistrad Remastered",           0,  true},
 	{"MOM", "March of the Machine",                        1, false},
 	{"LTR", "The Lord of the Rings: Tales of Middle-earth",1, false},
 	{"WOE", "Wilds of Eldraine",                           1, false},
 	{"LCI", "Lost Caverns of Ixalan",                      1, false},
 	{"RVR", "Ravnica Remastered",                          1, false},
+	{"PIP", "Fallout",                                     0, false}, // TODO: Need art
 
+	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
 	{"KMGR", "Kamigawa Remastered",                        0,  true},
 	{"PMMA", "Pre Mirage Masters",                         0, false},
@@ -459,7 +534,7 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"USGR", "Urza Block Redeemed",                        0, false},
 	{"TWAR", "Total WAR",                                  0, false},
 	{"ATQR", "Antiquities Reforged",                       0, false},
-	{"ISDR", "Innistrad Remastered ",                      0, false},
+	{"ISDR", "Innistrad Remastered ",                      0, false}, // NOTE: Not to be confused with SIR
 	{"CRSN", "Core Resonance",                             0, false},
 	{"DOMR", "Dominaria Revised",                          0, false},
 	{"10LE", "10 Life Edition",                            0, false},
@@ -778,6 +853,7 @@ static const XDHS_League g_xdhs_leagues[] = {
 };
 static const size_t XDHS_LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
 
+#if 0
 // Parse a draft code and find the league it is for. Makes a copy into 'league' and returns true if found, false otherwise.
 // TODO: Replace this with parse_league_code
 static const XDHS_League* get_league_from_draft_code(const char* draft_code) {
@@ -801,6 +877,7 @@ static const XDHS_League* get_league_from_draft_code(const char* draft_code) {
 
 	return NULL;
 }
+#endif
 
 
 // The maximum allowed byte length of a draft code.
@@ -812,32 +889,35 @@ struct Draft_Code {
 	const XDHS_League *league;
 };
 
-static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
-	if(draft_code == NULL) return false;
+
+static Result<Draft_Code> parse_draft_code(const char* draft_code) {
+	if(draft_code == NULL) return MAKE_ERROR(ERROR_INVALID_FUNCTION_PARAMETER);
 	const size_t len = strlen(draft_code);
-	if(len > DRAFT_CODE_LENGTH_MAX) return false;
+	if(len > DRAFT_CODE_LENGTH_MAX) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
 	char str[DRAFT_CODE_LENGTH_MAX+1]; // Mutable copy
 	memcpy(str, draft_code, len);
 
 	char* start = str;
 	char* end = str;
 
+	Draft_Code out;
+
 	// Season
 	while(isdigit(*end)) end++;
-	if(*end != '.') return false;
+	if(*end != '.') return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return false;
-	if(strlen(start) > 3) return false;
-	out->season = strtol(start, NULL, 10);
+	if(strlen(start) == 0) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 3) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	out.season = strtol(start, NULL, 10);
 	start = ++end;
 
 	// Week
 	while(isdigit(*end)) end++;
-	if(*end != '-') return false;
+	if(*end != '-') return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return false;
-	if(strlen(start) > 2) return false;
-	out->week = strtol(start, NULL, 10);
+	if(strlen(start) == 0) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 2) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	out.week = strtol(start, NULL, 10);
 	end++;
 
 	const char region_code = *end++;
@@ -845,12 +925,12 @@ static bool parse_draft_code(const char* draft_code, Draft_Code* out) {
 
 	for(size_t i = 0; i < XDHS_LEAGUE_COUNT; ++i) {
 		if((g_xdhs_leagues[i].region_code == region_code) && (g_xdhs_leagues[i].league_type == league_type)) {
-			out->league = &g_xdhs_leagues[i];
-			return true;
+			out.league = &g_xdhs_leagues[i];
+			return MAKE_RESULT(out);
 		}
 	}
 
-	return false;
+	return MAKE_ERROR(ERROR_LEAGUE_NOT_FOUND);
 }
 
 static inline int pack_time(int year, int month, int day, int hour, int minute) {
@@ -871,6 +951,14 @@ static inline void unpack_time(const int packed, int* year, int* month, int* day
 	*day    =  (packed >> 11) & 0x1f;
 	*hour   =  (packed >>  6) & 0x1f;
 	*minute =  (packed >>  0) & 0x3f;
+}
+
+static const size_t TIME_STRING_MAX = strlen("YYYY-MM-DD HH:MM") + 1;
+
+static inline void make_time_string(const int packed, char out[TIME_STRING_MAX]) {
+	int year, month, day, hour, minute;
+	unpack_time(packed, &year, &month, &day, &hour, &minute);
+	snprintf(out, TIME_STRING_MAX, "%d-%02d-%02d %02d:%02d", year, month, day, hour, minute);
 }
 
 static inline time_t make_timestamp(const char* time_zone, int year, int month, int day, int hour, int minute) {
@@ -906,26 +994,28 @@ struct Date {
 	const char* start = str; \
 	while(isdigit(*str)) str++;       \
 	if(*str != '-' && *str != '.' && *str != '\\' && *str != '/' && *str != '\0') { \
-		return "Invalid digit separator.";  \
+		return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING);  \
 	} \
 	*str++ = 0; \
-	if(strlen(start) < min_len || strlen(start) > max_len) return "Date should be written as YYYY-MM-DD"; \
+	if(strlen(start) < min_len || strlen(start) > max_len) return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING); \
 	out = strtol(start, NULL, 10); \
 }
-static const char* parse_date_string(const char* date_string, Date* out) {
-	if(strlen(date_string) < strlen("YY-M-D")) return "String is too short to contain a valid date. Date should be written as YYYY-MM-DD.";
-	if(strlen(date_string) > strlen("YYYY-MM-DD")) return "String is too long. Date should be written as YYYY-MM-DD.";
+static const Result<Date> parse_date_string(const char* date_string) {
+	if(strlen(date_string) < strlen("YY-M-D")) return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) > strlen("YYYY-MM-DD")) return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING);
 
 	// Make a mutable copy of the date string, including terminator.
 	char str[strlen("YYYY-MM-DD")+1];
 	memcpy(str, date_string, strlen(date_string)+1);
 	char* str_ptr = str;
+	
+	Date result;
 
-	split_date(str_ptr, 2, 4, out->year);
-	split_date(str_ptr, 1, 2, out->month);
-	split_date(str_ptr, 1, 2, out->day);
+	split_date(str_ptr, 2, 4, result.year);
+	split_date(str_ptr, 1, 2, result.month);
+	split_date(str_ptr, 1, 2, result.day);
 
-	if(out->year <= 99) out->year += 2000;
+	if(result.year <= 99) result.year += 2000;
 	
 	// String parsed - check if this looks like a valid date.
 	// TODO: The date library probably could do this, right?
@@ -934,46 +1024,45 @@ static const char* parse_date_string(const char* date_string, Date* out) {
 	struct tm t = *localtime(&current_time);
 	int current_year = t.tm_year + 1900;
 
-	// TODO: Check the entire date is in the future.
+	// TODO: Check the date is in the future
 
-	if(out->year < current_year) {
-		return "Date is in the past and time travel does not yet exist.";
+	if(result.year < current_year) {
+		return MAKE_ERROR(ERROR_DATE_IS_IN_PAST);
 	}
 
-	if(out->day < 1) return "Day should be between 01 and 31.";
-
-	if(out->month < 1 || out->month > 12) {
-		return "Month should be between 01 and 12.";
+	if(result.month < 1 || result.month > 12) {
+		return MAKE_ERROR(ERROR_INVALID_MONTH);
 	} else
-	if(out->month == 1 || out->month == 3 || out->month == 5 || out->month == 7 || out->month == 8 || out->month == 10 || out->month == 12) {
-		if(out->day > 31) return "Day should be between 01 and 31 for the specified month.";
+	if(result.month == 1 || result.month == 3 || result.month == 5 || result.month == 7 || result.month == 8 || result.month == 10 || result.month == 12) {
+		if(result.day > 31) return MAKE_ERROR(ERROR_INVALID_DAY_31);
 	} else
-	if (out->month == 4 || out->month == 6 || out->month == 9 || out->month == 11) {
-		if(out->day > 30) return "Day should be between 01 and 30 for the specified month.";	
+	if (result.month == 4 || result.month == 6 || result.month == 9 || result.month == 11) {
+		if(result.day > 30) return MAKE_ERROR(ERROR_INVALID_DAY_30);
 	} else {
 		// Febuary
-		if(((out->year % 4 == 0) && (out->year % 100 != 0)) || (out->year % 400 == 0)) {
+		if(((result.year % 4 == 0) && (result.year % 100 != 0)) || (result.year % 400 == 0)) {
 			// Leap year
-			if(out->day > 29) return "Day should be between 01 and 29 for the specified month.";
+			if(result.day > 29) return MAKE_ERROR(ERROR_INVALID_DAY_29);
 		} else {
-			if(out->day > 28) return "Day should be between 01 and 28 for the specified month.";
+			if(result.day > 28) return MAKE_ERROR(ERROR_INVALID_DAY_28);
 		}
 	}
 
-	return NULL;
+	return MAKE_RESULT(result);
 }
 
 // Do some rudimentary validation on the start time string sent with create_draft command and parse the provided values. Returns true and fills the 'out' variable if no problem was found, false otherwise.
-// TODO: Return error strings like the above function?
-static bool parse_start_time_string(const char* start_time_string, Start_Time* out) {
-	if(start_time_string == NULL) return false;
-	if(strlen(start_time_string) < strlen("H:M")) return false;
-	if(strlen(start_time_string) > strlen("HH:MM")) return false;
+static const Result<Start_Time> parse_start_time_string(const char* start_time_string) {
+	if(start_time_string == NULL) return MAKE_ERROR(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(strlen(start_time_string) < strlen("H:M")) return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
+	if(strlen(start_time_string) > strlen("HH:MM")) return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
 
 	// Make a copy of the date string, including terminator.
 	char str[strlen("HH:MM")+1];
 	memcpy(str, start_time_string, strlen(start_time_string)+1);
 	char* str_ptr = str;
+
+	Start_Time result;
 
 	// Parse the hour
 	const char* hour = str_ptr;
@@ -981,11 +1070,11 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 		str_ptr++;
 	}
 	if(*str_ptr != ':' && *str_ptr != '-' && *str_ptr != ',' && *str_ptr != '.') {
-		return false;
+		return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	*str_ptr++ = 0;
-	out->hour = (int) strtol(hour, NULL, 10);
-	if(out->hour < 0 || out->hour > 23) return false;
+	result.hour = (int) strtol(hour, NULL, 10);
+	if(result.hour < 0 || result.hour > 23) return MAKE_ERROR(ERROR_INVALID_HOUR);
 
 	// Parse the minutes
 	const char* minute = str_ptr;
@@ -993,16 +1082,16 @@ static bool parse_start_time_string(const char* start_time_string, Start_Time* o
 		str_ptr++;
 	}
 	if(*str_ptr != '\0') {
-		return false;
+		return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
 	}
-	out->minute = (int) strtol(minute, NULL, 10);
-	if(out->minute < 1 && out->minute > 59) return false;
+	result.minute = (int) strtol(minute, NULL, 10);
+	if(result.minute < 1 && result.minute > 59) return MAKE_ERROR(ERROR_INVALID_MINUTE);
 
-	return true;
+	return MAKE_RESULT(result);
 }
 
-// TODO: Discord has as hard limit on how many characters are allowed in a post so we should take care not to exceed this...
-//static const size_t DISCORD_MESSAGE_CHARACTER_LIMIT = 2000;
+// Discord has as hard limit on how many characters are allowed in a post.
+static const size_t DISCORD_MESSAGE_CHARACTER_LIMIT = 2000;
 
 // The maximum allowed characters in a Discord username or nickname.
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
@@ -1050,6 +1139,21 @@ enum DRAFT_STATUS {
 	DRAFT_STATUS_COMPLETE           = 64, // The draft has concluded.
 };
 
+static const char* to_cstring(DRAFT_STATUS status) {
+	switch(status) {
+		case DRAFT_STATUS_INVALID:           return "DRAFT_STATUS_INVALID";
+		case DRAFT_STATUS_CREATED:           return "DRAFT_STATUS_CREATED";
+		case DRAFT_STATUS_REMINDER_SENT:     return "DRAFT_STATUS_REMINDER_SENT";
+		case DRAFT_STATUS_TENTATIVES_PINGED: return "DRAFT_STATUS_TENTATIVES_PINGED";
+		case DRAFT_STATUS_LOCKED:            return "DRAFT_STATUS_LOCKED";
+		case DRAFT_STATUS_FIRED:             return "DRAFT_STATUS_FIRED";
+		case DRAFT_STATUS_COMPLETE:          return "DRAFT_STATUS_COMPLETE";
+		default:
+			break;
+	}
+	return NULL;
+}
+
 // All data needed for a #-pre-register post is available in this structure.
 struct Draft_Event {
 	Draft_Event() {
@@ -1075,7 +1179,7 @@ struct Draft_Event {
 	bool draftmancer_draft; // Will the draft portion take place on Draftmancer?
 	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
 
-	u64 channel_id; // TODO: This can be hard coded in, right? These events should only to to #-pre-register...
+	u64 channel_id; // Eventually EventBot might support sign up for the team drafts, which go to a different channel...
 
 	u64 details_id; // Message ID of the post in #-pre-register describing the format.
 	u64 signups_id; // Message ID of the sign up sheet posted in #-pre-register.
@@ -1428,7 +1532,6 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
 	MYSQL_CONNECT();
-
 	const char* query = R"(
 		INSERT INTO draft_events(
 			guild_id,     -- 0
@@ -1453,7 +1556,6 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 		)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		)";
-
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(19);
@@ -1482,6 +1584,51 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_RETURN();
 }
 
+static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id, const std::shared_ptr<Draft_Event> event) {
+	MYSQL_CONNECT();
+	const char* query = R"(
+		UPDATE draft_events SET
+			format=?,       -- 0
+			time=?,         -- 1
+			duration=?,     -- 2
+			blurb_1=?,      -- 3
+			blurb_2=?,      -- 4
+			blurb_3=?,      -- 5
+			draft_guide=?,  -- 6
+			card_list=?,    -- 7
+			set_list=?,     -- 8
+			color=?,        -- 9
+			xmage_server=?, -- 10
+			draftmancer_draft=?, -- 11
+			banner_url=?,   -- 12
+			channel_id=?    -- 13
+		WHERE guild_id=? AND draft_code=? -- 14,15
+		)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(16);
+	MYSQL_INPUT( 0, MYSQL_TYPE_STRING,   event->format,          strlen(event->format));
+	MYSQL_INPUT( 1, MYSQL_TYPE_LONG,     &event->time,           sizeof(event->time));
+	MYSQL_INPUT( 2, MYSQL_TYPE_FLOAT,    &event->duration,       sizeof(event->duration));
+	MYSQL_INPUT( 3, MYSQL_TYPE_STRING,   &event->blurbs[0][0],   strlen(&event->blurbs[0][0]));
+	MYSQL_INPUT( 4, MYSQL_TYPE_STRING,   &event->blurbs[1][0],   strlen(&event->blurbs[1][0]));
+	MYSQL_INPUT( 5, MYSQL_TYPE_STRING,   &event->blurbs[2][0],   strlen(&event->blurbs[2][0]));
+	MYSQL_INPUT( 6, MYSQL_TYPE_STRING,   event->draft_guide_url, strlen(event->draft_guide_url));
+	MYSQL_INPUT( 7, MYSQL_TYPE_STRING,   event->card_list_url,   strlen(event->card_list_url));
+	MYSQL_INPUT( 8, MYSQL_TYPE_STRING,   event->set_list,        strlen(event->set_list));
+	MYSQL_INPUT( 9, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
+	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
+	MYSQL_INPUT(11, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
+	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_url,      strlen(event->banner_url));
+	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
+	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
+	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
+// TODO: Rename database_get_draft?
 static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string& draft_code) {
 	MYSQL_CONNECT();
 
@@ -1617,23 +1764,6 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
-
-#if 0
-static Database_Result<Database_No_Value> database_modify_draft_event_column(const u64 guild_id, const std::string& draft_code, const char* column, const std::string& value) {
-	MYSQL_CONNECT();
-	const std::string query_ = fmt::format("UPDATE draft_events SET {}=? WHERE guild_id=? AND draft_code=?", column);
-	const char* query = query_.c_str();
-	MYSQL_STATEMENT();
-
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, value.c_str(), value.length());
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
-	MYSQL_INPUT_BIND_AND_EXECUTE();
-
-	MYSQL_RETURN();
-}
-#endif
 
 // NOTE: As we're storing the values of these in the database, the order of these must not change! Add new values to the end.
 enum SIGNUP_STATUS : int { 
@@ -1877,6 +2007,29 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status,        sizeof(status));
 	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	char result[DRAFT_CODE_LENGTH_MAX + 1];
+
+	MYSQL_OUTPUT_INIT(1);
+	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<std::string> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_edit_draft_autocomplete(const u64 guild_id, std::string& prefix) {
+	MYSQL_CONNECT();
+
+	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -2180,15 +2333,16 @@ static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const char* draft_code, const char* note) {
 	MYSQL_CONNECT();
-	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code) VALUES(?,?,?)";
+	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
 	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   note,       (note == NULL ? 0 : strlen(note))); 
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2239,8 +2393,8 @@ static const int BANNER_IMAGE_HEIGHT = 550;
 static const int PACK_IMAGE_WIDTH  = 275;
 static const int PACK_IMAGE_HEIGHT = 430;
 
-static const int KEY_ART_WIDTH = BANNER_IMAGE_WIDTH;//(PACK_IMAGE_WIDTH * 3);
-static const int KEY_ART_HEIGHT = BANNER_IMAGE_HEIGHT;//PACK_IMAGE_HEIGHT;
+static const int KEY_ART_WIDTH = BANNER_IMAGE_WIDTH;
+static const int KEY_ART_HEIGHT = BANNER_IMAGE_HEIGHT;
 
 
 union Pixel {
@@ -2258,38 +2412,51 @@ struct Image {
 	int channels;
 	void* data;
 };
+static_assert(std::is_trivially_copyable<Image>(), "struct Image is not trivially copyable");
 
-// TODO: Return a point to img or NULL if failed
-static void init_image(Image* img, int width, int height, int channels, u32 color) {
-	img->data = malloc(width * height * channels);// sizeof(Pixel));
-	if(img->data == NULL) {
-		// FIXME: Failing to allocate is possibly a real problem on the virtual server this runs on...
-		img->w = 0;
-		img->h = 0;
-		img->channels = 0;
-		fprintf(stdout, "out of memory\n");
-		return;
+
+static Result<Image> make_image(int width, int height, int channels, u32 color) {
+	Image result;
+
+	result.data = malloc(width * height * channels);
+	if(result.data == NULL) {
+		return MAKE_ERROR(ERROR_OUT_OF_MEMORY);
 	}
 
-	img->channels = channels;
-	img->w = width;
-	img->h = height;
+	result.channels = channels;
+	result.w = width;
+	result.h = height;
 
 	// TODO: Do I need to support 3 channel images here? Probably not...
 	// TODO: This should be moved to it's own function
 	if(channels == 4) {
-		Pixel* ptr = (Pixel*)img->data;
+		Pixel* ptr = (Pixel*)result.data;
 		for(int i = 0; i < (width * height); ++i) {
 			ptr[i].c = color;
 		}
 	} else
 	if(channels == 1) {
-		u8* ptr = (u8*)img->data;
+		u8* ptr = (u8*)result.data;
 		for(int i = 0; i < (width * height); ++i) {
 			ptr[i] = (u8)color;	
 		}
 	}
+
+	return MAKE_RESULT(result);
 }
+
+static Result<Image> load_image(const char* file, int channels) {
+	Image result;
+
+	result.data = stbi_load(file, &result.w, &result.h, &result.channels, channels);
+	if(result.data == NULL) {
+		log(LOG_LEVEL_ERROR, fmt::format("{} file: '{}', reason: {}", to_cstring(ERROR_LOAD_ART_FAILED), file, stbi_failure_reason()).c_str());
+		return MAKE_ERROR(ERROR_LOAD_ART_FAILED);
+	}
+
+	return MAKE_RESULT(result);
+}
+
 
 void image_max_alpha(Image* img) {
 	if(img->channels == 4) {
@@ -2522,8 +2689,7 @@ static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int 
 		if(canvas->channels == 1) {
 			blit_A8_to_A8(&bitmap, GLYPH_WIDTH_MAX, canvas, (int)xpos + x0, y + baseline + y0);
 		} else {
-			// FIXME: log error
-			assert(false);
+			log(LOG_LEVEL_ERROR, "Unsupported channel count {} in {}", canvas->channels, __FUNCTION__);
 		}
 
 		xpos += advance * scale;
@@ -2543,38 +2709,39 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 
 	// FIXME: There are no bounds checks done here
 
-	Image upscaled;
-	init_image(&upscaled, dim.w, dim.h, 1, 0x00000000);
-	render_text_to_image(font, str, upscaled_font_size, &upscaled, 0, 0, {.c=shadow_color});
+	Result<Image> upscaled = make_image(dim.w, dim.h, 1, 0x00000000);
+	SCOPE_EXIT(free(upscaled.value.data));
+	if(is_error(upscaled)) return;// MAKE_ERROR(upscaled.error);
+	render_text_to_image(font, str, upscaled_font_size, &upscaled.value, 0, 0, {.c=shadow_color});
 
-	Image downscaled;
-	if((upscaled.w / upscale_factor) < max_width) {
-		init_image(&downscaled, dim.w / upscale_factor, dim.h / upscale_factor, 1, 0x00000000);
+	Result<Image> downscaled;
+	if((upscaled.value.w / upscale_factor) < max_width) {
+		downscaled = make_image(dim.w / upscale_factor, dim.h / upscale_factor, 1, 0x00000000);
 	} else {
 		// The text is too wide, it will need to be scaled down more than upscale_factor
 		f32 ratio = ((f32)max_width / (f32)dim.w);
 		int height = ceil(((f32)dim.h * ratio));
-		init_image(&downscaled, max_width, height, 1, 0x00000000);
+		downscaled = make_image(max_width, height, 1, 0x00000000);
 	}
-	stbir_resize_uint8_srgb((const u8*)upscaled.data, upscaled.w, upscaled.h, 0,
-	                        (u8*)downscaled.data, downscaled.w, downscaled.h, 0, STBIR_1CHANNEL);
+	SCOPE_EXIT(free(downscaled.value.data));
+	if(is_error(downscaled)) return;
 
-	const int xpos = (BANNER_IMAGE_WIDTH / 2) - (downscaled.w / 2);
-	ypos -= (downscaled.h / 2);
+	stbir_resize_uint8_srgb((const u8*)upscaled.value.data, upscaled.value.w, upscaled.value.h, 0,
+	                        (u8*)downscaled.value.data, downscaled.value.w, downscaled.value.h, 0, STBIR_1CHANNEL);
 
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos-1, ypos-1); // left top
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos-1, ypos+1); // left bottom
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos-1, ypos);   // left centre
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos+1, ypos);   // right centre
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos,   ypos-1); // center top
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos,   ypos+1); // center bottom
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos+1, ypos-1); // right top
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=shadow_color}, out, xpos+1, ypos+1); // right bottom
+	const int xpos = (BANNER_IMAGE_WIDTH / 2) - (downscaled.value.w / 2);
+	ypos -= (downscaled.value.h / 2);
 
-	blit_A8_to_RGBA(&downscaled, downscaled.w, {.c=text_color}, out, xpos, ypos);
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos-1, ypos-1); // left top
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos-1, ypos+1); // left bottom
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos-1, ypos);   // left centre
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos+1, ypos);   // right centre
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos,   ypos-1); // center top
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos,   ypos+1); // center bottom
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos+1, ypos-1); // right top
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=shadow_color}, out, xpos+1, ypos+1); // right bottom
 
-	free(upscaled.data);
-	free(downscaled.data);
+	blit_A8_to_RGBA(&downscaled.value, downscaled.value.w, {.c=text_color}, out, xpos, ypos);
 }
 
 enum DRAFT_TYPE {
@@ -2624,22 +2791,6 @@ struct Draft_Type {
 	const char* name;
 };
 
-#if 0
-// NOTE: 2023-10-24: Due to a bug in DPP++ autocomplete does not work when mapping sting->int
-// but when (if!) this bug is fixed I'll want to use this code again.
-static std::vector<Draft_Type> get_draft_types_for_autocomplete(const std::string& input) {
-	fprintf(stdout, "%s\n", __FUNCTION__);
-	std::vector<Draft_Type> result;
-	for(int i = (int)DRAFT_TYPE_DEVOTION_GIANT; i < (int)DRAFT_TYPE_COUNT; ++i) {
-		const char* name = to_cstring((DRAFT_TYPE)i);
-		if(name == NULL) continue;
-		if(input.empty() || strncmp(name, input.c_str(), input.length()) == 0) {
-			result.push_back({(DRAFT_TYPE)i, name});
-		}
-	}
-	return result;
-}
-#endif
 
 struct Icon {
 	DRAFT_TYPE type;
@@ -2707,18 +2858,14 @@ static stbtt_fontinfo g_banner_font;
 static bool g_banner_font_loaded = false;
 static const char* g_banner_font_file = "gfx/banner/SourceSansPro-Black.otf";
 
-struct Render_Banner_Result {
-	bool is_error;
-	std::string path; // if is_error == false, this is the path to the generated banner. FIXME: This smells bad!
-};
-
-const Render_Banner_Result render_banner(Banner_Opts* opts) {
+const Result<std::string> render_banner(Banner_Opts* opts) {
 	if(g_banner_font_loaded == false) {
 		size_t size = 0;
-		const u8* buffer = file_slurp(g_banner_font_file, &size); // NOTE: Intentionally never freed
+		u8* buffer = file_slurp(g_banner_font_file, &size); // NOTE: Intentionally never freed if the file is successfully loaded.
 		int result = stbtt_InitFont(&g_banner_font, buffer, stbtt_GetFontOffsetForIndex(buffer, 0));
 		if(result == 0) {
-			return {true, fmt::format("Internal error: Failed to load font file \"{}\". This is not your fault! Please try again.", g_banner_font_file)};
+			free(buffer);
+			return MAKE_ERROR(ERROR_LOAD_FONT_FAILED);
 		}
 		g_banner_font_loaded = true;
 	}
@@ -2726,8 +2873,8 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 	static const char* BANNER_FRAME_TOP_FILE    = "gfx/banner/frame_top.png";
 	static const char* BANNER_FRAME_SIDE_FILE   = "gfx/banner/frame_side.png"; // left and right
 	static const char* BANNER_FRAME_BOTTOM_FILE = "gfx/banner/frame_bottom.png";
-	static const char* BANNER_GRADIENT_FILE = "gfx/banner/gradient.png";
-	static const char* BANNER_SUBTITLE_FILE = "gfx/banner/subtitle.png";
+	static const char* BANNER_GRADIENT_FILE     = "gfx/banner/gradient.png";
+	static const char* BANNER_SUBTITLE_FILE 	= "gfx/banner/subtitle.png";
 
 	static const int BANNER_DATETIME_YPOS      = 10; //15;
 	static const int BANNER_DATETIME_FONT_SIZE = 35; //40;
@@ -2743,163 +2890,153 @@ const Render_Banner_Result render_banner(Banner_Opts* opts) {
 
 	static const int BANNER_PACK_DIVIDER_YPOS = 108; // Starting row to draw the divider between packs
 
-	Image banner;
-	init_image(&banner, BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
-	SCOPE_EXIT(free(banner.data));
+	Result<Image> banner = make_image(BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
+	SCOPE_EXIT(free(banner.value.data));
+	if(is_error(banner)) {
+		return MAKE_ERROR(banner.error);
+	}
 
 	// blit the background image(s)
 	if(opts->images.size() == 1) {
 		// A single piece of key art is to be used.
-		Image scaled;
-		init_image(&scaled, KEY_ART_WIDTH, KEY_ART_HEIGHT, 3, 0x00000000);
-		SCOPE_EXIT(free(scaled.data));
-		
-		Image img;
-		img.data = (void*) stbi_load(opts->images[0].c_str(), &img.w, &img.h, &img.channels, 3);
-		if(img.data == NULL) {
-			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", opts->images[0], stbi_failure_reason())};
-		}
-		SCOPE_EXIT(stbi_image_free(img.data));
-		stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
-				(u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_RGB);
-		blit_RGB_to_RGBA(&scaled, &banner, 0, 0);
+		Result<Image> scaled = make_image(KEY_ART_WIDTH, KEY_ART_HEIGHT, 3, 0x00000000);
+		SCOPE_EXIT(free(scaled.value.data));
+		if(is_error(scaled)) return MAKE_ERROR(scaled.error);
+
+		Result<Image> img = load_image(opts->images[0].c_str(), 3);
+		SCOPE_EXIT(stbi_image_free(img.value.data));
+		if(is_error(img)) return MAKE_ERROR(img.error);
+
+		stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
+				(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
+		blit_RGB_to_RGBA(&scaled.value, &banner.value, 0, 0);
 	} else
 	if(opts->images.size() == 3) {
 		// Three pack images given.
-		Image scaled;
-		init_image(&scaled, PACK_IMAGE_WIDTH, PACK_IMAGE_HEIGHT, 3, 0x00000000);
-		SCOPE_EXIT(free(scaled.data));
+		Result<Image> scaled = make_image(PACK_IMAGE_WIDTH, PACK_IMAGE_HEIGHT, 3, 0x00000000);
+		SCOPE_EXIT(free(scaled.value.data));
+		if(is_error(scaled)) return MAKE_ERROR(scaled.error);
+
 		for(size_t f = 0; f < opts->images.size(); ++f) {
-			Image img;
-			img.data = (void*) stbi_load(opts->images[f].c_str(), &img.w, &img.h, &img.channels, 3);
-			if(img.data == NULL) {
-				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", opts->images[f], stbi_failure_reason())};
-			}
-			SCOPE_EXIT(stbi_image_free(img.data));
-			stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
-					(u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_RGB);
-			blit_RGB_to_RGBA(&scaled, &banner, f * PACK_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT - scaled.h);
+			Result<Image> img = load_image(opts->images[f].c_str(), 3);
+			SCOPE_EXIT(stbi_image_free(img.value.data));
+			if(is_error(img)) return MAKE_ERROR(img.error);
+
+			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
+					(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
+			blit_RGB_to_RGBA(&scaled.value, &banner.value, f * PACK_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT - scaled.value.h);
 		}
 
 		// Draw a thin line to separate each pack.
 		// FIXME: Replace this with a draw_rect function to avoid unnecessary heap allocations for each line.
-		Image line;
-		init_image(&line, 3, BANNER_IMAGE_HEIGHT-BANNER_PACK_DIVIDER_YPOS, 4, 0xFF000000);
-		SCOPE_EXIT(free(line.data));
+		Result<Image> line = make_image(3, BANNER_IMAGE_HEIGHT-BANNER_PACK_DIVIDER_YPOS, 4, 0xFF000000);
+		SCOPE_EXIT(free(line.value.data));
+		if(is_error(line)) return MAKE_ERROR(line.error);
+
 		for(int i = 1; i < 3; ++i) {
-			blit_RGBA_to_RGBA(&line, &banner, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);		
+			blit_RGBA_to_RGBA(&line.value, &banner.value, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);		
 		}
 	} else {
-		return {true, fmt::format("Internal error: Unexpected or unsupported pack count: {}", opts->images.size())};
+		log(LOG_LEVEL_ERROR, fmt::format("{} count: {}", to_cstring(ERROR_INVALID_PACK_COUNT), opts->images.size()).c_str());
+		return MAKE_ERROR(ERROR_INVALID_PACK_COUNT);
 	}
 
 	// Blit the gradient. TODO: This could be done in code instead of using an image...
 	{
-		Image grad;
-		grad.data = (void*) stbi_load(BANNER_GRADIENT_FILE, &grad.w, &grad.h, &grad.channels, 1);
-		if(grad.data == NULL) {
-			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_GRADIENT_FILE, stbi_failure_reason())};
-		}
-		SCOPE_EXIT(stbi_image_free(grad.data));
-		blit_A8_to_RGBA(&grad, grad.w, {.c=0xFF000000}, &banner, 0, 0);
+		Result<Image> grad = load_image(BANNER_GRADIENT_FILE, 1);
+		SCOPE_EXIT(stbi_image_free(grad.value.data));
+		if(is_error(grad)) return MAKE_ERROR(grad.error);
+
+		blit_A8_to_RGBA(&grad.value, grad.value.w, {.c=0xFF000000}, &banner.value, 0, 0);
 	}
 
 	// Blit the title box frames and color them
 	{
 		{
 			// Top
-			Image frame;
-			frame.data = (void*) stbi_load(BANNER_FRAME_TOP_FILE, &frame.w, &frame.h, &frame.channels, 1);
-			if(frame.data == NULL) {
-				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_FRAME_TOP_FILE, stbi_failure_reason())};
-			}
-			SCOPE_EXIT(stbi_image_free(frame.data));
-			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 9, 57);
+			Result<Image> frame = load_image(BANNER_FRAME_TOP_FILE, 1);
+			SCOPE_EXIT(stbi_image_free(frame.value.data));
+			if(is_error(frame)) return MAKE_ERROR(frame.error);
+			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 57);
 		}
 		{
 			// Bottom
-			Image frame;
-			frame.data = (void*) stbi_load(BANNER_FRAME_BOTTOM_FILE, &frame.w, &frame.h, &frame.channels, 1);
-			if(frame.data == NULL) {
-				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_FRAME_BOTTOM_FILE, stbi_failure_reason())};
-			}
-			SCOPE_EXIT(stbi_image_free(frame.data));
-			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 9, 530);
+			Result<Image> frame = load_image(BANNER_FRAME_BOTTOM_FILE, 1);
+			SCOPE_EXIT(stbi_image_free(frame.value.data));
+			if(is_error(frame)) return MAKE_ERROR(frame.error);
+			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 530);
 		}
 		{
 			// Left & right
-			Image frame;
-			frame.data = (void*) stbi_load(BANNER_FRAME_SIDE_FILE, &frame.w, &frame.h, &frame.channels, 1);
-			if(frame.data == NULL) {
-				return {true, fmt::format("Internal error: Failed to load image \"{}\". Reason: {}", BANNER_FRAME_SIDE_FILE, stbi_failure_reason())};
-			}
-			SCOPE_EXIT(stbi_image_free(frame.data));
-			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 9, 108);
-			blit_A8_to_RGBA(&frame, frame.w, {.c=opts->league_color}, &banner, 807, 108);
+			Result<Image> frame = load_image(BANNER_FRAME_SIDE_FILE, 1);
+			SCOPE_EXIT(stbi_image_free(frame.value.data));
+			if(is_error(frame)) return MAKE_ERROR(frame.error);
+
+			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 108);
+			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 807, 108);
 		}
 	}
 
 	// Blit the date/time text
 	{
 		Text_Dim dim = get_text_dimensions(&g_banner_font, BANNER_DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
-		Image img;
-		init_image(&img, dim.w, dim.h, 1, 0x00000000);
-		SCOPE_EXIT(free(img.data));
-		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), BANNER_DATETIME_FONT_SIZE, &img, 0, 0, {.c=0xFFFFFFFF});
-		if(img.w < (BANNER_IMAGE_WIDTH - 10)) {
-			blit_A8_to_RGBA(&img, img.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(img.w/2), BANNER_DATETIME_YPOS);
+		Result<Image> img = make_image(dim.w, dim.h, 1, 0x00000000);
+		SCOPE_EXIT(free(img.value.data));
+		if(is_error(img)) return MAKE_ERROR(img.error);
+
+		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), BANNER_DATETIME_FONT_SIZE, &img.value, 0, 0, {.c=0xFFFFFFFF});
+		if(img.value.w < (BANNER_IMAGE_WIDTH - 10)) {
+			blit_A8_to_RGBA(&img.value, img.value.w, {.c=0xFFFFFFFF}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(img.value.w/2), BANNER_DATETIME_YPOS);
 		} else {
 			// Scale it to fit.
 			f32 ratio = ((f32)(BANNER_IMAGE_WIDTH-10) / dim.w);
 			int height = ceil(((f32)dim.h * ratio));
-			Image scaled;
-			init_image(&scaled, (BANNER_IMAGE_WIDTH-10), height, 1, 0x00000000);
-			SCOPE_EXIT(free(scaled.data));
-			stbir_resize_uint8_srgb((const u8*)img.data, img.w, img.h, 0,
-			                        (u8*)scaled.data, scaled.w, scaled.h, 0, STBIR_1CHANNEL);
-			blit_A8_to_RGBA(&scaled, scaled.w, {.c=0xFFFFFFFF}, &banner, (BANNER_IMAGE_WIDTH/2)-(scaled.w/2), BANNER_DATETIME_YPOS);
+
+			Result<Image> scaled = make_image((BANNER_IMAGE_WIDTH-10), height, 1, 0x00000000);
+			SCOPE_EXIT(free(scaled.value.data));
+			if(is_error(scaled)) return MAKE_ERROR(scaled.error);
+
+			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
+			                        (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
+			blit_A8_to_RGBA(&scaled.value, scaled.value.w, {.c=0xFFFFFFFF}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(scaled.value.w/2), BANNER_DATETIME_YPOS);
 		}
 	}
 	
 	// Blit the title text
-	draw_shadowed_text(&g_banner_font, BANNER_TITLE_FONT_SIZE, BANNER_TITLE_WIDTH_MAX, (const u8*)opts->title.c_str(), 0xFF000000, 0xFFFFFFFF, &banner, BANNER_TITLE_TEXT_YPOS);
+	draw_shadowed_text(&g_banner_font, BANNER_TITLE_FONT_SIZE, BANNER_TITLE_WIDTH_MAX, (const u8*)opts->title.c_str(), 0xFF000000, 0xFFFFFFFF, &banner.value, BANNER_TITLE_TEXT_YPOS);
 
 	if(opts->subtitle.length() > 0) {
 		// Blit the subtitle box
-		Image sub;
-		sub.data = (void*) stbi_load(BANNER_SUBTITLE_FILE, &sub.w, &sub.h, &sub.channels, 1);
-		if(sub.data == NULL) {
-			return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", BANNER_SUBTITLE_FILE, stbi_failure_reason())};
-		}
-		SCOPE_EXIT(stbi_image_free(sub.data));
-		blit_A8_to_RGBA_no_alpha(&sub, sub.w, {.c=opts->league_color}, &banner, (BANNER_IMAGE_WIDTH/2)-(sub.w/2), BANNER_SUBTITLE_FRAME_YPOS);
+		Result<Image> sub = load_image(BANNER_SUBTITLE_FILE, 1);
+		SCOPE_EXIT(stbi_image_free(sub.value.data));
+		if(is_error(sub)) return MAKE_ERROR(sub.error);
+
+		blit_A8_to_RGBA_no_alpha(&sub.value, sub.value.w, {.c=opts->league_color}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(sub.value.w/2), BANNER_SUBTITLE_FRAME_YPOS);
+
 		// Blit the devotion/hero/etc. icon
 		const Icon* icon = get_icon(opts->draft_type);
 		if(icon != NULL) {
-			Image icon_image;
-			icon_image.data = (void*) stbi_load(icon->file, &icon_image.w, &icon_image.h, &icon_image.channels, 4);
-			if(icon_image.data == NULL) {
-				return {true, fmt::format("Internal error: Failed to load image \"{}\" Reason: {}", icon->file, stbi_failure_reason())}; 
-			}
-			SCOPE_EXIT(stbi_image_free(icon_image.data));
-			blit_RGBA_to_RGBA(&icon_image, &banner, icon->x, icon->y);
-			//stbi_image_free(icon_image.data);
+			Result<Image> icon_image = load_image(icon->file, 4);
+			SCOPE_EXIT(stbi_image_free(icon_image.value.data));
+			if(is_error(icon_image)) return MAKE_ERROR(icon_image.error);
+
+			blit_RGBA_to_RGBA(&icon_image.value, &banner.value, icon->x, icon->y);
 		}
 
 		// Draw the subtitle text
-		draw_shadowed_text(&g_banner_font, BANNER_SUBTITLE_FONT_SIZE, BANNER_SUBTITLE_WIDTH_MAX, (const u8*)opts->subtitle.c_str(), 0xFF000000, 0xFF04CDFF, &banner, BANNER_SUBTITLE_YPOS);
+		draw_shadowed_text(&g_banner_font, BANNER_SUBTITLE_FONT_SIZE, BANNER_SUBTITLE_WIDTH_MAX, (const u8*)opts->subtitle.c_str(), 0xFF000000, 0xFF04CDFF, &banner.value, BANNER_SUBTITLE_YPOS);
 	}
 
 	// Save the file
 	// TODO: Only need to save RGB, this saves having to clear the alpha channel, but does stbii_write support this?
 	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
-	image_max_alpha(&banner); // TODO: How do I write only the RGB channels?
+	image_max_alpha(&banner.value);
 	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
-	if(stbi_write_png(file_path.c_str(), banner.w, banner.h, 4, (u8*)banner.data, banner.w*4) == 0) {
-		return {true, "Internal error: Failed to save generated banner to storage. Please try again."};
+	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
+		return MAKE_ERROR(ERROR_FAILED_TO_SAVE_BANNER);
 	}
 
-	return {false, file_path};
+	return MAKE_RESULT(file_path);
 }
 
 
@@ -2955,17 +3092,18 @@ static void add_sign_up_buttons_to_message(dpp::message& message, const std::sha
 	bool minutemage_locked = true;
 
 	time_t now = time(NULL);
+	time_t draft_start = unpack_and_make_timestamp(draft_event->time, SERVER_TIME_ZONE);
 
 	// FIXME: This works, but it should probably check the draft status instead, right?
-	if(draft_event->time - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER) {
+	if(draft_start - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER) {
 		minutemage_locked = false;
 	}
 
-	if(draft_event->time - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES) {
+	if(draft_start - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES) {
 		tentative_locked = true;
 	}
 
-	if(now >= draft_event->time) {
+	if(now >= draft_start) {
 		playing_locked = true;
 	}
 
@@ -3058,13 +3196,6 @@ static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_E
 
 	int year, month, day, hour, minute;
 	unpack_time(draft_event->time, &year, &month, &day, &hour, &minute);
-#if 0
-	auto zoned_time = date::make_zoned(draft_event->time_zone,
-		date::local_days{date::year{year}/month/day} +
-		std::chrono::hours(hour) +
-		std::chrono::minutes(minute));
-	time_t start_timestamp = std::chrono::system_clock::to_time_t(zoned_time.get_sys_time());
-#endif
 	time_t start_timestamp = make_timestamp(draft_event->time_zone, year, month, day, hour, minute);
 
 	std::string embed_title = fmt::format(":hourglass_flowing_sand: Draft starts: <t:{}:R>", start_timestamp);
@@ -3115,16 +3246,18 @@ static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_E
 	embed.set_image(draft_event->banner_url);
 
 	time_t now = time(NULL);
-	if(now >= draft_event->time) {
+	time_t draft_start = unpack_and_make_timestamp(draft_event->time, SERVER_TIME_ZONE);
+	if(now >= draft_start) {
 		dpp::embed_footer footer;
-		footer.set_text("Sign up for this draft is now locked.");
-		footer.set_icon("https://em-content.zobj.net/source/skype/289/locked_1f512.png"); // TODO: Link to somewhere more reliable...
+		footer.set_text("🔒 Sign up for this draft is now locked. 🔒");
+		//footer.set_icon("https://em-content.zobj.net/source/skype/289/locked_1f512.png");
 		embed.set_footer(footer);
 	}
 
 	return embed;
 }
 
+#if 0
 static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
 	auto draft_event = database_get_event(guild_id, draft_code);
 	if(draft_event != true) {
@@ -3137,18 +3270,10 @@ static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string&
 	int year, month, day, hour, minute;
 	unpack_time(draft_event.value->time, &year, &month, &day, &hour, &minute);
 
-#if 0
-	auto zoned_time = date::make_zoned(draft_event.value->time_zone,
-		date::local_days{date::year{year}/month/day} +
-		std::chrono::hours(hour) +
-		std::chrono::minutes(minute));
-	time_t start_timestamp = std::chrono::system_clock::to_time_t(zoned_time.get_sys_time());
-#endif
 	time_t start_timestamp = make_timestamp(draft_event.value->time_zone, year, month, day, hour, minute);
 
 	// Timestamp for when the draft ends
 	Draft_Duration duration = {(int)draft_event.value->duration, (int)(60.0f * (draft_event.value->duration - (int)draft_event.value->duration))};
-	//time_t end_timestamp = draft_event.value->time + ((60*60*duration.hours) + (60*duration.minutes));
 	time_t end_timestamp = start_timestamp + ((60*60*duration.hours) + (60*duration.minutes));
 
 	// The entire event post content is contained in this string.
@@ -3156,7 +3281,6 @@ static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string&
 
 	// Title line
 	draft_details += "~~　　　　　　　　　　　　　　　　　　~~\n"; // NOTE: These are ideographic spaces.
-	//draft_details += fmt::format("# {} The sign-up for the {} **{}** draft ({}: {}) is now up!\n\nThis draft will take place on **<t:{}:F> - <t:{}:t>**", draft_event.value->pings, draft_event.value->league_name, description, draft_code, draft_event.value->format, draft_event.value->time, end_timestamp);
 	draft_details += fmt::format("# {} The sign-up for the {} **{}** draft ({}: {}) is now up!\n\nThis draft will take place on **<t:{}:F> - <t:{}:t>**", draft_event.value->pings, draft_event.value->league_name, description, draft_code, draft_event.value->format, start_timestamp, end_timestamp);
 
 	// Blurbs
@@ -3229,6 +3353,63 @@ static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string&
 
 	return true;
 }
+#endif
+
+static void redraw_details(dpp::cluster& bot, const u64 guild_id, const u64 message_id, const u64 channel_id, std::shared_ptr<Draft_Event> draft) {
+	bot.message_get(message_id, channel_id, [&bot, guild_id, message_id, channel_id, draft](const dpp::confirmation_callback_t& callback) {
+		if(!callback.is_error()) {
+			dpp::message message = std::get<dpp::message>(callback.value);
+
+			char description[1024]; // FIXME: This can overflow.	
+			expand_format_string(draft->format, strlen(draft->format), description, 1024);
+
+			int year, month, day, hour, minute;
+			unpack_time(draft->time, &year, &month, &day, &hour, &minute);
+			const time_t start_timestamp = make_timestamp(draft->time_zone, year, month, day, hour, minute);
+			Draft_Duration duration = {(int)draft->duration, (int)(60.0f * (draft->duration - (int)draft->duration))};
+			const time_t end_timestamp = start_timestamp + ((60*60*duration.hours) + (60*duration.minutes));
+
+			std::string text; // Contains the entire text of the details post.
+			text += "~~　　　　　　　　　　　　　　　　　　~~\n"; // NOTE: These are ideographic spaces.
+			text += fmt::format("# {} The sign-up for the {} **{}** draft ({}: {}) is now up!\n\nThis draft will take place on **<t:{}:F> - <t:{}:t>**", draft->pings, draft->league_name, description, draft->draft_code, draft->format, start_timestamp, end_timestamp);
+
+			// Blurbs
+			for(size_t i = 0; i < BLURB_COUNT; ++i) {
+				if(strlen(&draft->blurbs[i][0]) > 0) {
+					text += fmt::format("\n\n{}", &draft->blurbs[i][0]);
+				}
+			}
+
+			// Set list
+			if(strlen(draft->set_list) > 0) {
+				char buffer[1024]; // FIXME: Magic number, could also overflow
+				expand_set_list(draft->set_list, strlen(draft->set_list), buffer, 1024);
+				text += fmt::format("\n{}", buffer); // NOTE: This single newline is intentional.
+			}
+
+			// Card list
+			if(strlen(draft->card_list_url) > 0) {
+				text += fmt::format("\n\n:arrow_right: View the card list here: {}", draft->card_list_url);
+			}
+
+			// Draft Guide
+			if(strlen(draft->draft_guide_url) > 0) {
+				text += fmt::format("\n\n:scroll: View the draft guide here: {}", draft->draft_guide_url);
+			}
+
+			message.set_content(text);
+
+			bot.message_edit(message, [&bot, message_id, channel_id](const dpp::confirmation_callback_t& callback) {
+				if(!callback.is_error()) {
+				} else {
+					log(LOG_LEVEL_ERROR, "message_edit(%lu, %lu) failed: %s", message_id, channel_id, callback.get_error().message.c_str());
+				}
+			});
+		} else {
+			log(LOG_LEVEL_ERROR, "message_get(%lu, %lu) failed: %s", message_id, channel_id, callback.get_error().message.c_str());
+		}
+	});
+}
 
 // Called whenever a name is added to the sign up list or when the state of the buttons needs to be updated.
 static void redraw_signup(dpp::cluster& bot, const u64 guild_id, const u64 message_id, const u64 channel_id, std::shared_ptr<Draft_Event> draft) {
@@ -3238,6 +3419,7 @@ static void redraw_signup(dpp::cluster& bot, const u64 guild_id, const u64 messa
 			dpp::message message = std::get<dpp::message>(callback.value);
 
 			message.embeds.clear();
+			message.set_content("");
 			dpp::embed embed = make_sign_up_embed(guild_id, draft);
 			message.add_embed(embed);
 
@@ -3250,10 +3432,65 @@ static void redraw_signup(dpp::cluster& bot, const u64 guild_id, const u64 messa
 				}
 			});
 		} else {
+			// TODO: Now What?
 		}
-
 	});
 }
+
+
+static void edit_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_ptr<Draft_Event> draft) {
+	redraw_details(bot, guild_id, draft->details_id, draft->channel_id, draft);
+
+	redraw_signup(bot, guild_id, draft->signups_id, draft->channel_id, draft);
+
+	if(draft->reminder_id != 0) {
+		redraw_signup(bot, guild_id, draft->reminder_id, draft->channel_id, draft);
+	}
+}
+
+static void post_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_ptr<Draft_Event> draft) {
+	// First create details message.
+	dpp::message details;
+	details.set_type(dpp::message_type::mt_default);
+	details.set_guild_id(guild_id);
+	details.set_channel_id(draft->channel_id);
+	details.set_content(":hourglass:");
+	details.set_allowed_mentions(true, true, true, false, {}, {});
+	bot.message_create(details, [&bot, guild_id, draft](const dpp::confirmation_callback_t& callback) {
+		if(!callback.is_error()) {
+			const dpp::message& message = std::get<dpp::message>(callback.value);
+			(void)database_set_details_message_id(guild_id, draft->draft_code, message.id);
+
+			draft->details_id = message.id;
+
+			// The sign up message.
+			dpp::message sign_up;
+			sign_up.set_type(dpp::message_type::mt_default);
+			sign_up.set_guild_id(guild_id);
+			sign_up.set_channel_id(draft->channel_id);
+			sign_up.set_content(":hourglass:");
+			bot.message_create(sign_up, [&bot, guild_id, draft](const dpp::confirmation_callback_t& callback) {
+				if(!callback.is_error()) {
+					const dpp::message& message = std::get<dpp::message>(callback.value);
+					(void)database_set_signups_message_id(guild_id, draft->draft_code, message.id);
+
+					draft->signups_id = message.id;
+
+					draft->status = DRAFT_STATUS_POSTED;
+					(void)database_set_draft_status(guild_id, draft->draft_code, DRAFT_STATUS_POSTED);
+
+					edit_draft(bot, guild_id, draft);
+
+				} else {
+					// TODO: Now what?
+				}
+			});
+		} else {
+			// TODO: Now what?
+		}
+	});
+}
+
 
 static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
 	auto draft_event = database_get_event(guild_id, draft_code);
@@ -3677,6 +3914,7 @@ static void output_sql() {
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "note VARCHAR{%lu)\n", DISCORD_MESSAGE_CHARACTER_LIMIT);
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
@@ -3689,11 +3927,12 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	std::vector<std::string> result;
 
 	// TODO: If the first set and the third set are the same, but the second is different, use pack art 1 and 2
+
 	if(list.count == 0) {
 		// No match found. Do a reverse lookup and find the art.
 		const MTG_Draftable_Set* set = get_set_from_name(format);
 		if(set != NULL && set->key_art == true) {
-			result.push_back(fmt::format("gfx/pack_art/key/{}.png", set->code));
+			result.push_back(fmt::format("gfx/pack_art/key/{}.png", set->name));
 		}
 	} else {
 		for(int i = 0; i < list.count; ++i) {
@@ -3711,7 +3950,7 @@ static std::vector<std::string> get_pack_images(const char* format) {
 				}
 			}
 
-			// Conflux needs a special case as its files are in CON_.
+			// Conflux needs a special case as its files are in CON_ - CON is a reserved directory name on Windows.
 			if(strcmp(list.set[i]->code, "CON") != 0) {
 				result.push_back(fmt::format("gfx/pack_art/crop/{}/{}.png", list.set[i]->code, pack_to_use+1));
 			} else {
@@ -3759,6 +3998,7 @@ int main(int argc, char* argv[]) {
     (void)signal(SIGTERM, sig_handler);
     // NOTE: SIGKILL is uncatchable
 
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 	mysql_library_init(0, NULL, NULL);
 
 	srand(time(NULL));
@@ -3799,14 +4039,24 @@ int main(int argc, char* argv[]) {
 
 	// Called for slash command options that have the autocomplete flag set to true.
 	bot.on_autocomplete([&bot](const dpp::autocomplete_t& event) {
+		const u64 guild_id = event.command.get_guild().id;
 		for(auto& opt : event.options) {
 			if(opt.focused) {
 				if(opt.name == "draft_code") {
-					if(event.name == "post_draft" || event.name == "edit_draft") {
+					if(event.name == "post_draft") {
 						// Gets a list of all drafts that haven't been posted.
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						u64 guild_id = event.command.get_guild().id;
 						auto draft_codes = database_get_draft_codes_for_post_draft_autocomplete(guild_id, prefix);
+						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
+						for(auto& draft_code : draft_codes.value) {
+							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
+						}
+						bot.interaction_response_create(event.command.id, event.command.token, response);
+					} else
+					if(event.name == "edit_draft" || "view_draft") {
+						// Gets a list of drafts that have been created, but not necessarily posted yet.
+						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
+						auto draft_codes = database_get_draft_codes_for_edit_draft_autocomplete(guild_id, prefix);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
@@ -3815,7 +4065,6 @@ int main(int argc, char* argv[]) {
 					} else
 					if(event.name == "delete_draft") {
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						u64 guild_id = event.command.get_guild().id;
 						auto draft_codes = database_get_draft_codes_for_delete_draft_autocomplete(guild_id, prefix);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
@@ -3911,6 +4160,12 @@ int main(int argc, char* argv[]) {
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
+				dpp::slashcommand cmd("view_draft", "View the details for a draft.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code of the draft to view.", true).set_auto_complete(true));
+				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
 				dpp::slashcommand cmd("edit_draft", "Edit the details of a draft", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				// Required
@@ -3994,6 +4249,7 @@ int main(int argc, char* argv[]) {
 				dpp::slashcommand cmd("dropper", "Add a player to the droppers list.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the droppers list.", true));
+				cmd.add_option(dpp::command_option(dpp::co_string, "note", "Attach a note to the drop record.", false));
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
@@ -4029,16 +4285,18 @@ int main(int argc, char* argv[]) {
 					opts.images = get_pack_images(format.c_str());
 					opts.title = fmt::format("BANNER TEST / SS.W-LT: {}", format);
 					//log(LOG_LEVEL_DEBUG, "Rendering: %s", format.c_str());
-					const Render_Banner_Result banner = render_banner(&opts);
-					if(banner.is_error != true) {
+					const auto banner = render_banner(&opts);
+					if(!is_error(banner)) {
 						dpp::message message;
 						message.set_type(dpp::message_type::mt_default);
 						message.set_guild_id(GUILD_ID);
 						message.set_channel_id(1170985661185151017); // #spam
 						message.set_allowed_mentions(false, false, false, false, {}, {});
 						message.set_content(format);
-						message.add_file("banner.png", dpp::utility::read_file(banner.path));
+						message.add_file("banner.png", dpp::utility::read_file(banner.value));
 						bot.message_create(message);
+					} else {
+						event.reply(to_cstring(banner.error));
 					}
 					opts.images.clear();
 				}
@@ -4051,13 +4309,13 @@ int main(int argc, char* argv[]) {
 
 			// Required options
 			auto draft_code_str = std::get<std::string>(event.get_parameter("draft_code"));
-			Draft_Code draft_code;
-			if(parse_draft_code(draft_code_str.c_str(), &draft_code) == false) {
-				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus.");
+			const auto draft_code = parse_draft_code(draft_code_str.c_str());
+			if(is_error(draft_code)) {
+				event.reply(to_cstring(draft_code.error));
 				return;
 			}
 
-			const XDHS_League* league = draft_code.league;
+			const XDHS_League* league = draft_code.value.league;
 
 			// Swap bytes so to the color format used by the blit_ functions.
 			opts.league_color = (0xFF << 24) |
@@ -4074,11 +4332,12 @@ int main(int argc, char* argv[]) {
 			Date date;
 			auto date_string = std::get<std::string>(event.get_parameter("date"));
 			{
-				const char* result = parse_date_string(date_string.c_str(), &date);
-				if(result != NULL) {
-					event.reply(fmt::format("Error parsing date: {}", result));
+				const auto result = parse_date_string(date_string.c_str());
+				if(is_error(result)) {
+					event.reply(to_cstring(result.error));
 					return;
 				}
+				date = result.value;
 			}
 
 			// Create the default zoned time for this region.
@@ -4154,16 +4413,14 @@ int main(int argc, char* argv[]) {
 					auto itr = event.command.resolved.attachments.find(art_id);
 					auto art = itr->second;
             		event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
-		            size_t image_full_size = 0;
-		            u8* image_full_data = NULL;
-		            SCOPE_EXIT(free(image_full_data));
-		            auto download_result = download_file(art.url.c_str(), &image_full_size, &image_full_data);
-		            if(download_result != DOWNLOAD_IMAGE_RESULT_OK) {
-		                event.edit_response("Internal error: Downloading art image failed. This is not your fault! Please try again.");
+		            auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
+					SCOPE_EXIT(free(download.value.data));
+					if(is_error(download)) {
+		                event.edit_response(to_cstring(download.error));
 		                return;
         		    }
 
-					if(image_full_size > DOWNLOAD_BYTES_MAX) {
+					if(download.value.size > DOWNLOAD_BYTES_MAX) {
 						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
 						return;
 					}
@@ -4173,8 +4430,8 @@ int main(int argc, char* argv[]) {
 					if(file) {
 						SCOPE_EXIT(fclose(file));
 						event.edit_response(":hourglass_flowing_sand: Saving image");
-						size_t wrote = fwrite(image_full_data, 1, image_full_size, file);
-						if(wrote == image_full_size) {
+						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
+						if(wrote == download.value.size) {
 							opts.images.push_back(temp_file);
 						} else {
 							event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
@@ -4199,9 +4456,9 @@ int main(int argc, char* argv[]) {
 
 			event.edit_response(":hourglass_flowing_sand: Rendering banner");
 			auto start = std::chrono::high_resolution_clock::now();
-			const Render_Banner_Result result = render_banner(&opts);
-			if(result.is_error == true) {
-				event.edit_response(result.path);
+			const auto result = render_banner(&opts);
+			if(is_error(result)) {
+				event.edit_response(to_cstring(result.error));
 				return;
 			}
 			auto end = std::chrono::high_resolution_clock::now();
@@ -4209,7 +4466,7 @@ int main(int argc, char* argv[]) {
 
 			dpp::message message;
 			message.set_content(fmt::format(":hourglass_flowing_sand: {} ms", elapsed.count()));
-			message.add_file(fmt::format("{} - {}.png", draft_code_str, format), dpp::utility::read_file(result.path));
+			message.add_file(fmt::format("{} - {}.png", draft_code_str, format), dpp::utility::read_file(result.value));
 			event.edit_response(message);
 		} else
 		if(command_name == "create_draft") {
@@ -4218,14 +4475,14 @@ int main(int argc, char* argv[]) {
 			// Required options
 			auto draft_code_str = std::get<std::string>(event.get_parameter("draft_code"));
 			// First, check if the draft code is valid and if it is get a copy of the XDHS_League it applies to.
-			Draft_Code draft_code;
-			if(parse_draft_code(draft_code_str.c_str(), &draft_code) == false) {
-				event.reply("**Invalid draft code.** Draft codes should look like SS.W-RT, where:\n\tSS is the season\n\tW is the week in the season\n\tR is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\tT is the league type: (C)hrono or (B)onus.");
+			const auto draft_code = parse_draft_code(draft_code_str.c_str());
+			if(is_error(draft_code)) {
+				event.reply(to_cstring(draft_code.error));
 				return;
 			}
 			strcpy(draft_event.draft_code, draft_code_str.c_str());
 
-			const XDHS_League* league = draft_code.league;
+			const XDHS_League* league = draft_code.value.league;
 
 			strcpy(draft_event.league_name, to_cstring(league->id));
 
@@ -4242,11 +4499,12 @@ int main(int argc, char* argv[]) {
 			Date date;
 			auto date_string = std::get<std::string>(event.get_parameter("date"));
 			{
-				const char* result = parse_date_string(date_string.c_str(), &date);
-				if(result != NULL) {
-					event.reply(fmt::format("Error parsing date: {}", result));
+				const auto result = parse_date_string(date_string.c_str());
+				if(is_error(result)) {
+					event.reply(to_cstring(result.error));
 					return;
 				}
+				date = result.value;
 			}
 
 			// Is the default start time for this league overridden?
@@ -4257,9 +4515,9 @@ int main(int argc, char* argv[]) {
 				auto opt = event.get_parameter("start_time");
 				if(std::holds_alternative<std::string>(opt)) {
 					std::string start_time_string = std::get<std::string>(opt);
-					Start_Time start_time;
-					if(!parse_start_time_string(start_time_string.c_str(), &start_time)) {
-						event.reply("Invalid start time. Start time should be entered as HH:MM, in 24 hour time.");
+					const auto start_time = parse_start_time_string(start_time_string.c_str());
+					if(is_error(start_time)) {
+						event.reply(to_cstring(start_time.error));
 						return;
 					}
 				}
@@ -4287,7 +4545,7 @@ int main(int argc, char* argv[]) {
 				}
 			}
 
-			// Is the draft portion using the MTGA Draft site?
+			// Is the draft portion on Draftmancer?
 			draft_event.draftmancer_draft = false;
 			{
 				auto opt = event.get_parameter("draftmancer_draft");
@@ -4425,13 +4683,44 @@ int main(int argc, char* argv[]) {
 			// TODO: If the event is already posted, update it.
 			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
 
-			bool result = post_draft(bot, guild_id, draft_code);
-			std::string text;
-			if(result == true) {
-				text = fmt::format("Draft {} posted.", draft_code);
+			auto draft = database_get_event(guild_id, draft_code);
+			if(draft == true) {
+				event.reply(fmt::format("Draft {} posted.", draft_code));
+				post_draft(bot, guild_id, draft.value);
 			} else {
-				text = fmt::format("⚠️ There was an error posting the draft. This is not your fault! Please try again, but in the meantime <@{}> has been alerted.", TANDEM_DISCORD_ID);
+				event.reply(fmt::format("Failed to find draft {} in the database. This shouldn't be possible!", draft_code));
 			}
+		} else
+		if(command_name == "view_draft") {
+			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
+			auto draft = database_get_event(guild_id, draft_code);
+
+			char time_string[TIME_STRING_MAX] = {0};
+			make_time_string(draft.value->time, time_string);
+			
+			std::string text;
+			text += "```";
+			text += fmt::format("       draft_code: {}\n", draft.value->draft_code);
+			//text += fmt::format("           status: {}\n", to_cstring(draft.value->status));
+			text += fmt::format("            pings: {}\n", draft.value->pings); 
+			text += fmt::format("      league_name: {}\n", draft.value->league_name);
+			text += fmt::format("           format: {}\n", draft.value->format);
+			text += fmt::format("        time_zone: {}\n", draft.value->time_zone);
+			text += fmt::format("             time: {}\n", time_string);
+			text += fmt::format("         duration: {}\n", draft.value->duration);
+			for(size_t i = 0; i < BLURB_COUNT; ++i) {
+				text += fmt::format("          blurb_{}: {}\n", i+1, draft.value->blurbs[i]);
+			}
+			text += fmt::format("  draft_guide_url: {}\n", draft.value->draft_guide_url);
+			text += fmt::format("    card_list_url: {}\n", draft.value->card_list_url);
+			text += fmt::format("         set_list: {}\n", draft.value->set_list);
+			text += fmt::format("            color: {:x}\n", draft.value->color);
+			text += fmt::format("     xmage_server: {}\n", draft.value->xmage_server);
+			text += fmt::format("draftmancer_draft: {}\n", draft.value->draftmancer_draft);
+			text += fmt::format("       banner_url: {}\n", draft.value->banner_url);
+			text += fmt::format("       channel_id: {}\n", draft.value->channel_id);
+			text += "```";
+
 			event.reply(text);
 		} else
 		if(command_name == "edit_draft") {
@@ -4442,12 +4731,9 @@ int main(int argc, char* argv[]) {
 			// format
 			{
 				auto opt = event.get_parameter("format");
-				if(std::holds_alternative<bool>(opt)) {
+				if(std::holds_alternative<std::string>(opt)) {
 					const std::string format = std::get<std::string>(opt);
 					strcpy(draft_event.value->format, format.c_str());	
-
-					// TODO: Update each column as needed, or update the entire thing all at once?
-					//database_modify_draft_event_column(guild_id, draft_code, "format", format);
 				}
 			}
 
@@ -4456,16 +4742,15 @@ int main(int argc, char* argv[]) {
 				auto opt = event.get_parameter("date");
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string date_string = std::get<std::string>(opt);
-					Date date;
-					const char* result = parse_date_string(date_string.c_str(), &date);
-					if(result != NULL) {
-						event.reply(fmt::format("Error parsing date: {}", result));
+					const auto date = parse_date_string(date_string.c_str());
+					if(is_error(date)) {
+						event.reply(to_cstring(date.error));
 						return;
 					}
 
 					int year, month, day, hour, minute;
 					unpack_time(draft_event.value->time, &year, &month, &day, &hour, &minute);
-					draft_event.value->time = pack_time(date.year, date.month, date.day, hour, minute);
+					draft_event.value->time = pack_time(date.value.year, date.value.month, date.value.day, hour, minute);
 				}
 			}
 
@@ -4474,15 +4759,15 @@ int main(int argc, char* argv[]) {
 				auto opt = event.get_parameter("start_time");
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string start_time = std::get<std::string>(opt);
-					Start_Time st;
-					if(!parse_start_time_string(start_time.c_str(), &st)) {
-						event.reply("Invalid start time. Start time should be entered as HH:MM, in 24 hour time.");
+					const auto st = parse_start_time_string(start_time.c_str());
+					if(is_error(st)) {
+						event.reply(to_cstring(st.error));
 						return;
 					}
 
 					int year, month, day, hour, minute;
 					unpack_time(draft_event.value->time, &year, &month, &day, &hour, &minute);
-					draft_event.value->time = pack_time(year, month, day, st.hour, st.minute);
+					draft_event.value->time = pack_time(year, month, day, st.value.hour, st.value.minute);
 				}
 			}
 
@@ -4604,6 +4889,15 @@ int main(int argc, char* argv[]) {
 					strcpy(draft_event.value->xmage_server, xmage_server.c_str());
 				}
 			}
+
+			auto result = database_edit_draft(guild_id, draft_event.value);
+			if(result == true) {
+				event.reply(fmt::format("Draft {} updated", draft_code));
+				edit_draft(bot, guild_id, draft_event.value);
+			} else {
+				// TODO: What now?
+				event.reply("Failed to edit the draft. This is not your fault!");
+			}
 		} else
 		if(command_name == "delete_draft") {
 			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
@@ -4713,34 +5007,25 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
-			Draft_Code draft_code;
-			// A bad draft code should be impossible at this point...
-			bool parse_result = parse_draft_code(g_current_draft_code.c_str(), &draft_code);
-			if(parse_result == false) {
-				// TODO: Just to be safe, post an error telling the host what to do?
-				log(LOG_LEVEL_ERROR, "Error parsing draft code");
+			// A bad draft code should be impossible at this point, but just to be safe...
+			const auto draft_code = parse_draft_code(g_current_draft_code.c_str());
+			if(is_error(draft_code)) {
+				event.reply(fmt::format("Internal EventBot error: Unable to parse draft code '{}'. Reason: {}", g_current_draft_code, to_cstring(draft_code.error)));
 				return;
 			}
 
-			const XDHS_League* league = draft_code.league;
+			const XDHS_League* league = draft_code.value.league;
 			char league_code[3];
 			league_code[0] = league->region_code;
 			league_code[1] = league->league_type;
 			league_code[2] = 0;
 
-			log(LOG_LEVEL_INFO, "Draft Code:%s season:%d week:%d league_code:%s",
-				g_current_draft_code.c_str(),
-				draft_code.season,
-				draft_code.week,
-				league_code
-				);
-
 			// TESTME: What happens on the first draft of the season and the leaderboard is empty?
 			// FIXME: Does this need to be a shared_ptr / on the heap? This function might exit before Discord can finish making all the pod roles and assigning members to them.
-			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code, draft_code.season);
+			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code, draft_code.value.season);
 			if(sign_ups != true) {
-				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s, %d) failed", guild_id, g_current_draft_code, league_code, draft_code.season);
-				event.reply("Internal error: A database query has failed. This is not your fault! Please try again.");
+				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s, %d) failed", guild_id, g_current_draft_code, league_code, draft_code.value.season);
+				event.reply("Internal EventBot error: A database query has failed. This is not your fault! Please try again.");
 				return;
 			}
 
@@ -4854,13 +5139,13 @@ int main(int argc, char* argv[]) {
 				static const int EXTENDED_RULE_OF_THREE_START_WEEK = 6;
 				static const int WEEKS_IN_CURRENT_SEASON = 9; // TODO: Get this from the spreadsheet
 
-				if(draft_code.week < RULE_OF_THREE_START_WEEK) {
+				if(draft_code.value.week < RULE_OF_THREE_START_WEEK) {
 					// No Rule of Three, nothing to do here.
-					log(LOG_LEVEL_INFO, "Week: %d, no Rule of Three", draft_code.week);
+					log(LOG_LEVEL_INFO, "Week: %d, no Rule of Three", draft_code.value.week);
 				} else
-				if(draft_code.week >= RULE_OF_THREE_START_WEEK && draft_code.week < EXTENDED_RULE_OF_THREE_START_WEEK) {
+				if(draft_code.value.week >= RULE_OF_THREE_START_WEEK && draft_code.value.week < EXTENDED_RULE_OF_THREE_START_WEEK) {
 					// Rule of Three
-					log(LOG_LEVEL_INFO, "Week: %d, Rule of Three", draft_code.week);
+					log(LOG_LEVEL_INFO, "Week: %d, Rule of Three", draft_code.value.week);
 
 					for(auto& player : sign_ups.value) {
 						if(player.reason == POD_ALLOCATION_REASON_UNALLOCATED && player.rank <= 3) {
@@ -4870,9 +5155,9 @@ int main(int argc, char* argv[]) {
 						}
 					}
 				} else
-				if(draft_code.week >= EXTENDED_RULE_OF_THREE_START_WEEK && draft_code.week != WEEKS_IN_CURRENT_SEASON) {
+				if(draft_code.value.week >= EXTENDED_RULE_OF_THREE_START_WEEK && draft_code.value.week != WEEKS_IN_CURRENT_SEASON) {
 					// Extended Rule of Three
-					log(LOG_LEVEL_INFO, "Week: %d, Extended Rule of Three", draft_code.week);
+					log(LOG_LEVEL_INFO, "Week: %d, Extended Rule of Three", draft_code.value.week);
 
 					// Find the score of the player ranked 3rd.
 					int point_threshold = -9999;
@@ -4892,7 +5177,7 @@ int main(int argc, char* argv[]) {
 					}
 				} else {
 					// Last draft of the season. Everyone in contention for a trophy must be in pod 1.
-					log(LOG_LEVEL_INFO, "Week: %d, Last draft of the season", draft_code.week);
+					log(LOG_LEVEL_INFO, "Week: %d, Last draft of the season", draft_code.value.week);
 
 					// Find the points for third place
 					int point_threshold = -9999;
@@ -4996,7 +5281,6 @@ int main(int argc, char* argv[]) {
 				pod_allocations[p] += fmt::format("## Pod {} Allocations:\n", p+1);	
 				const Draft_Pod* pod = &tournament.pods[p];
 				for(int s = 0; s < pod->seats; ++s) {
-					// TODO: These need to be pings
 					pod_allocations[p] += fmt::format("  {} <@{}>\n", emoji_for_reason(pod->players[s].reason), pod->players[s].member_id);
 				}
 			}
@@ -5181,12 +5465,18 @@ int main(int argc, char* argv[]) {
 			const auto guild_id = event.command.get_guild().id;
 			const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
 
-			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code.c_str());
+			std::string note;
+			auto opt = event.get_parameter("note");
+			if(std::holds_alternative<std::string>(opt)) {
+				note = std::get<std::string>(opt);
+			}
+
+			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code.c_str(), note.c_str());
 			if(result == true ) {
 				const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
-				event.reply(fmt::format("{} added to droppers list.", preferred_name));
+				event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
 			} else {
-				event.reply("Internal database error. This is not your fault! Please try again.");
+				event.reply("Internal EventBot error: database_add_dropper() failed.  This is not your fault! Please try again.");
 			}
 		} else
 		if(command_name == "finish") {
@@ -5401,6 +5691,7 @@ int main(int argc, char* argv[]) {
 
 	bot.shutdown();
 	mysql_library_end();
+    curl_global_cleanup();
 	log(LOG_LEVEL_INFO, "Exiting");
 
     return g_exit_code;
