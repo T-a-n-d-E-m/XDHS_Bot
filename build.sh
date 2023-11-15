@@ -3,8 +3,9 @@
 # Build script for EventBot.
 # Needs headers and libs for:
 #     MariaDB
-#     DPP++
 #     Curl
+#     DPP++
+#     libfmt
 
 # No, this does not need a Makefile or some other convoluted build system!
 
@@ -20,5 +21,9 @@ LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1" # -DAUTO_DOWNLOAD=1
 # Libraries to link with
 LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpthread"
 
-
 g++ -std=c++20 $BUILD_MODE -DEVENTBOT -Wall -Werror -Wpedantic -Wno-unused-function -fno-rtti $LIB_DATE_OPTS -I./src/date ./src/tz.cpp ./src/eventbot.cpp $LIBS -o eventbot
+
+# If compiling elsewhere...
+if [ "$HOSTNAME" != harvest-sigma ]; then
+	scp -o PubkeyAuthentication=no eventbot tandem@harvest-sigma.bnr.la:~/dev/EventBot/
+fi
