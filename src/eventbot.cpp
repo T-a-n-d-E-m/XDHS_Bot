@@ -121,6 +121,8 @@ static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 // How long we allow for deck construction
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 
+static const u16 HTTP_SERVER_PORT                           = 8181;
+
 // The directory where the RELEASE build is run from.
 static const char* g_install_dir                 = "/opt/EventBot";
 
