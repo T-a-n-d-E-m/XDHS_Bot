@@ -84,6 +84,7 @@
 #include "stb_truetype.h"
 
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
+#include "mongoose.h" // mongoose HTTP server
 #include "log.h"
 #include "config.h"
 #include "scope_exit.h"
@@ -121,7 +122,9 @@ static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 // How long we allow for deck construction
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 
-static const u16 HTTP_SERVER_PORT                           = 8181;
+// The interface and port the internal HTTP server listens on. NOTE: Remember to open this port in the firewall, or close it if changing to something else!
+static const char* HTTP_SERVER_INTERFACE                    = "0.0.0.0";
+static const u16   HTTP_SERVER_PORT                         = 8181;
 
 // The directory where the RELEASE build is run from.
 static const char* g_install_dir                 = "/opt/EventBot";
@@ -4139,6 +4142,10 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	return result;
 }
 
+static void http_server_callback_func(mg_connection* c, int ev, void* ev_data, void* fn_data) {
+	mg_http_serve_opts opts = {.root_dir = "."};
+	if(ev == MG_EV_HTTP_MSG) mg_http_serve_dir(c, (mg_http_message*)ev_data, &opts);
+}
 
 int main(int argc, char* argv[]) {
 	if(argc > 1) {
@@ -4190,6 +4197,13 @@ int main(int argc, char* argv[]) {
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
 	mysql_library_init(0, NULL, NULL);
+
+    // Mongoose HTTP server
+	mg_mgr http_server;
+	mg_mgr_init(&http_server);
+	char http_server_address[128];
+	snprintf(http_server_address, 128, "http://%s:%d", HTTP_SERVER_INTERFACE, HTTP_SERVER_PORT);
+	mg_http_listen(&http_server, http_server_address, http_server_callback_func, &http_server);
 
 	srand(time(NULL));
 
@@ -5876,12 +5890,14 @@ int main(int argc, char* argv[]) {
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
     while(g_quit == false) {
-        sleep(1);
+		mg_mgr_poll(&http_server, 1000);
     }
 
 	bot.shutdown();
 	mysql_library_end();
     curl_global_cleanup();
+	mg_mgr_free(&http_server);
+
 	log(LOG_LEVEL_INFO, "Exiting");
 
     return g_exit_code;

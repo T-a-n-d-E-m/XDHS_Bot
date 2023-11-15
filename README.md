@@ -43,6 +43,4 @@ DPP: https://github.com/brainboxdotcc/DPP
 
 fmt: https://github.com/fmtlib/fmt
 
-libboost-dev - Just needs Algorithm
-
-curl 
+curl (Install with package manager)
