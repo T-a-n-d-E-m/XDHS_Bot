@@ -60,6 +60,10 @@ chmod 600 $INSTALL_DIR/eventbot.log
 chown eventbot:eventbot $INSTALL_DIR/bot.ini
 chmod 400 $INSTALL_DIR/bot.ini
 
+# Copy static assets, if they're newer, and create the www-root generation directory.
+cp --update --recursive gfx $INSTALL_DIR
+mkdir -p $INSTALL_DIR/www-root
+
 #cp eventbot.service /etc/systemd/system
 #chown root:root /etc/systemd/system/eventbot.service
 #systemctl daemon-reload
