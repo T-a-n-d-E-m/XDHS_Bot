@@ -7,6 +7,12 @@
 # Directory to install EventBot
 INSTALL_DIR="/opt/EventBot"
 
+# Check we're actually on the host server
+if [ "$HOSTNAME" != harvest-sigma ]; then
+	echo "You can only run this script on the host server."
+	exit
+fi
+
 # Check the version we're installing is RELEASE
 VERSION=$(./eventbot -version)
 if [ "$VERSION" != Release ]; then
