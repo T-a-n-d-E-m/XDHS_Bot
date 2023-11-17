@@ -134,7 +134,7 @@ static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
 #ifdef DEBUG
 // The bot will be running in debug mode on the XDHS Dev server.
-static const char* BUILD_MODE                  = "Debug";
+static const char* BUILD_MODE                    = "Debug";
 static const u64 GUILD_ID                        = 882164794566791179;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft sign up.
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 1087299085612109844;
@@ -153,7 +153,7 @@ static bool g_commands_registered                = false; // Have the bot slash 
 
 #ifdef RELEASE
 // The bot will be running in release mode on the XDHS public server.
-static const char* BUILD_MODE                  = "Release";
+static const char* BUILD_MODE                    = "Release";
 static const u64 GUILD_ID                        = 528728694680715324;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 753639027428687962; // Default channel to post the draft sign up.
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 921027014822068234;
@@ -178,9 +178,7 @@ static const u64 TANDEM_DISCORD_ID               = 767299805348233217;
 // NOTE: When the bot starts there is a brief window of time where this has not yet been set.
 static std::string g_current_draft_code;
 
-// g_quit will be set to true if we get a signal from the OS to exit.
 // This signal handling is extremely basic but it should be all this bot needs.
-static bool g_quit     = false;
 static int g_exit_code = 0;
 
 static void sig_handler(int signo) {
@@ -191,7 +189,6 @@ static void sig_handler(int signo) {
         case SIGHUP:  // Fall through
         case SIGTERM:
             log(LOG_LEVEL_INFO, "Caught signal %d", strsignal(signo));
-            g_quit = true;
         	break;
 
         default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
@@ -5912,7 +5909,7 @@ int main(int argc, char* argv[]) {
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
-    while(g_quit == false) {
+    while(g_exit_code == 0) {
 		mg_mgr_poll(&http_server, 1000);
     }
 
