@@ -1,4 +1,4 @@
-# An template for the bot.ini file.
+# A template for the bot.ini file.
 
 # Only allow execution if running on this hostname. Stops accidentally running the bot on the wrong server.
 eventbot_host =
