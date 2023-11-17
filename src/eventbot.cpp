@@ -31,7 +31,6 @@
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
 // Note: Only one minutemage will be asked to fill a seat.
-// TODO: Rename banner_url in the database (and everywhere that references it) to banner_file
 
 // Nice functionality, but not needed before going live
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
@@ -1124,6 +1123,9 @@ static const size_t DRAFT_BLURB_LENGTH_MAX = 512;
 // URLs can potentially be much longer than this but with Discord message character limits we want to keep things short and sweet.
 static const size_t URL_LENGTH_MAX = 512; 
 
+// Maximum length of the filename for a downloaded banner file.
+static const size_t BANNER_FILENAME_MAX = 64;
+
 // The maximum allowed byte length of a set list. e.g. This might be a list of all set codes of sets in a chaos draft.
 static const size_t SET_LIST_LENGTH_MAX = 256;
 
@@ -1216,7 +1218,7 @@ struct Draft_Event {
 	u32 color; // Color to use for vertical strip on the sign up post.
 	char xmage_server[XMAGE_SERVER_LENGTH_MAX + 1];
 	bool draftmancer_draft; // Will the draft portion take place on Draftmancer?
-	char banner_url[URL_LENGTH_MAX + 1]; // URL of the image to use for this draft.
+	char banner_file[BANNER_FILENAME_MAX + 1]; // Relative path to the banner image for this draft.
 
 	u64 channel_id; // Eventually EventBot might support sign up for the team drafts, which go to a different channel...
 
@@ -1590,7 +1592,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 			color,        -- 14
 			xmage_server, -- 15
 			draftmancer_draft, -- 16
-			banner_url,   -- 17
+			banner_file,  -- 17
 			channel_id    -- 17
 		)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -1615,7 +1617,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_INPUT(14, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
 	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
 	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
-	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_url,      strlen(event->banner_url));
+	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_file,     strlen(event->banner_file));
 	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
 
 	MYSQL_INPUT_BIND_AND_EXECUTE();
@@ -1639,7 +1641,7 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 			color=?,        -- 9
 			xmage_server=?, -- 10
 			draftmancer_draft=?, -- 11
-			banner_url=?,   -- 12
+			banner_file=?,  -- 12
 			channel_id=?    -- 13
 		WHERE guild_id=? AND draft_code=? -- 14,15
 		)";
@@ -1658,7 +1660,7 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 	MYSQL_INPUT( 9, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
 	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
 	MYSQL_INPUT(11, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
-	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_url,      strlen(event->banner_url));
+	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_file,     strlen(event->banner_file));
 	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
 	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
 	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
@@ -1690,7 +1692,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 			color,               -- 14
 			xmage_server,        -- 15
 			draftmancer_draft,   -- 16
-			banner_url,          -- 17
+			banner_file,         -- 17
 			channel_id,          -- 18
 			details_id,          -- 19
 			signups_id,          -- 20
@@ -1725,7 +1727,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color)); 
 	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
 	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->draftmancer_draft, sizeof(result->draftmancer_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_url,      URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_file,     BANNER_FILENAME_MAX + 1);
 	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
 	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
 	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
@@ -1757,7 +1759,7 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 			color,               -- 14
 			xmage_server,        -- 15
 			draftmancer_draft,   -- 16
-			banner_url,          -- 17
+			banner_file,         -- 17
 			channel_id,          -- 18
 			details_id,          -- 19
 			signups_id,          -- 20
@@ -1792,7 +1794,7 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result.color,          sizeof(result.color)); 
 	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result.xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
 	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result.draftmancer_draft, sizeof(result.draftmancer_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result.banner_url,      URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result.banner_file,     BANNER_FILENAME_MAX + 1);
 	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result.channel_id,     sizeof(result.channel_id));
 	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result.details_id,     sizeof(result.details_id));
 	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result.signups_id,     sizeof(result.signups_id));
@@ -3430,9 +3432,7 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 		embed.add_field(fmt::format(g_draft_sign_up_columns[i].header, count), names, true);
 	}
 
-	//std::string banner_file = fmt::format("{}/{}.png", HTTP_SERVER_ROOT_DIR, draft_event->banner_url);
-	//log(LOG_LEVEL_DEBUG, "attaching file:'%s'", banner_file.c_str());
-	message.add_file("banner.png", dpp::utility::read_file(draft_event->banner_url));
+	message.add_file("banner.png", dpp::utility::read_file(draft_event->banner_file));
 	embed.set_image("attachment://banner.png");
 
 	time_t now = time(NULL);
@@ -3906,7 +3906,7 @@ static void output_sql() {
 	fprintf(stdout, "color INT NOT NULL,\n"); // Color of the vertical stripe down the left side of the embed.
 	fprintf(stdout, "xmage_server VARCHAR(%lu) NOT NULL DEFAULT \"\",\n", XMAGE_SERVER_LENGTH_MAX);
 	fprintf(stdout, "draftmancer_draft BOOLEAN NOT NULL DEFAULT 0,\n");
-	fprintf(stdout, "banner_url VARCHAR(%lu) NOT NULL,\n", URL_LENGTH_MAX);
+	fprintf(stdout, "banner_file VARCHAR(%lu) NOT NULL,\n", BANNER_FILENAME_MAX);
 
 	//fprintf(stdout, "deleted BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the event been deleted?
 	fprintf(stdout, "channel_id BIGINT NOT NULL,\n"); // The channel the post is going to.
@@ -4688,7 +4688,7 @@ int main(int argc, char* argv[]) {
 					SCOPE_EXIT(fclose(file));
 					size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 					if(wrote == download.value.size) {
-						strcpy(draft_event.banner_url, filename.c_str());
+						strcpy(draft_event.banner_file, filename.c_str());
 					} else {
 						event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
 						return;
@@ -4888,7 +4888,7 @@ int main(int argc, char* argv[]) {
 			text += fmt::format("            color: {:x}\n", draft.value->color);
 			text += fmt::format("     xmage_server: {}\n", draft.value->xmage_server);
 			text += fmt::format("draftmancer_draft: {}\n", draft.value->draftmancer_draft);
-			text += fmt::format("       banner_url: {}\n", draft.value->banner_url);
+			text += fmt::format("      banner_file: {}\n", draft.value->banner_file);
 			text += fmt::format("       channel_id: {}\n", draft.value->channel_id);
 			text += "```";
 
@@ -4981,7 +4981,7 @@ int main(int argc, char* argv[]) {
 						SCOPE_EXIT(fclose(file));
 						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 						if(wrote == download.value.size) {
-							strcpy(draft_event.value->banner_url, filename.c_str());
+							strcpy(draft_event.value->banner_file, filename.c_str());
 						} else {
 							event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
 							return;
