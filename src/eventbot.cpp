@@ -31,11 +31,13 @@
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
 // Note: Only one minutemage will be asked to fill a seat.
+// TODO: Rename banner_url in the database (and everywhere that references it) to banner_file
 
 // Nice functionality, but not needed before going live
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
+// TODO: dpp::utility::read_file can throw
 
 // Code/performance improvements
 // TODO: Thread pools for database connections
@@ -3368,7 +3370,9 @@ static void add_sign_up_buttons_to_message(dpp::message& message, const std::sha
 	message.add_component(button_row_two);
 }
 
-static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_Event> draft_event) {
+static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& message, std::shared_ptr<Draft_Event> draft_event) {
+	message.embeds.clear();
+
 	dpp::embed embed;
 
 	embed.set_color(draft_event->color);
@@ -3422,7 +3426,10 @@ static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_E
 		embed.add_field(fmt::format(g_draft_sign_up_columns[i].header, count), names, true);
 	}
 
-	embed.set_image(draft_event->banner_url);
+	//std::string banner_file = fmt::format("{}/{}.png", HTTP_SERVER_ROOT_DIR, draft_event->banner_url);
+	//log(LOG_LEVEL_DEBUG, "attaching file:'%s'", banner_file.c_str());
+	message.add_file("banner.png", dpp::utility::read_file(draft_event->banner_url));
+	embed.set_image("attachment://banner.png");
 
 	time_t now = time(NULL);
 	time_t draft_start = unpack_and_make_timestamp(draft_event->time, draft_event->time_zone);
@@ -3433,106 +3440,8 @@ static dpp::embed make_sign_up_embed(const u64 guild_id, std::shared_ptr<Draft_E
 		embed.set_footer(footer);
 	}
 
-	return embed;
+	message.add_embed(embed);
 }
-
-#if 0
-static bool post_draft(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
-	auto draft_event = database_get_event(guild_id, draft_code);
-	if(draft_event != true) {
-		return false;
-	}
-
-	char description[1024]; // FIXME: This can overflow...
-	expand_format_string(draft_event.value->format, strlen(draft_event.value->format), description, 1024);
-
-	int year, month, day, hour, minute;
-	unpack_time(draft_event.value->time, &year, &month, &day, &hour, &minute);
-
-	time_t start_timestamp = make_timestamp(draft_event.value->time_zone, year, month, day, hour, minute);
-
-	// Timestamp for when the draft ends
-	Draft_Duration duration = {(int)draft_event.value->duration, (int)(60.0f * (draft_event.value->duration - (int)draft_event.value->duration))};
-	time_t end_timestamp = start_timestamp + ((60*60*duration.hours) + (60*duration.minutes));
-
-	// The entire event post content is contained in this string.
-	std::string draft_details; 
-
-	// Title line
-	draft_details += "~~　　　　　　　　　　　　　　　　　　~~\n"; // NOTE: These are ideographic spaces.
-	draft_details += fmt::format("# {} The sign-up for the {} **{}** draft ({}: {}) is now up!\n\nThis draft will take place on **<t:{}:F> - <t:{}:t>**", draft_event.value->pings, draft_event.value->league_name, description, draft_code, draft_event.value->format, start_timestamp, end_timestamp);
-
-	// Blurbs
-	for(size_t i = 0; i < BLURB_COUNT; ++i) {
-		if(strlen(&draft_event.value->blurbs[i][0]) > 0) {
-			draft_details += fmt::format("\n\n{}", &draft_event.value->blurbs[i][0]);
-		}
-	}
-
-	// Set list
-	if(strlen(draft_event.value->set_list) > 0) {
-		char buffer[1024]; // FIXME: Magic number
-		expand_set_list(draft_event.value->set_list, strlen(draft_event.value->set_list), buffer, 1024);
-		draft_details += fmt::format("\n{}", buffer); // NOTE: This single newline is intentional.
-	}
-
-	// Card list
-	if(strlen(draft_event.value->card_list_url) > 0) {
-		draft_details += fmt::format("\n\n:arrow_right: View the card list here: {}", draft_event.value->card_list_url);
-	}
-
-	// Draft Guide
-	if(strlen(draft_event.value->draft_guide_url) > 0) {
-		draft_details += fmt::format("\n\n:scroll: View the draft guide here: {}", draft_event.value->draft_guide_url);
-	}
-
-	dpp::message details_post;
-	details_post.set_type(dpp::message_type::mt_default);
-	details_post.set_guild_id(guild_id);
-	details_post.set_channel_id(draft_event.value->channel_id);
-	details_post.set_content(draft_details);
-	details_post.set_allowed_mentions(true, true, true, false, {}, {});
-
-	// Post the details post. If the message is successful we then post the sign up post.
-	bot.message_create(details_post, [&bot, guild_id, draft_code, draft_event](const dpp::confirmation_callback_t& callback) {
-		if(!callback.is_error()) {
-			const dpp::message& message = std::get<dpp::message>(callback.value);
-			log(LOG_LEVEL_DEBUG, "Created details post: %lu", (u64)message.id);
-
-			(void)database_set_details_message_id(guild_id, draft_event.value->draft_code, message.id);
-
-			// The entire sign up post is in here.
-			dpp::message signups_post;
-			signups_post.set_type(dpp::message_type::mt_default);
-			signups_post.set_guild_id(guild_id);
-			signups_post.set_channel_id(draft_event.value->channel_id);
-
-			dpp::embed embed = make_sign_up_embed(guild_id, draft_event.value);
-			signups_post.add_embed(embed);
-
-			add_sign_up_buttons_to_message(signups_post, draft_event.value);
-
-			bot.message_create(signups_post, [&bot, guild_id, draft_event](const dpp::confirmation_callback_t& callback) {
-				if(!callback.is_error()) {
-					const dpp::message& message = std::get<dpp::message>(callback.value);
-					log(LOG_LEVEL_DEBUG, "Created sign ups post: %lu", (u64)message.id);
-
-					(void)database_set_signups_message_id(guild_id, draft_event.value->draft_code, message.id);
-					database_set_draft_status(guild_id, draft_event.value->draft_code, DRAFT_STATUS_POSTED);
-				} else {
-					// TODO: What now???
-					log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
-				}
-			});
-		} else {
-			// TODO: What now???
-			log(LOG_LEVEL_ERROR, callback.get_error().message.c_str());
-		}
-	});
-
-	return true;
-}
-#endif
 
 static void redraw_details(dpp::cluster& bot, const u64 guild_id, const u64 message_id, const u64 channel_id, std::shared_ptr<Draft_Event> draft) {
 	bot.message_get(message_id, channel_id, [&bot, guild_id, message_id, channel_id, draft](const dpp::confirmation_callback_t& callback) {
@@ -3597,10 +3506,8 @@ static void redraw_signup(dpp::cluster& bot, const u64 guild_id, const u64 messa
 		if(!callback.is_error()) {
 			dpp::message message = std::get<dpp::message>(callback.value);
 
-			message.embeds.clear();
 			message.set_content("");
-			dpp::embed embed = make_sign_up_embed(guild_id, draft);
-			message.add_embed(embed);
+			add_sign_up_embed_to_message(guild_id, message, draft);
 
 			add_sign_up_buttons_to_message(message, draft);
 
@@ -3659,7 +3566,6 @@ static void post_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_
 					(void)database_set_draft_status(guild_id, draft->draft_code, DRAFT_STATUS_POSTED);
 
 					edit_draft(bot, guild_id, draft);
-
 				} else {
 					// TODO: Now what?
 				}
@@ -3719,7 +3625,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 			signup.set_type(dpp::message_type::mt_default);
 			signup.set_guild_id(guild_id);
 			signup.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
-			signup.add_embed(make_sign_up_embed(guild_id, draft_event));
+			add_sign_up_embed_to_message(guild_id, signup, draft_event);
 			add_sign_up_buttons_to_message(signup, draft_event);
 			bot.message_create(signup, [&bot, guild_id, draft_event](const dpp::confirmation_callback_t& callback) {
 				if(!callback.is_error()) {
@@ -4748,10 +4654,40 @@ int main(int argc, char* argv[]) {
 			}
 
 			// Get the banner image.
-			auto banner_id = std::get<dpp::snowflake>(event.get_parameter("banner"));
-			auto itr = event.command.resolved.attachments.find(banner_id);
-			auto banner = itr->second;
-			strcpy(draft_event.banner_url, banner.url.c_str());
+			{
+				auto banner_id = std::get<dpp::snowflake>(event.get_parameter("banner"));
+				auto itr = event.command.resolved.attachments.find(banner_id);
+				auto banner = itr->second;
+
+				// Attachments are treated as 'ephemeral' by Discord and can be deleted after a period of time. To avoid this ever happening we download the attachment and save it to storage and later attach it to the draft sign up post.
+				Result<Heap_Buffer> download = download_file(banner.url.c_str());
+				SCOPE_EXIT(free(download.value.data));
+				if(is_error(download)) {
+					event.reply(to_cstring(download.error));
+					return;
+				}
+
+				if(download.value.size > DOWNLOAD_BYTES_MAX) {
+					event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
+					return;
+				}
+
+				std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_ROOT_DIR, draft_code_str);
+				FILE* file = fopen(filename.c_str(), "wb");
+				if(file) {
+					SCOPE_EXIT(fclose(file));
+					size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
+					if(wrote == download.value.size) {
+						strcpy(draft_event.banner_url, filename.c_str());
+					} else {
+						event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+						return;
+					}
+				} else {
+					event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+					return;
+				}
+			}
 
 			// blurbs
 			for(size_t i = 0; i < BLURB_COUNT; ++i) {
@@ -5016,7 +4952,34 @@ int main(int argc, char* argv[]) {
 					dpp::snowflake banner_id = std::get<dpp::snowflake>(opt);
 					auto itr = event.command.resolved.attachments.find(banner_id);
 					auto banner = itr->second;
-					strcpy(draft_event.value->banner_url, banner.url.c_str());
+
+					auto download = download_file(banner.url.c_str());
+					SCOPE_EXIT(free(download.value.data));
+					if(is_error(download)) {
+						event.reply(to_cstring(download.error));
+						return;
+					}
+
+					if(download.value.size > DOWNLOAD_BYTES_MAX) {
+						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
+						return;
+					}
+
+					std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_ROOT_DIR, draft_code);
+					FILE* file = fopen(filename.c_str(), "wb");
+					if(file) {
+						SCOPE_EXIT(fclose(file));
+						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
+						if(wrote == download.value.size) {
+							strcpy(draft_event.value->banner_url, filename.c_str());
+						} else {
+							event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+							return;
+						}
+					} else {
+						event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+						return;
+					}
 				}
 			}
 
