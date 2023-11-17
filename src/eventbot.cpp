@@ -127,13 +127,13 @@ static const char* HTTP_SERVER_INTERFACE                    = "0.0.0.0";
 static const u16   HTTP_SERVER_PORT                         = 8181;
 
 // The directory where the RELEASE build is run from.
-static const char* g_install_dir                 = "/opt/EventBot";
+static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
 
 // The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
 #ifdef DEBUG
 // The bot will be running in debug mode on the XDHS Dev server.
-static const char* g_build_mode                  = "Debug";
+static const char* BUILD_MODE                  = "Debug";
 static const u64 GUILD_ID                        = 882164794566791179;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft sign up.
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 1087299085612109844;
@@ -152,7 +152,7 @@ static bool g_commands_registered                = false; // Have the bot slash 
 
 #ifdef RELEASE
 // The bot will be running in release mode on the XDHS public server.
-static const char* g_build_mode                  = "Release";
+static const char* BUILD_MODE                  = "Release";
 static const u64 GUILD_ID                        = 528728694680715324;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 753639027428687962; // Default channel to post the draft sign up.
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 921027014822068234;
@@ -4154,19 +4154,25 @@ int main(int argc, char* argv[]) {
 			output_sql();
 			return EXIT_SUCCESS;
 		}
+		if(strcmp(argv[1], "-version") == 0) {
+			// Print the BUILD_MODE and exit. Used by the install script to ensure we're running the correct build on the public server.
+			fprintf(stdout, "%s", BUILD_MODE);
+			return EXIT_SUCCESS;
+		}
 
 	}
 
-	// Check the version of EventBot that's running is in the correct place. This is to prevent accidentally running the DEBUG version instead of the RELEASE version.
+	// Check the version of EventBot that's running is in the correct place.
+	// This is to prevent accidentally running the DEBUG version instead of the RELEASE version.
 	{
 		char cwd[FILENAME_MAX];
 #ifdef DEBUG
-		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, g_install_dir) == 0)) {
-			fprintf(stderr, "Running the DEBUG build of EventBot from '%s' is not supported!\n", g_install_dir);
+		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, EXPECTED_WORKING_DIR) == 0)) {
+			fprintf(stderr, "Running the DEBUG build of EventBot from '%s' is not supported!\n", EXPECTED_WORKING_DIR);
 #endif
 #ifdef RELEASE
-		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, g_install_dir) != 0)) {
-			fprintf(stderr, "Running the RELEASE build of EventBot from anywhere other than '%s' is not supported!\n", g_install_dir);
+		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, EXPECTED_WORKING_DIR) != 0)) {
+			fprintf(stderr, "Running the RELEASE build of EventBot from anywhere other than '%s' is not supported!\n", EXPECTED_WORKING_DIR);
 #endif
 			return EXIT_FAILURE;
 		}
@@ -4177,8 +4183,19 @@ int main(int argc, char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	// Check we're running on the correct server.
+	{
+		static const size_t HOSTNAME_MAX = 253 + 1; // 253 is the maximum number of ASCII characters allowed for a hostname.
+		char hostname[HOSTNAME_MAX];
+		if(gethostname(hostname, HOSTNAME_MAX) != 0 || strcmp(hostname, g_config.eventbot_host) != 0) { 
+			fprintf(stderr, "Running on wrong HOSTNAME. You are on '%s' but '%s' is required.\n", hostname, g_config.eventbot_host);
+			return EXIT_FAILURE;
+		}
+	}
+
 #ifdef DEBUG
     // Careful not to pipe these somewhere a malicious user could find...
+	fprintf(stdout, "eventbot_host  = '%s'\n", g_config.eventbot_host);
     fprintf(stdout, "mysql_host     = '%s'\n", g_config.mysql_host);
     fprintf(stdout, "mysql_username = '%s'\n", g_config.mysql_username);
     fprintf(stdout, "mysql_password = '%s'\n", g_config.mysql_password);
@@ -4211,10 +4228,11 @@ int main(int argc, char* argv[]) {
 	log_init(g_config.logfile_path);
 
     log(LOG_LEVEL_INFO, "====== EventBot starting ======");
-	log(LOG_LEVEL_INFO, "Build mode: %s",             g_build_mode);
+	log(LOG_LEVEL_INFO, "Build mode: %s",             BUILD_MODE);
     log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
 	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
+	log(LOG_LEVEL_INFO, "mongoose version: %s",       MG_VERSION);
 
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
@@ -4290,7 +4308,10 @@ int main(int argc, char* argv[]) {
 
         log(LOG_LEVEL_INFO, "on_guild_create: Guild name:[%s] Guild ID:[%lu]", event.created->name.c_str(), static_cast<u64>(event.created->id));
 
-		// As this is a "private" bot we don't want unknown guilds adding the bot and using the commands. This won't prevent them joining the bot to their guild but it won't install any of the slash commands for them to interact with.
+		// As this is a "private" bot we don't want unknown guilds adding the bot and using the commands.
+		// This won't prevent others joining the bot to their guild but it won't install any of the slash
+		// commands for them to interact with. We could have the bot delete itself from the guild here,
+		// but that would require the MANAGE_GUILD permission, which we don't need for any other reason.
 		if(event.created->id != GUILD_ID) {
 			log(LOG_LEVEL_INFO, "on_guild_create: Unknown guild %lu attempting to connect.", event.created->id);
 			return;

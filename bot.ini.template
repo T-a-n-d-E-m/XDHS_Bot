@@ -1,5 +1,8 @@
 # An template for the bot.ini file.
 
+# Only allow execution if running on this hostname. Stops accidentally running the bot on the wrong server.
+eventbot_host =
+
 # Hostname of the MySQL server. EventBot currently only supports connecting over IPV4 connections.
 mysql_host = hostname
 

@@ -1,33 +1,56 @@
 #!/bin/bash
 
-# Works on Debian 11. May need tweaking for other distros.
-
-INSTALL_DIR="/opt/EventBot" # Directory to install EventBot
-
 # This script will copy files from the repository to where they need to be and restart the eventbot.service.
-# Also needs:
-#     1) A group account: sudo addgroup --system eventbot
-#     2) A user account: sudo adduser --system --ingroup eventbot --home=$INSTALL_DIR --disabled-login eventbot
-#     3) A bot.ini file in $INSTALL_DIR
 
+# Works on Debian 11. May need tweaking for other distros...
+
+# Directory to install EventBot
+INSTALL_DIR="/opt/EventBot"
+
+# Check the version we're installing is RELEASE
+VERSION=$(./eventbot -version)
+if [ "$VERSION" != Release ]; then
+	echo "Trying to install $VERSION build. Run './build.sh release' to build the installable version."
+	exit
+fi
+
+# Need to be root to create users, services etc.
 if [ $(id -u) -ne 0 ]; then
 	echo "Must run as root."
 	exit
 fi
 
-#systemctl stop eventbot
+# Create the eventbot group, if it doesn't already exist.
+if ! id -g "eventbot" > /dev/null 2&>1; then
+	addgroup --system eventbot
+fi
 
-# Install the executable and change permissions and ownership
+# Create the eventbot user, if it doesn't already exist.
+if ! id -u "eventbot" > /dev/null 2&>1; then
+	# Create the user
+	adduser --system --ingroup eventbot --home=$INSTALL_DIR --no-create-home --disabled-login eventbot
+fi
+
+# Create the installation directory, if it doesn't already exist.
+mkdir -p $INSTALL_DIR
+chown eventbot:eventbot $INSTALL_DIR 
+
+# Will fail on first run of this script, but that doesn't really matter.
+systemctl stop eventbot
+
+# Copy the EventBot executable to the installation directory and change permissions and ownership.
 cp eventbot $INSTALL_DIR
 chown eventbot:eventbot $INSTALL_DIR/eventbot
 chmod 500 $INSTALL_DIR/eventbot
 
-# Log file
+# Log file. Only needs to be done once.
+# TODO: Set up log rotation?
 touch $INSTALL_DIR/eventbot.log
 chown eventbot:eventbot $INSTALL_DIR/eventbot.log
 chmod 600 $INSTALL_DIR/eventbot.log
 
-# bot.ini
+# bot.ini.
+# Has to be manually created. See bot.ini.templace for variables.
 chown eventbot:eventbot $INSTALL_DIR/bot.ini
 chmod 400 $INSTALL_DIR/bot.ini
 

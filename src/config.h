@@ -22,6 +22,7 @@ struct config {
 #endif
 #if defined(EVENTBOT)
 	char* xmage_server;
+	char* eventbot_host;
 #endif
 
 	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
@@ -36,6 +37,7 @@ struct config {
 		if(imgur_client_secret != NULL) free(imgur_client_secret);
 #endif
 		if(xmage_server != NULL)   free(xmage_server);
+		if(eventbot_host != NULL)  free(eventbot_host);
 	}
 } g_config;
 
@@ -74,6 +76,9 @@ static void config_file_kv_pair_callback(const char* key, const char* value) {
 	else
 	if(strcmp(key, "xmage_server") == 0) {
 		g_config.xmage_server = strndup(value, value_len);
+	} else
+	if(strcmp(key, "eventbot_host") == 0) {
+		g_config.eventbot_host = strndup(value, value_len);
 	}
 #endif // EVENTBOT
 }
