@@ -22,7 +22,7 @@ fi
 
 # Need to be root to create users, services etc.
 if [ $(id -u) -ne 0 ]; then
-	echo "Must run as root."
+	echo "Script must be run as root."
 	exit
 fi
 
