@@ -125,6 +125,7 @@ static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 // The interface and port the internal HTTP server listens on. NOTE: Remember to open this port in the firewall, or close it if changing to something else!
 static const char* HTTP_SERVER_INTERFACE                    = "0.0.0.0";
 static const u16   HTTP_SERVER_PORT                         = 8181;
+static const char* HTTP_SERVER_ROOT_DIR                     = "www-root";
 
 // The directory where the RELEASE build is run from.
 static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
@@ -4143,19 +4144,20 @@ static std::vector<std::string> get_pack_images(const char* format) {
 }
 
 static void http_server_callback_func(mg_connection* c, int ev, void* ev_data, void* fn_data) {
-	mg_http_serve_opts opts = {.root_dir = "."};
+	mg_http_serve_opts opts = {.root_dir = HTTP_SERVER_ROOT_DIR};
 	if(ev == MG_EV_HTTP_MSG) mg_http_serve_dir(c, (mg_http_message*)ev_data, &opts);
 }
 
 int main(int argc, char* argv[]) {
 	if(argc > 1) {
 		if(strcmp(argv[1], "-sql") == 0) {
-			// Dump SQL schema to stdout and return.
+			// Dump SQL schema to stdout and exit.
 			output_sql();
 			return EXIT_SUCCESS;
 		}
 		if(strcmp(argv[1], "-version") == 0) {
-			// Print the BUILD_MODE and exit. Used by the install script to ensure we're running the correct build on the public server.
+			// Print the BUILD_MODE and exit.
+			// Used by the install script to ensure we're running the correct build on the public server.
 			fprintf(stdout, "%s", BUILD_MODE);
 			return EXIT_SUCCESS;
 		}
@@ -4210,7 +4212,7 @@ int main(int argc, char* argv[]) {
     (void)signal(SIGABRT, sig_handler);
     (void)signal(SIGHUP,  sig_handler);
     (void)signal(SIGTERM, sig_handler);
-    // NOTE: SIGKILL is uncatchable
+    // NOTE: SIGKILL is uncatchable, for (presumably!) obvious reasons!
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
 	mysql_library_init(0, NULL, NULL);
