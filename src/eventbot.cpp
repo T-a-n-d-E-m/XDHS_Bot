@@ -23,24 +23,25 @@
 // 
 // For more information, please refer to <http://unlicense.org/>
 
-// FIXME: The #pre-register post is not locking when the hour warning messages goes out
+// FIXME: Weird bug After using /edit_draft to change the banner for a posted draft, wait for the image to update, then click a sign up button: The embed will flash and redraw. This only happens after the first button click... why?
 // TODO: Make most commands ephemeral so it doesn't matter where they are used. 
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
+// FIXME: dpp::utility::read_file can throw
 // Note: Only one minutemage will be asked to fill a seat.
 
 // Nice functionality, but not needed before going live
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
-// TODO: dpp::utility::read_file can throw
 
 // Code/performance improvements
 // TODO: Thread pools for database connections
 // TODO: All the blit_ functions can be rewritten to use SIMD ops
 // TODO: Cleanup inconsistent use of char* and std::string in database functions.
 // TODO: Rename "Event" to draft where appropriate
+
 
 // C libraries
 #include <alloca.h>
@@ -1592,14 +1593,13 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 			xmage_server, -- 15
 			draftmancer_draft, -- 16
 			banner_file,       -- 17
-			banner_timestamp,  -- 18
-			channel_id         -- 19
+			channel_id         -- 18
 		)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(20);
+	MYSQL_INPUT_INIT(19);
 	MYSQL_INPUT( 0, MYSQL_TYPE_LONGLONG, &guild_id,                 sizeof(guild_id));
 	MYSQL_INPUT( 1, MYSQL_TYPE_STRING,   event->pings,              strlen(event->pings));
 	MYSQL_INPUT( 2, MYSQL_TYPE_STRING,   event->draft_code,         strlen(event->draft_code));
@@ -1618,8 +1618,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,       strlen(event->xmage_server));
 	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
 	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_file,        strlen(event->banner_file));
-	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->banner_timestamp,  sizeof(event->banner_timestamp));
-	MYSQL_INPUT(19, MYSQL_TYPE_LONGLONG, &event->channel_id,        sizeof(event->channel_id));
+	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->channel_id,        sizeof(event->channel_id));
 
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
@@ -1643,13 +1642,12 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 			xmage_server=?, -- 10
 			draftmancer_draft=?, -- 11
 			banner_file=?,  -- 12
-			banner_timestamp=?, -- 13
-			channel_id=?    -- 14
-		WHERE guild_id=? AND draft_code=? -- 15,16
+			channel_id=?    -- 13
+		WHERE guild_id=? AND draft_code=? -- 14,15
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(17);
+	MYSQL_INPUT_INIT(16);
 	MYSQL_INPUT( 0, MYSQL_TYPE_STRING,   event->format,          strlen(event->format));
 	MYSQL_INPUT( 1, MYSQL_TYPE_LONG,     &event->time,           sizeof(event->time));
 	MYSQL_INPUT( 2, MYSQL_TYPE_FLOAT,    &event->duration,       sizeof(event->duration));
@@ -1663,10 +1661,9 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
 	MYSQL_INPUT(11, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
 	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_file,     strlen(event->banner_file));
-	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->banner_timestamp, sizeof(event->banner_timestamp));
-	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
-	MYSQL_INPUT(15, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
-	MYSQL_INPUT(16, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
+	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
+	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
+	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2537,6 +2534,21 @@ static Database_Result<Database_No_Value> database_delete_member_from_all_sign_u
 
 	MYSQL_RETURN();
 }
+
+static Database_Result<Database_No_Value> database_update_banner_timestamp(const u64 guild_id, const char* draft_code, const time_t timestamp) {
+	MYSQL_CONNECT();
+	static const char* query = "UPDATE draft_events SET banner_timestamp=? WHERE guild_id=? AND draft_code=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &timestamp,  sizeof(timestamp));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
 
 static const size_t XMAGE_VERSION_STRING_MAX = 128;
 
@@ -3420,9 +3432,13 @@ static void add_sign_up_buttons_to_message(dpp::message& message, const std::sha
 }
 
 static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& message, std::shared_ptr<Draft_Event> draft_event) {
-	message.embeds.clear();
-
 	dpp::embed embed;
+	if(message.embeds.size() > 0) {
+		// Copy the existing embed so we don't loose the attached image.
+		embed = message.embeds[0];
+	}
+
+	message.embeds.clear();
 
 	embed.set_color(draft_event->color);
 
@@ -3442,6 +3458,7 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_event->draft_code);
 
 	// Create the three embed fields (Playing, Tentative, Minutemage) and the list of players for each.
+	embed.fields.clear();
 	for(int i = 0; i < 3; ++i) {
 		std::string names;
 		names.reserve(512);
@@ -3475,7 +3492,14 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 		embed.add_field(fmt::format(g_draft_sign_up_columns[i].header, count), names, true);
 	}
 
-	embed.set_image("attachment://banner.png");
+	// Attach banner if it hasn't already been attached, or if the file on disk is newer.
+	struct stat file_attributes;
+	stat(draft_event->banner_file, &file_attributes);
+	if(embed.image.has_value() == 0 || draft_event->banner_timestamp < file_attributes.st_mtime) {
+		message.add_file("banner.png", dpp::utility::read_file(draft_event->banner_file));
+		embed.set_image("attachment://banner.png");
+		(void)database_update_banner_timestamp(guild_id, draft_event->draft_code, file_attributes.st_mtime);
+	}
 
 	time_t now = time(NULL);
 	time_t draft_start = unpack_and_make_timestamp(draft_event->time, draft_event->time_zone);
@@ -3551,24 +3575,12 @@ static void redraw_signup(dpp::cluster& bot, const u64 guild_id, const u64 messa
 		if(!callback.is_error()) {
 			dpp::message message = std::get<dpp::message>(callback.value);
 
-			log(LOG_LEVEL_DEBUG, "%d: Message %lu has %lu attachments", __LINE__, message.id, message.attachments.size());
-			//message.set_content("");
-
-			// Attach banner if it hasn't already been attached, or if the file on disk is newer.
-			struct stat file_attributes;
-			stat(draft->banner_file, &file_attributes);
-			if(message.attachments.size() == 0 || draft->banner_timestamp < file_attributes.st_mtime) {
-				message.add_file("banner.png", dpp::utility::read_file(draft->banner_file));
-			}
-
+			message.set_content("");
 			add_sign_up_embed_to_message(guild_id, message, draft);
-
 			add_sign_up_buttons_to_message(message, draft);
 
 			bot.message_edit(message, [&bot, message_id, channel_id](const dpp::confirmation_callback_t& callback) {
 				if(!callback.is_error()) {
-					dpp::message message = std::get<dpp::message>(callback.value);
-					log(LOG_LEVEL_DEBUG, "%d: Message %lu has %lu attachments", __LINE__, message.id, message.attachments.size());
 				} else {
 					log(LOG_LEVEL_ERROR, "message_edit(%lu, %lu) failed: %s", message_id, channel_id, callback.get_error().message.c_str());
 				}
@@ -4763,7 +4775,7 @@ int main(int argc, char* argv[]) {
 
 						struct stat file_attributes;
 						stat(filename.c_str(), &file_attributes); // FIXME: This can fail!
-						draft_event.banner_timestamp = file_attributes.st_mtime;
+						//draft_event.banner_timestamp = file_attributes.st_mtime;
 					} else {
 						event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
 						return;
@@ -5061,7 +5073,7 @@ int main(int argc, char* argv[]) {
 
 							struct stat file_attributes;
 							stat(filename.c_str(), &file_attributes); // FIXME: This can fail!
-							draft_event.value->banner_timestamp = file_attributes.st_mtime;
+							//draft_event.value->banner_timestamp = file_attributes.st_mtime;
 						} else {
 							event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
 							return;
