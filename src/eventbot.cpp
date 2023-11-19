@@ -23,12 +23,13 @@
 // 
 // For more information, please refer to <http://unlicense.org/>
 
-// FIXME: Weird bug After using /edit_draft to change the banner for a posted draft, wait for the image to update, then click a sign up button: The embed will flash and redraw. This only happens after the first button click... why?
+// FIXME: Weird bug after creating a draft or using /edit_draft to change the banner for a posted draft: The first embed button clicked after this will cause the embed to flash and redraw. This only happens after the first button click though... why?
+
 // TODO: Make most commands ephemeral so it doesn't matter where they are used. 
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
-// FIXME: dpp::utility::read_file can throw
+// FIXME: dpp::utility::read_file can throw... just use slurp
 // Note: Only one minutemage will be asked to fill a seat.
 
 // Nice functionality, but not needed before going live
@@ -207,6 +208,21 @@ enum GLOBAL_ERROR {
 
 	ERROR_INVALID_FUNCTION_PARAMETER,
 
+	// database
+	ERROR_MYSQL_INIT_FAILED,
+	ERROR_MYSQL_REAL_CONNECT_FAILED,
+	ERROR_MYSQL_STMT_INIT_FAILED,
+	ERROR_MYSQL_STMT_PREPARE_FAILED,
+	ERROR_MYSQL_STMT_CLOSE_FAILED,
+	ERROR_MYSQL_BIND_PARAM_FAILED,
+	ERROR_MYSQL_STMT_EXECUTE_FAILED,
+	ERROR_MYSQL_STMT_BIND_RESULT_FAILED,
+	ERROR_MYSQL_STMT_STORE_RESULT_FAILED,
+	ERROR_MYSQL_STMT_FETCH_FAILED,
+
+	ERROR_DATABASE_TOO_MANY_RESULTS,
+	ERROR_DATABASE_UNEXPECTED_RESULT,
+
 	// parse_date_string
 	ERROR_MALFORMED_DATE_STRING,
 	ERROR_DATE_IS_IN_PAST,
@@ -244,7 +260,20 @@ static const char* to_cstring(const GLOBAL_ERROR e) {
 
 		case ERROR_INVALID_FUNCTION_PARAMETER: return "Internal EventBot error: Invalid function parameter.";
 
-		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD"; 
+		case ERROR_MYSQL_INIT_FAILED: return "mysql_init() failed";
+		case ERROR_MYSQL_REAL_CONNECT_FAILED: return "mysql_real_connect() failed";
+		case ERROR_MYSQL_STMT_INIT_FAILED: return "mysql_stmt_init() failed";
+		case ERROR_MYSQL_STMT_PREPARE_FAILED: return "mysql_stmt_prepare() failed";
+		case ERROR_MYSQL_STMT_CLOSE_FAILED: return "mysql_stmt_close() failed";
+		case ERROR_MYSQL_BIND_PARAM_FAILED: return "mysql_bind_param() failed";
+		case ERROR_MYSQL_STMT_EXECUTE_FAILED: return "mysql_stmt_execute() failed";
+		case ERROR_MYSQL_STMT_BIND_RESULT_FAILED: return "mysql_stmt_bind_result() failed";
+		case ERROR_MYSQL_STMT_STORE_RESULT_FAILED: return "mysql_stmt_store_result() failed";
+		case ERROR_MYSQL_STMT_FETCH_FAILED: return "mysql_stmt_fetch() failed";
+		case ERROR_DATABASE_TOO_MANY_RESULTS: return "Database query returned >= 2 rows, but 0 or 1 was expected.";
+		case ERROR_DATABASE_UNEXPECTED_RESULT: return "Database query returned unexpected row count.";
+
+		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD."; 
 		case ERROR_DATE_IS_IN_PAST:       return "The date is in the past and time travel does not yet exist.";
 		case ERROR_INVALID_MONTH:         return "Month should be between 01 and 12.";
 		case ERROR_INVALID_DAY_28:        return "Day should be between 01 and 28 for the specified month.";
@@ -1408,15 +1437,17 @@ static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 // All database_xxxx functions return this struct. If the member variable success is true value will contain the requested data and count will be the number of rows returned.
 template<typename T>
 struct Database_Result {
-	bool success;
+	GLOBAL_ERROR error;
 	u64 count;
 	T value;
-
-	bool operator==(const bool& rhs) const { return  (success == rhs); }
-	bool operator!=(const bool& rhs) const { return !(success == rhs); }
 };
 
-// For database_ functions that return no data. We could use template specialization here this is simpler.
+template<typename T>
+static inline bool is_error(const Database_Result<T>& result) {
+	return result.error != NO_ERROR;
+}
+
+// For database_ functions that return no data. We could use template specialization here but this is simpler.
 struct Database_No_Value {};
 
 static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to use different databases, right?
@@ -1427,7 +1458,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 	MYSQL* mysql = mysql_init(NULL);                         \
 	if(mysql == NULL) {                                      \
 		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");     \
-		return {false, 0, {}};                               \
+		return {ERROR_MYSQL_INIT_FAILED, 0, {}};             \
 	}                                                        \
 	SCOPE_EXIT(mysql_close(mysql));                          \
 	MYSQL* connection = mysql_real_connect(mysql,            \
@@ -1439,7 +1470,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		NULL, 0);                                            \
 	if(connection == NULL) {                                 \
 		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed"); \
-		return {false, 0, {}};                               \
+		return {ERROR_MYSQL_REAL_CONNECT_FAILED, 0, {}};     \
 	}
 
 
@@ -1448,12 +1479,12 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 	MYSQL_STMT* stmt = mysql_stmt_init(connection);                                             \
 	if(stmt == NULL) {                                                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_init(connection) failed: %s", mysql_stmt_error(stmt)); \
-		return {false, 0, {}};                                                                  \
+		return {ERROR_MYSQL_STMT_INIT_FAILED, 0, {}};                                           \
 	}                                                                                           \
 	SCOPE_EXIT(mysql_stmt_close(stmt));                                                         \
 	if(mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {                                   \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_prepare() failed: %s", mysql_stmt_error(stmt));        \
-		return {false, 0, {}};                                                                  \
+		return {ERROR_MYSQL_STMT_CLOSE_FAILED, 0, {}};                                          \
 	}
 
 
@@ -1472,18 +1503,18 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 #define MYSQL_INPUT_BIND_AND_EXECUTE()                                                                     \
 	if(mysql_stmt_bind_param(stmt, input) != 0) {                                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_param() failed: %s", mysql_stmt_error(stmt));                \
-		return {false, 0, {}};                                                                             \
+		return {ERROR_MYSQL_BIND_PARAM_FAILED, 0, {}};                                                     \
 	}                                                                                                      \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return {false, 0, {}};                                                                             \
+		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, {}};                                                   \
 	}
 
 // A query with no output params
 #define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return {false, 0, {}};                                                                             \
+		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, {}};                                                   \
 	}
 
 // Prepare an array to hold the output from a query.
@@ -1507,16 +1538,16 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 #define MYSQL_OUTPUT_BIND_AND_STORE()                                                        \
     if(mysql_stmt_bind_result(stmt, output) != 0) {                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_result() failed: %s", mysql_stmt_error(stmt)); \
-		return {false, 0, {}};                                                               \
+		return {ERROR_MYSQL_STMT_BIND_RESULT_FAILED, 0, {}};                                 \
     }                                                                                        \
     if(mysql_stmt_store_result(stmt) != 0) {                                                 \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_store_result: %s", mysql_stmt_error(stmt));         \
-		return {false, 0, {}};                                                               \
+		return {ERROR_MYSQL_STMT_STORE_RESULT_FAILED, 0, {}};                                \
     }
 
 // Return for queries that don't return any rows
 #define MYSQL_RETURN() \
-	return {true, 0, {}}
+	return {NO_ERROR, 0, {}}
 
 // Return for queries that are expected to fetch zero or one rows
 #define MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS()                                                      \
@@ -1525,16 +1556,16 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		int status = mysql_stmt_fetch(stmt);                                                           \
 		if(status == 1) {                                                                              \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));             \
-			return {false, row_count, {}};                                                             \
+			return {ERROR_MYSQL_STMT_FETCH_FAILED, row_count, {}};                                     \
 		}                                                                                              \
 		if(status == MYSQL_NO_DATA) break;                                                             \
 		++row_count;                                                                                   \
 	}                                                                                                  \
 	if(row_count > 1) {                                                                                \
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);  \
-		return {false, row_count, {}};                                                                 \
+		return {ERROR_DATABASE_TOO_MANY_RESULTS, row_count, {}};                                       \
 	}                                                                                                  \
-	return {true, row_count, result};
+	return {NO_ERROR, row_count, result};
 
 // Return for queries that are expected to fetch and return a single row of data.
 #define MYSQL_FETCH_AND_RETURN_SINGLE_ROW()                                                            \
@@ -1543,16 +1574,16 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		int status = mysql_stmt_fetch(stmt);                                                           \
 		if(status == 1) {                                                                              \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));             \
-			return {false, row_count, {}};                                                             \
+			return {ERROR_MYSQL_STMT_FETCH_FAILED, row_count, {}};                                     \
 		}                                                                                              \
 		if(status == MYSQL_NO_DATA) break;                                                             \
 		++row_count;                                                                                   \
 	}                                                                                                  \
 	if(row_count != 1) {                                                                               \
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);       \
-		return {false, row_count, {}};                                                                 \
+		return {ERROR_DATABASE_UNEXPECTED_RESULT, row_count, {}};                                      \
 	}                                                                                                  \
-	return {true, 1, result};
+	return {NO_ERROR, 1, result};
 
 
 // Return for queries that are expected to fetch and return 0 or more rows of data.
@@ -1562,13 +1593,13 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		int status = mysql_stmt_fetch(stmt);                                               \
 		if(status == 1) {                                                                  \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt)); \
-			return {false, row_count, {}};                                                 \
+			return {ERROR_MYSQL_STMT_FETCH_FAILED, row_count, {}};                         \
 		}                                                                                  \
 		if(status == MYSQL_NO_DATA) break;                                                 \
 		results.push_back(result);                                                         \
 		++row_count;                                                                       \
 	}                                                                                      \
-	return {true, row_count, results};
+	return {NO_ERROR, row_count, results};
 
 
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
@@ -3254,7 +3285,7 @@ static std::string get_members_preferred_name(const u64 guild_id, const u64 memb
 
 static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
 	auto ids = database_get_draft_post_ids(guild_id, draft_code);
-	if(ids == true) {
+	if(!is_error(ids)) {
 		// Delete the details post.
 		bot.message_delete(ids.value.details, ids.value.channel, [ids](const dpp::confirmation_callback_t& callback) {
 			if(!callback.is_error()) {
@@ -3280,7 +3311,7 @@ static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std:
 static void delete_temp_roles(dpp::cluster& bot, const u64 guild_id, const std::string& draft_code) {
 	// Get the temporary roles created for this draft
 	auto roles = database_get_temp_roles(guild_id, draft_code.c_str());
-	if(roles != true) {
+	if(is_error(roles)) {
 		// TODO: Now what?
 	}
 
@@ -3456,6 +3487,9 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 	}
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_event->draft_code);
+	if(is_error(sign_ups)) {
+		// TODO: Now what?
+	}
 
 	// Create the three embed fields (Playing, Tentative, Minutemage) and the list of players for each.
 	embed.fields.clear();
@@ -3496,6 +3530,7 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 	struct stat file_attributes;
 	stat(draft_event->banner_file, &file_attributes);
 	if(embed.image.has_value() == 0 || draft_event->banner_timestamp < file_attributes.st_mtime) {
+		log(LOG_LEVEL_DEBUG, "Updating banner image");
 		message.add_file("banner.png", dpp::utility::read_file(draft_event->banner_file));
 		embed.set_image("attachment://banner.png");
 		(void)database_update_banner_timestamp(guild_id, draft_event->draft_code, file_attributes.st_mtime);
@@ -3647,12 +3682,15 @@ static void post_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_
 
 static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
 	auto draft_event = database_get_event(guild_id, draft_code);
-	if(draft_event != true) {
+	if(is_error(draft_event)) {
 		log(LOG_LEVEL_ERROR, "database_get_event() error");
 		return;
 	};		
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
+	if(is_error(sign_ups)) {
+		// TODO: Now what?
+	}
 
 	dpp::message message;
 	message.set_type(dpp::message_type::mt_default);
@@ -3674,7 +3712,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 	text += fmt::format("If playing, check your XMage install is up-to-date by starting the XMage launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
 
 	const auto xmage_version = database_get_xmage_version();
-	if(xmage_version == true) {
+	if(!is_error(xmage_version)) {
 		u64 timestamp = xmage_version.value.timestamp + SERVER_TIME_ZONE_OFFSET;
 		// Note: The leading space is intentional as this joins with the previous line.
 		text += fmt::format(" The latest XMage release is {}, released <t:{}:R>.", xmage_version.value.version, timestamp);
@@ -3713,13 +3751,13 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 
 static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
 	const auto draft_event = database_get_event(guild_id, draft_code);
-	if(draft_event == false) {
+	if(is_error(draft_event)) {
 		log(LOG_LEVEL_ERROR, "database_get_event(%lu, %s) failed.", guild_id, draft_code);
 		return;
 	}
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
-	if(sign_ups == false) {
+	if(is_error(sign_ups)) {
 		log(LOG_LEVEL_ERROR, "database_get_draft_sign_ups(%lu, %s) failed.", guild_id, draft_code);
 		return;
 	}
@@ -3771,10 +3809,10 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 
 static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
 	const auto draft_event = database_get_event(guild_id, draft_code);
-	if(draft_event == false) return;
+	if(is_error(draft_event)) return;
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
-	if(sign_ups == false) return;
+	if(is_error(sign_ups)) return;
 
 	int confirmed_count = 0;
 	for(const auto& sign_up : sign_ups.value) {
@@ -3923,10 +3961,10 @@ static void set_bot_presence(dpp::cluster& bot) {
 	std::string description;
 
 	auto draft_code = database_get_next_upcoming_draft(GUILD_ID);
-	if(draft_code == true) {
+	if(!is_error(draft_code)) {
 		if(draft_code.value.length() > 0) {
 			auto draft = database_get_event(GUILD_ID, draft_code.value);
-			if(draft == true) {
+			if(!is_error(draft)) {
 				if(draft.value->status == DRAFT_STATUS_LOCKED) {
 					status = dpp::presence_status::ps_online;
 					type = dpp::activity_type::at_watching;
@@ -4928,7 +4966,7 @@ int main(int argc, char* argv[]) {
 			strcpy(draft_event.pings, ping_string);
 
 			// Add the event to the database.
-			if(database_add_draft(guild_id, &draft_event) == true) {
+			if(!is_error(database_add_draft(guild_id, &draft_event))) {
 				const dpp::user& issuing_user = event.command.get_issuing_user();
 				event.reply(fmt::format("{} created {}. Use ``/post_draft`` to post it.", issuing_user.global_name, draft_code_str));
 			} else {
@@ -4937,11 +4975,9 @@ int main(int argc, char* argv[]) {
 			}
 		} else
 		if(command_name == "post_draft") {
-			// TODO: If the event is already posted, update it.
 			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
-
 			auto draft = database_get_event(guild_id, draft_code);
-			if(draft == true) {
+			if(!is_error(draft)) {
 				event.reply(fmt::format("Draft {} posted.", draft_code));
 				post_draft(bot, guild_id, draft.value);
 			} else {
@@ -5181,7 +5217,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			auto result = database_edit_draft(guild_id, draft_event.value);
-			if(result == true) {
+			if(!is_error(result)) {
 				event.reply(fmt::format("Draft {} updated", draft_code));
 				edit_draft(bot, guild_id, draft_event.value);
 			} else {
@@ -5310,7 +5346,7 @@ int main(int argc, char* argv[]) {
 			// TESTME: What happens on the first draft of the season and the leaderboard is empty?
 			// FIXME: Does this need to be a shared_ptr / on the heap? This function might exit before Discord can finish making all the pod roles and assigning members to them.
 			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code, draft_code.value.season);
-			if(sign_ups != true) {
+			if(is_error(sign_ups)) {
 				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s, %d) failed", guild_id, g_current_draft_code, league_code, draft_code.value.season);
 				event.reply(dpp::message{"Internal EventBot error: A database query has failed. This is not your fault! Please try again."}.set_flags(dpp::m_ephemeral));
 				return;
@@ -5589,7 +5625,7 @@ int main(int argc, char* argv[]) {
 					// "current draft" role successfully created. Add it to the database so it can be deleted after the draft has finished.
 					dpp::role draft_role = std::get<dpp::role>(callback.value);
 					const auto result = database_add_temp_role(guild_id, g_current_draft_code.c_str(), draft_role.id);
-					if(result == true) {
+					if(!is_error(result)) {
 						for(int P = 0; P < tournament.pod_count; ++P) {
 							// Create a role for each pod and assign it to all members in this pod.
 							dpp::role pod_role;
@@ -5602,7 +5638,7 @@ int main(int argc, char* argv[]) {
 									dpp::role pod_role = std::get<dpp::role>(callback.value);
 									// TODO: Add temp role to database
 									const auto result = database_add_temp_role(guild_id, g_current_draft_code.c_str(), pod_role.id);
-									if(result == true) {
+									if(!is_error(result)) {
 										// Give all members in this pod the draft_role and pod_role
 										const Draft_Pod* pod = &tournament.pods[P];
 										for(int player = 0; player < pod->count; ++player) {
@@ -5668,7 +5704,7 @@ int main(int argc, char* argv[]) {
 											}
 
 											const auto draft = database_get_event(guild_id, g_current_draft_code);
-											if(draft == true) {
+											if(!is_error(draft)) {
 												const bool is_draftmancer = draft.value->draftmancer_draft;
 												std::string text;
 												if(!is_draftmancer) {
@@ -5761,7 +5797,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code.c_str(), note.c_str());
-			if(result == true ) {
+			if(!is_error(result)) {
 				const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
 				event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
 			} else {
@@ -5792,7 +5828,8 @@ int main(int argc, char* argv[]) {
 
 		// Get the current sign up status (if any) for this member.
 		auto current_sign_up_status = database_get_members_sign_up_status(guild_id, draft_code, member_id);
-		if(current_sign_up_status != true) {
+		if(is_error(current_sign_up_status)) {
+			log(LOG_LEVEL_ERROR, "%s", to_cstring(current_sign_up_status.error));
 			// TODO: Now what? Send an error to #bot-commands or something?
 		}
 
@@ -5852,7 +5889,7 @@ int main(int argc, char* argv[]) {
 		(void)database_sign_up_to_a_draft(guild_id, draft_code, member_id, preferred_name, timestamp, new_sign_up_status);	
 
 		const auto draft = database_get_event(guild_id, draft_code);
-		if(draft != true) {
+		if(is_error(draft)) {
 			log(LOG_LEVEL_ERROR, "database_get_event(%lu, %s) failed" , guild_id, draft_code.c_str());
 		}
 
@@ -5880,10 +5917,10 @@ int main(int argc, char* argv[]) {
 		const u64 guild_id = event.guild_id;
 		const u64 member_id = event.removed.id;
 
-		if(database_delete_member_from_all_sign_ups(guild_id, member_id) == true) {
+		if(!is_error(database_delete_member_from_all_sign_ups(guild_id, member_id))) {
 			// Remove them from the sign up sheet of any upcoming drafts.
 			const auto drafts = database_get_all_events(guild_id);
-			if(drafts == true) {
+			if(!is_error(drafts)) {
 				for(const auto& D : drafts.value) {
 					const std::shared_ptr<Draft_Event> draft = std::make_shared<Draft_Event>(D);
 					if(draft->signups_id != 0) {
@@ -5915,7 +5952,7 @@ int main(int argc, char* argv[]) {
 		set_bot_presence(bot);
 
 		auto draft_code = database_get_next_upcoming_draft(GUILD_ID);	
-		if(draft_code != true) {
+		if(is_error(draft_code)) {
 			return;
 		}
 		if(draft_code.count == 0) return; // No scheduled drafts.
@@ -5923,7 +5960,7 @@ int main(int argc, char* argv[]) {
 		g_current_draft_code = draft_code.value;
 
 		auto draft = database_get_event(GUILD_ID, draft_code.value);
-		if(draft.count == 0) {
+		if(is_error(draft_code) || draft.count == 0) {
 			return;
 		}
 
