@@ -1434,18 +1434,10 @@ static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 	return tournament;
 }
 
-// All database_xxxx functions return this struct. If the member variable success is true value will contain the requested data and count will be the number of rows returned.
 template<typename T>
-struct Database_Result {
-	GLOBAL_ERROR error;
+struct Database_Result : Result<T> {
 	u64 count;
-	T value;
 };
-
-template<typename T>
-static inline bool is_error(const Database_Result<T>& result) {
-	return result.error != NO_ERROR;
-}
 
 // For database_ functions that return no data. We could use template specialization here but this is simpler.
 struct Database_No_Value {};
@@ -1458,7 +1450,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 	MYSQL* mysql = mysql_init(NULL);                         \
 	if(mysql == NULL) {                                      \
 		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");     \
-		return {ERROR_MYSQL_INIT_FAILED, 0, {}};             \
+		return {ERROR_MYSQL_INIT_FAILED, {}, 0};             \
 	}                                                        \
 	SCOPE_EXIT(mysql_close(mysql));                          \
 	MYSQL* connection = mysql_real_connect(mysql,            \
@@ -1470,21 +1462,20 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		NULL, 0);                                            \
 	if(connection == NULL) {                                 \
 		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed"); \
-		return {ERROR_MYSQL_REAL_CONNECT_FAILED, 0, {}};     \
+		return {ERROR_MYSQL_REAL_CONNECT_FAILED, {}, 0};     \
 	}
-
 
 // Prepare a MySQL statement using the provided query.
 #define MYSQL_STATEMENT()                                                                       \
 	MYSQL_STMT* stmt = mysql_stmt_init(connection);                                             \
 	if(stmt == NULL) {                                                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_init(connection) failed: %s", mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_INIT_FAILED, 0, {}};                                           \
+		return {ERROR_MYSQL_STMT_INIT_FAILED, {}, 0};                                           \
 	}                                                                                           \
 	SCOPE_EXIT(mysql_stmt_close(stmt));                                                         \
 	if(mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {                                   \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_prepare() failed: %s", mysql_stmt_error(stmt));        \
-		return {ERROR_MYSQL_STMT_CLOSE_FAILED, 0, {}};                                          \
+		return {ERROR_MYSQL_STMT_CLOSE_FAILED, {}, 0};                                          \
 	}
 
 
@@ -1503,18 +1494,18 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 #define MYSQL_INPUT_BIND_AND_EXECUTE()                                                                     \
 	if(mysql_stmt_bind_param(stmt, input) != 0) {                                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_param() failed: %s", mysql_stmt_error(stmt));                \
-		return {ERROR_MYSQL_BIND_PARAM_FAILED, 0, {}};                                                     \
+		return {ERROR_MYSQL_BIND_PARAM_FAILED, {}, 0};                                                     \
 	}                                                                                                      \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, {}};                                                   \
+		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, {}, 0};                                                   \
 	}
 
 // A query with no output params
 #define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, {}};                                                   \
+		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, {}, 0};                                                   \
 	}
 
 // Prepare an array to hold the output from a query.
@@ -1538,16 +1529,16 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 #define MYSQL_OUTPUT_BIND_AND_STORE()                                                        \
     if(mysql_stmt_bind_result(stmt, output) != 0) {                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_result() failed: %s", mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_BIND_RESULT_FAILED, 0, {}};                                 \
+		return {ERROR_MYSQL_STMT_BIND_RESULT_FAILED, {}, 0};                                 \
     }                                                                                        \
     if(mysql_stmt_store_result(stmt) != 0) {                                                 \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_store_result: %s", mysql_stmt_error(stmt));         \
-		return {ERROR_MYSQL_STMT_STORE_RESULT_FAILED, 0, {}};                                \
+		return {ERROR_MYSQL_STMT_STORE_RESULT_FAILED, {}, 0};                                \
     }
 
 // Return for queries that don't return any rows
 #define MYSQL_RETURN() \
-	return {NO_ERROR, 0, {}}
+	return {NO_ERROR, {}, 0};
 
 // Return for queries that are expected to fetch zero or one rows
 #define MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS()                                                      \
@@ -1556,16 +1547,16 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		int status = mysql_stmt_fetch(stmt);                                                           \
 		if(status == 1) {                                                                              \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));             \
-			return {ERROR_MYSQL_STMT_FETCH_FAILED, row_count, {}};                                     \
+			return {ERROR_MYSQL_STMT_FETCH_FAILED, {}, row_count};                                     \
 		}                                                                                              \
 		if(status == MYSQL_NO_DATA) break;                                                             \
 		++row_count;                                                                                   \
 	}                                                                                                  \
 	if(row_count > 1) {                                                                                \
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);  \
-		return {ERROR_DATABASE_TOO_MANY_RESULTS, row_count, {}};                                       \
+		return {ERROR_DATABASE_TOO_MANY_RESULTS, {}, row_count};                                       \
 	}                                                                                                  \
-	return {NO_ERROR, row_count, result};
+	return {NO_ERROR, result, row_count};
 
 // Return for queries that are expected to fetch and return a single row of data.
 #define MYSQL_FETCH_AND_RETURN_SINGLE_ROW()                                                            \
@@ -1574,16 +1565,16 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		int status = mysql_stmt_fetch(stmt);                                                           \
 		if(status == 1) {                                                                              \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));             \
-			return {ERROR_MYSQL_STMT_FETCH_FAILED, row_count, {}};                                     \
+			return {ERROR_MYSQL_STMT_FETCH_FAILED, {}, row_count};                                     \
 		}                                                                                              \
 		if(status == MYSQL_NO_DATA) break;                                                             \
 		++row_count;                                                                                   \
 	}                                                                                                  \
 	if(row_count != 1) {                                                                               \
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);       \
-		return {ERROR_DATABASE_UNEXPECTED_RESULT, row_count, {}};                                      \
+		return {ERROR_DATABASE_UNEXPECTED_RESULT, {}, row_count};                                      \
 	}                                                                                                  \
-	return {NO_ERROR, 1, result};
+	return {NO_ERROR, {result}, 1};
 
 
 // Return for queries that are expected to fetch and return 0 or more rows of data.
@@ -1593,13 +1584,13 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		int status = mysql_stmt_fetch(stmt);                                               \
 		if(status == 1) {                                                                  \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt)); \
-			return {ERROR_MYSQL_STMT_FETCH_FAILED, row_count, {}};                         \
+			return {ERROR_MYSQL_STMT_FETCH_FAILED, {}, row_count};                         \
 		}                                                                                  \
 		if(status == MYSQL_NO_DATA) break;                                                 \
 		results.push_back(result);                                                         \
 		++row_count;                                                                       \
 	}                                                                                      \
-	return {NO_ERROR, row_count, results};
+	return {NO_ERROR, results, row_count};
 
 
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
@@ -3711,7 +3702,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 	text += "Minutemage sign ups are now open. If needed, a minutemage will be selected at random to fill an empty seat.\n\n";
 	text += fmt::format("If playing, check your XMage install is up-to-date by starting the XMage launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
 
-	const auto xmage_version = database_get_xmage_version();
+	const Database_Result<XMage_Version> xmage_version = database_get_xmage_version();
 	if(!is_error(xmage_version)) {
 		u64 timestamp = xmage_version.value.timestamp + SERVER_TIME_ZONE_OFFSET;
 		// Note: The leading space is intentional as this joins with the previous line.
