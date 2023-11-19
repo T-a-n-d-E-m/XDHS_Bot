@@ -202,7 +202,7 @@ static void sig_handler(int signo) {
 }
 
 enum GLOBAL_ERROR {
-	NO_ERROR,
+	ERROR_NONE,
 
 	ERROR_OUT_OF_MEMORY,
 
@@ -254,7 +254,7 @@ enum GLOBAL_ERROR {
 
 static const char* to_cstring(const GLOBAL_ERROR e) {
 	switch(e) {
-		case NO_ERROR: return "no error";
+		case ERROR_NONE: return "no error";
 
 		case ERROR_OUT_OF_MEMORY: return "Internal EventBot error: The server is out of memory.";
 
@@ -307,11 +307,11 @@ struct Result {
 };
 
 #define MAKE_ERROR(code) {code, {}}
-#define MAKE_RESULT(result) {NO_ERROR, {result}}
+#define MAKE_RESULT(result) {ERROR_NONE, {result}}
 
 template<typename T>
 static inline bool is_error(const Result<T>& result) {
-	return result.error != NO_ERROR;
+	return result.error != ERROR_NONE;
 }
 
 
@@ -1538,7 +1538,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 
 // Return for queries that don't return any rows
 #define MYSQL_RETURN() \
-	return {NO_ERROR, {}, 0};
+	return {ERROR_NONE, {}, 0};
 
 // Return for queries that are expected to fetch zero or one rows
 #define MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS()                                                      \
@@ -1556,7 +1556,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);  \
 		return {ERROR_DATABASE_TOO_MANY_RESULTS, {}, row_count};                                       \
 	}                                                                                                  \
-	return {NO_ERROR, result, row_count};
+	return {ERROR_NONE, result, row_count};
 
 // Return for queries that are expected to fetch and return a single row of data.
 #define MYSQL_FETCH_AND_RETURN_SINGLE_ROW()                                                            \
@@ -1574,7 +1574,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);       \
 		return {ERROR_DATABASE_UNEXPECTED_RESULT, {}, row_count};                                      \
 	}                                                                                                  \
-	return {NO_ERROR, {result}, 1};
+	return {ERROR_NONE, {result}, 1};
 
 
 // Return for queries that are expected to fetch and return 0 or more rows of data.
@@ -1590,7 +1590,7 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 		results.push_back(result);                                                         \
 		++row_count;                                                                       \
 	}                                                                                      \
-	return {NO_ERROR, results, row_count};
+	return {ERROR_NONE, results, row_count};
 
 
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
@@ -5988,6 +5988,7 @@ int main(int argc, char* argv[]) {
 		if((draft.value->status < DRAFT_STATUS_COMPLETE) && now - draft_start > SECONDS_AFTER_DRAFT_TO_DELETE_POSTS) {
 			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Deleting completed draft.", draft_code.value.c_str()));
 			delete_draft_posts(bot, GUILD_ID, draft_code.value);
+			// TODO: Test this is actually working!
 			delete_temp_roles(bot, GUILD_ID, draft_code.value);
 			database_clear_draft_post_ids(GUILD_ID, draft_code.value);
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_COMPLETE);
