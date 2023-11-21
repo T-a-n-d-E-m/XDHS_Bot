@@ -4,22 +4,26 @@ Still in development. Features are added, changed or removed frequently.
 
 Installation as a systemd service on Debian 11 (Bullseye):
 
-	Create a user and group for the eventbot service
-
-		- sudo addgroup --system eventbot
-
-		- sudo adduser --system --ingroup eventbot --home=/opt/EventBot/ --disabled-login eventbot
-
+	Install MySQL/MariaDB and configure an account for the bot to use. It will need DELETE, INSERT, SELECT, UPDATE privileges:
+		mysql -u root -p
+			CREATE DATABASE XDHS;
+			CREATE USER 'xdhs'@localhost IDENTIFIED BY 'password goes here';
+			GRANT DELETE, INSERT, SELECT, UPDATE ON XDHS.* TO 'xdhs'@localhost;	
+			FLUSH PRIVILEGES;
 
 	Clone this repository to your build server.
 
 	Install headers and libs for libDPP++, MariaDB, fmt and Curl.
 
-	Compile the service with './build.sh release'
+	Compile the executable with './build.sh release'
 
-	Run the ./install.sh script
+	Run ./eventbot -sql to generate the database schema.sql file. Create these tables with the mysql admin tool.
+
+	Run the ./install.sh script to create the installation directory, username/group and install the systemd service.
 
 	Edit /opt/EventBot/bot.ini. See bot.ini.template for what each line is for.
+
+		eventbot_host=
 
 		mysql_host=
 
@@ -43,4 +47,4 @@ DPP: https://github.com/brainboxdotcc/DPP
 
 fmt: https://github.com/fmtlib/fmt
 
-curl (Install with package manager)
+MySQL or MariaDB, curl (Install with package manager)
