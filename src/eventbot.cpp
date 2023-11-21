@@ -36,6 +36,7 @@
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
+// TODO: Parameterize #IN_THE_MOMENT_DRAFT_CHANNEL_ID so we can use the bot for team drafts?
 
 // Code/performance improvements
 // TODO: Thread pools for database connections
@@ -213,7 +214,6 @@ enum GLOBAL_ERROR {
 	ERROR_MYSQL_REAL_CONNECT_FAILED,
 	ERROR_MYSQL_STMT_INIT_FAILED,
 	ERROR_MYSQL_STMT_PREPARE_FAILED,
-	ERROR_MYSQL_STMT_CLOSE_FAILED,
 	ERROR_MYSQL_BIND_PARAM_FAILED,
 	ERROR_MYSQL_STMT_EXECUTE_FAILED,
 	ERROR_MYSQL_STMT_BIND_RESULT_FAILED,
@@ -221,7 +221,7 @@ enum GLOBAL_ERROR {
 	ERROR_MYSQL_STMT_FETCH_FAILED,
 
 	ERROR_DATABASE_TOO_MANY_RESULTS,
-	ERROR_DATABASE_UNEXPECTED_RESULT,
+	ERROR_DATABASE_UNEXPECTED_ROW_COUNT,
 
 	// parse_date_string
 	ERROR_MALFORMED_DATE_STRING,
@@ -260,18 +260,17 @@ static const char* to_cstring(const GLOBAL_ERROR e) {
 
 		case ERROR_INVALID_FUNCTION_PARAMETER: return "Internal EventBot error: Invalid function parameter.";
 
-		case ERROR_MYSQL_INIT_FAILED: return "mysql_init() failed";
-		case ERROR_MYSQL_REAL_CONNECT_FAILED: return "mysql_real_connect() failed";
-		case ERROR_MYSQL_STMT_INIT_FAILED: return "mysql_stmt_init() failed";
-		case ERROR_MYSQL_STMT_PREPARE_FAILED: return "mysql_stmt_prepare() failed";
-		case ERROR_MYSQL_STMT_CLOSE_FAILED: return "mysql_stmt_close() failed";
-		case ERROR_MYSQL_BIND_PARAM_FAILED: return "mysql_bind_param() failed";
-		case ERROR_MYSQL_STMT_EXECUTE_FAILED: return "mysql_stmt_execute() failed";
-		case ERROR_MYSQL_STMT_BIND_RESULT_FAILED: return "mysql_stmt_bind_result() failed";
-		case ERROR_MYSQL_STMT_STORE_RESULT_FAILED: return "mysql_stmt_store_result() failed";
-		case ERROR_MYSQL_STMT_FETCH_FAILED: return "mysql_stmt_fetch() failed";
-		case ERROR_DATABASE_TOO_MANY_RESULTS: return "Database query returned >= 2 rows, but 0 or 1 was expected.";
-		case ERROR_DATABASE_UNEXPECTED_RESULT: return "Database query returned unexpected row count.";
+		case ERROR_MYSQL_INIT_FAILED:              return "Internal EventBot Error: mysql_init() failed.";
+		case ERROR_MYSQL_REAL_CONNECT_FAILED:      return "Internal EventBot Error: mysql_real_connect() failed: {}";
+		case ERROR_MYSQL_STMT_INIT_FAILED:         return "Internal EventBot Error: mysql_stmt_init() failed: {}";
+		case ERROR_MYSQL_STMT_PREPARE_FAILED:      return "Internal EventBot Error: mysql_stmt_prepare() failed: {}";
+		case ERROR_MYSQL_BIND_PARAM_FAILED:        return "Internal EventBot Error: mysql_bind_param() failed: {}";
+		case ERROR_MYSQL_STMT_EXECUTE_FAILED:      return "Internal EventBot Error: mysql_stmt_execute() failed: {}";
+		case ERROR_MYSQL_STMT_BIND_RESULT_FAILED:  return "Internal EventBot Error: mysql_stmt_bind_result() failed: {}";
+		case ERROR_MYSQL_STMT_STORE_RESULT_FAILED: return "Internal EventBot Error: mysql_stmt_store_result() failed: {}";
+		case ERROR_MYSQL_STMT_FETCH_FAILED:        return "Internal EventBot Error: mysql_stmt_fetch() failed: {}";
+		case ERROR_DATABASE_TOO_MANY_RESULTS:      return "Internal EventBot Error: Database query returned {} rows, but 0 or 1 was expected.";
+		case ERROR_DATABASE_UNEXPECTED_ROW_COUNT:  return "Internal EventBot Error: Database query returned unexpected row count of {} rows.";
 
 		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD."; 
 		case ERROR_DATE_IS_IN_PAST:       return "The date is in the past and time travel does not yet exist.";
@@ -285,34 +284,98 @@ static const char* to_cstring(const GLOBAL_ERROR e) {
 		case ERROR_LEAGUE_NOT_FOUND:     return "No matching league found for draft code.";
 
 		case ERROR_MALFORMED_START_TIME_STRING: return "Malformed start time string. Start time should be written as HH:MM in 24 hour time.";
-		case ERROR_INVALID_HOUR:   return "Hour should be between 0 and 23.";
-		case ERROR_INVALID_MINUTE: return "Minute should be between 1 and 59.";
+		case ERROR_INVALID_HOUR:                return "Hour should be between 0 and 23.";
+		case ERROR_INVALID_MINUTE:              return "Minute should be between 1 and 59.";
 
 		case ERROR_LOAD_FONT_FAILED:      return "Internal EventBot error: stbtt_InitFont() failed to load banner font.";
-		case ERROR_LOAD_ART_FAILED:       return "Internal EventBot error: stbi_load() failed to load art file.";
-		case ERROR_INVALID_PACK_COUNT:    return "Internal EventBot error: Unexpected background image count.";
+		case ERROR_LOAD_ART_FAILED:       return "Internal EventBot error: stbi_load() failed to load art file. file: '{}' reason: {}";
+		case ERROR_INVALID_PACK_COUNT:    return "Internal EventBot error: Unexpected background image count of {}.";
 		case ERROR_FAILED_TO_SAVE_BANNER: return "Internal EventBot error: Failed to save generated banner to storage. If this is the first instance of seeing this error, please try again.";
 
 		case ERROR_CURL_INIT:       return "Internal EventBot error: curl_easy_init() failed.";
-		case ERROR_DOWNLOAD_FAILED: return "Internal EventBot error: Downloading file failed.";
+		case ERROR_DOWNLOAD_FAILED: return "Internal EventBot error: Downloading file '{}' failed: {}";
 	}
 
 	return "unknown error";
 }
 
-template<typename T>
+template<typename Value_Type, typename Error_String_Type = std::string>
 struct Result {
 	GLOBAL_ERROR error;
-	T value;
+	union {
+		Value_Type value;
+		Error_String_Type errstr;
+	};
+
+	Result() {}
+
+	Result(const Value_Type& val)
+		: error(ERROR_NONE)
+		, value(val)
+	{}
+
+	Result& operator=(const Result& other) {
+		error = other.error;
+		if(error == ERROR_NONE) {
+			value = other.value;
+		} else {
+			errstr = other.errstr;
+		}
+		return *this;
+	}
+
+	Result(GLOBAL_ERROR err, const Error_String_Type& str)
+		: error(err)
+		, errstr(str)
+	{}
+
+	Result(const Result& other) {
+		error = other.error;
+		if(error == ERROR_NONE) {
+			value = other.value;
+		} else {
+			errstr = other.errstr;
+		}
+	}
+
+	// Both Value_Type and Error_String_Type have destructors.
+	~Result() requires (std::is_destructible<Value_Type>::value == true) && (std::is_destructible<Error_String_Type>::value == true) {
+		if(error == ERROR_NONE) {
+			this->value.~Value_Type();
+		} else {
+			this->errstr.~Error_String_Type();
+		}
+	}
+
+	// Value_Type has no destructor, Error_String_Type has a destructor.
+	~Result() requires (std::is_destructible<Value_Type>::value == false) && (std::is_destructible<Error_String_Type>::value == true) {
+		if(error != ERROR_NONE) {
+			this->errstr.~Error_String_Type();
+		}
+	}
+
+	// Value_Type has a destructor, Error_String_Type has no destructor.
+	~Result() requires (std::is_destructible<Value_Type>::value == true) && (std::is_destructible<Error_String_Type>::value == false) {
+		if(error == ERROR_NONE) {
+			this->value.~Value_Type();
+		}
+	}
+
+	// Neither Value_Type or Error_String_Type have a destructor.
+	~Result() requires (std::is_destructible<Value_Type>::value == false) && (std::is_destructible<Error_String_Type>::value == false) = delete;
 };
 
-#define MAKE_ERROR(code) {code, {}}
-#define MAKE_RESULT(result) {ERROR_NONE, {result}}
+template<typename T>
+static inline bool has_value(const Result<T>& result) {
+	return result.error == ERROR_NONE;
+}
 
 template<typename T>
 static inline bool is_error(const Result<T>& result) {
 	return result.error != ERROR_NONE;
 }
+
+#define MAKE_ERROR_RESULT(code, ...) {.error=code, .errstr={fmt::format(to_cstring(code) __VA_OPT__(,) __VA_ARGS__)}}
 
 
 static std::string to_upper(const char* src) {
@@ -368,7 +431,7 @@ static Result<Heap_Buffer> download_file(const char* url) {
 
     CURL* curl = curl_easy_init();
     if(curl == NULL) {
-        return MAKE_ERROR(ERROR_CURL_INIT);
+        return MAKE_ERROR_RESULT(ERROR_CURL_INIT);
     }
 
     // Disable checking SSL certs
@@ -387,16 +450,14 @@ static Result<Heap_Buffer> download_file(const char* url) {
 
     CURLcode result = curl_easy_perform(curl);
     if(result != CURLE_OK) {
-        // TODO: Need to pass in a **error_str variable to get these error messages from curl?
-		log(LOG_LEVEL_ERROR, "curl_easy_perform() failed: %s", curl_easy_strerror(result));
-        return MAKE_ERROR(ERROR_DOWNLOAD_FAILED);//DOWNLOAD_IMAGE_RESULT_CURL_ERROR;
+        return MAKE_ERROR_RESULT(ERROR_DOWNLOAD_FAILED, url, curl_easy_strerror(result));
     }
 
     curl_easy_cleanup(curl);
 
     //curl_global_cleanup();
 
-    return MAKE_RESULT(buffer);
+    return {buffer};
 }
 
 
@@ -896,32 +957,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 };
 static const size_t XDHS_LEAGUE_COUNT = sizeof(g_xdhs_leagues) / sizeof(XDHS_League);
 
-#if 0
-// Parse a draft code and find the league it is for. Makes a copy into 'league' and returns true if found, false otherwise.
-// TODO: Replace this with parse_league_code
-static const XDHS_League* get_league_from_draft_code(const char* draft_code) {
-	// SSS.W-RT S=season, W=week, R=region, T=type
-	if(draft_code == NULL) return NULL;
-
-	while(isdigit(*draft_code)) {draft_code++;} // Skip the numeric part
-	if(*draft_code++ != '.') return NULL;
-	while(isdigit(*draft_code)) {draft_code++;} // Skip the numeric part
-	if(*draft_code++ != '-') return NULL;
-	char region_code = *draft_code++;
-	char league_type = *draft_code;
-
-	for(size_t i = 0; i < XDHS_LEAGUE_COUNT; ++i) {
-		const XDHS_League* ptr = &g_xdhs_leagues[i];
-		if((ptr->region_code == region_code) && (ptr->league_type == league_type)) {
-			// Found it!
-			return ptr;
-		}
-	}
-
-	return NULL;
-}
-#endif
-
 
 // The maximum allowed byte length of a draft code.
 static const size_t DRAFT_CODE_LENGTH_MAX = strlen("SSS.WW-RT");
@@ -934,9 +969,9 @@ struct Draft_Code {
 
 
 static Result<Draft_Code> parse_draft_code(const char* draft_code) {
-	if(draft_code == NULL) return MAKE_ERROR(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(draft_code == NULL) return MAKE_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
 	const size_t len = strlen(draft_code);
-	if(len > DRAFT_CODE_LENGTH_MAX) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(len > DRAFT_CODE_LENGTH_MAX) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	char str[DRAFT_CODE_LENGTH_MAX+1]; // Mutable copy
 	memcpy(str, draft_code, len);
 
@@ -947,19 +982,19 @@ static Result<Draft_Code> parse_draft_code(const char* draft_code) {
 
 	// Season
 	while(isdigit(*end)) end++;
-	if(*end != '.') return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(*end != '.') return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
-	if(strlen(start) > 3) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) == 0) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 3) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	out.season = strtol(start, NULL, 10);
 	start = ++end;
 
 	// Week
 	while(isdigit(*end)) end++;
-	if(*end != '-') return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(*end != '-') return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
-	if(strlen(start) > 2) return MAKE_ERROR(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) == 0) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 2) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	out.week = strtol(start, NULL, 10);
 	end++;
 
@@ -969,11 +1004,11 @@ static Result<Draft_Code> parse_draft_code(const char* draft_code) {
 	for(size_t i = 0; i < XDHS_LEAGUE_COUNT; ++i) {
 		if((g_xdhs_leagues[i].region_code == region_code) && (g_xdhs_leagues[i].league_type == league_type)) {
 			out.league = &g_xdhs_leagues[i];
-			return MAKE_RESULT(out);
+			return {out};
 		}
 	}
 
-	return MAKE_ERROR(ERROR_LEAGUE_NOT_FOUND);
+	return MAKE_ERROR_RESULT(ERROR_LEAGUE_NOT_FOUND);
 }
 
 static inline int pack_time(int year, int month, int day, int hour, int minute) {
@@ -1037,15 +1072,15 @@ struct Date {
 	const char* start = str; \
 	while(isdigit(*str)) str++;       \
 	if(*str != '-' && *str != '.' && *str != '\\' && *str != '/' && *str != '\0') { \
-		return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING);  \
+		return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);  \
 	} \
 	*str++ = 0; \
-	if(strlen(start) < min_len || strlen(start) > max_len) return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING); \
+	if(strlen(start) < min_len || strlen(start) > max_len) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING); \
 	out = strtol(start, NULL, 10); \
 }
 static const Result<Date> parse_date_string(const char* date_string) {
-	if(strlen(date_string) < strlen("YY-M-D")) return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING);
-	if(strlen(date_string) > strlen("YYYY-MM-DD")) return MAKE_ERROR(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) < strlen("YY-M-D")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) > strlen("YYYY-MM-DD")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
 
 	// Make a mutable copy of the date string, including terminator.
 	char str[strlen("YYYY-MM-DD")+1];
@@ -1070,35 +1105,35 @@ static const Result<Date> parse_date_string(const char* date_string) {
 	// TODO: Check the date is in the future
 
 	if(result.year < current_year) {
-		return MAKE_ERROR(ERROR_DATE_IS_IN_PAST);
+		return MAKE_ERROR_RESULT(ERROR_DATE_IS_IN_PAST);
 	}
 
 	if(result.month < 1 || result.month > 12) {
-		return MAKE_ERROR(ERROR_INVALID_MONTH);
+		return MAKE_ERROR_RESULT(ERROR_INVALID_MONTH);
 	} else
 	if(result.month == 1 || result.month == 3 || result.month == 5 || result.month == 7 || result.month == 8 || result.month == 10 || result.month == 12) {
-		if(result.day > 31) return MAKE_ERROR(ERROR_INVALID_DAY_31);
+		if(result.day > 31) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_31);
 	} else
 	if (result.month == 4 || result.month == 6 || result.month == 9 || result.month == 11) {
-		if(result.day > 30) return MAKE_ERROR(ERROR_INVALID_DAY_30);
+		if(result.day > 30) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_30);
 	} else {
 		// Febuary
 		if(((result.year % 4 == 0) && (result.year % 100 != 0)) || (result.year % 400 == 0)) {
 			// Leap year
-			if(result.day > 29) return MAKE_ERROR(ERROR_INVALID_DAY_29);
+			if(result.day > 29) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_29);
 		} else {
-			if(result.day > 28) return MAKE_ERROR(ERROR_INVALID_DAY_28);
+			if(result.day > 28) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_28);
 		}
 	}
 
-	return MAKE_RESULT(result);
+	return {result};
 }
 
 // Do some rudimentary validation on the start time string sent with create_draft command and parse the provided values. Returns true and fills the 'out' variable if no problem was found, false otherwise.
 static const Result<Start_Time> parse_start_time_string(const char* start_time_string) {
-	if(start_time_string == NULL) return MAKE_ERROR(ERROR_INVALID_FUNCTION_PARAMETER);
-	if(strlen(start_time_string) < strlen("H:M")) return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
-	if(strlen(start_time_string) > strlen("HH:MM")) return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
+	if(start_time_string == NULL) return MAKE_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(strlen(start_time_string) < strlen("H:M")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+	if(strlen(start_time_string) > strlen("HH:MM")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 
 	// Make a copy of the date string, including terminator.
 	char str[strlen("HH:MM")+1];
@@ -1113,11 +1148,11 @@ static const Result<Start_Time> parse_start_time_string(const char* start_time_s
 		str_ptr++;
 	}
 	if(*str_ptr != ':' && *str_ptr != '-' && *str_ptr != ',' && *str_ptr != '.') {
-		return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
+		return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	*str_ptr++ = 0;
 	result.hour = (int) strtol(hour, NULL, 10);
-	if(result.hour < 0 || result.hour > 23) return MAKE_ERROR(ERROR_INVALID_HOUR);
+	if(result.hour < 0 || result.hour > 23) return MAKE_ERROR_RESULT(ERROR_INVALID_HOUR);
 
 	// Parse the minutes
 	const char* minute = str_ptr;
@@ -1125,12 +1160,12 @@ static const Result<Start_Time> parse_start_time_string(const char* start_time_s
 		str_ptr++;
 	}
 	if(*str_ptr != '\0') {
-		return MAKE_ERROR(ERROR_MALFORMED_START_TIME_STRING);
+		return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	result.minute = (int) strtol(minute, NULL, 10);
-	if(result.minute < 1 && result.minute > 59) return MAKE_ERROR(ERROR_INVALID_MINUTE);
+	if(result.minute < 1 && result.minute > 59) return MAKE_ERROR_RESULT(ERROR_INVALID_MINUTE);
 
-	return MAKE_RESULT(result);
+	return {result};
 }
 
 // Discord has as hard limit on how many characters are allowed in a post.
@@ -1434,10 +1469,23 @@ static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 	return tournament;
 }
 
-template<typename T>
-struct Database_Result : Result<T> {
+template<typename Value_Type, typename Error_String_Type = std::string>
+struct Database_Result : Result<Value_Type, Error_String_Type> {
 	u64 count;
+
+	Database_Result(const Value_Type& value, u64 count)
+		: Result<Value_Type, Error_String_Type>(value)
+		, count(count)
+	{}
+
+	Database_Result(GLOBAL_ERROR error, const Error_String_Type& value, u64 count)
+		: Result<Value_Type, Error_String_Type>(error, value)
+		, count(count)
+	{}
 };
+
+#define MAKE_DATABASE_VALUE_RESULT(result, cnt) {.error=(ERROR_NONE), .value={result}, .count=(cnt)}
+#define MAKE_DATABASE_ERROR_RESULT(code, cnt, ...) {.error=(code), .errstr={fmt::format(to_cstring(code) __VA_OPT__(,) __VA_ARGS__)}, .count=(cnt)}
 
 // For database_ functions that return no data. We could use template specialization here but this is simpler.
 struct Database_No_Value {};
@@ -1445,39 +1493,37 @@ struct Database_No_Value {};
 static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to use different databases, right?
 
 // Connect to the MySQL database specified in the bot.ini file and request access to the XDHS table.
-// TODO: Connection pools for each thread
-#define MYSQL_CONNECT()                                      \
-	MYSQL* mysql = mysql_init(NULL);                         \
-	if(mysql == NULL) {                                      \
-		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");     \
-		return {ERROR_MYSQL_INIT_FAILED, {}, 0};             \
-	}                                                        \
-	SCOPE_EXIT(mysql_close(mysql));                          \
-	MYSQL* connection = mysql_real_connect(mysql,            \
-		g_config.mysql_host,                                 \
-		g_config.mysql_username,                             \
-		g_config.mysql_password,                             \
-		DATABASE_NAME,                                       \
-		g_config.mysql_port,                                 \
-		NULL, 0);                                            \
-	if(connection == NULL) {                                 \
-		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed"); \
-		return {ERROR_MYSQL_REAL_CONNECT_FAILED, {}, 0};     \
+#define MYSQL_CONNECT()                                                                            \
+	MYSQL* mysql = mysql_init(NULL);                                                               \
+	if(mysql == NULL) {                                                                            \
+		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");                                           \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_INIT_FAILED, 0);                             \
+	}                                                                                              \
+	SCOPE_EXIT(mysql_close(mysql));                                                                \
+	MYSQL* connection = mysql_real_connect(mysql,                                                  \
+		g_config.mysql_host,                                                                       \
+		g_config.mysql_username,                                                                   \
+		g_config.mysql_password,                                                                   \
+		DATABASE_NAME,                                                                             \
+		g_config.mysql_port,                                                                       \
+		NULL, 0);                                                                                  \
+	if(connection == NULL) {                                                                       \
+		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed");                                       \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_REAL_CONNECT_FAILED, 0, mysql_error(mysql)); \
 	}
 
 // Prepare a MySQL statement using the provided query.
-#define MYSQL_STATEMENT()                                                                       \
-	MYSQL_STMT* stmt = mysql_stmt_init(connection);                                             \
-	if(stmt == NULL) {                                                                          \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_init(connection) failed: %s", mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_INIT_FAILED, {}, 0};                                           \
-	}                                                                                           \
-	SCOPE_EXIT(mysql_stmt_close(stmt));                                                         \
-	if(mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {                                   \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_prepare() failed: %s", mysql_stmt_error(stmt));        \
-		return {ERROR_MYSQL_STMT_CLOSE_FAILED, {}, 0};                                          \
+#define MYSQL_STATEMENT()                                                                              \
+	MYSQL_STMT* stmt = mysql_stmt_init(connection);                                                    \
+	if(stmt == NULL) {                                                                                 \
+		log(LOG_LEVEL_ERROR, "mysql_stmt_init(connection) failed: %s", mysql_stmt_error(stmt));        \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_INIT_FAILED, 0, mysql_stmt_error(stmt));    \
+	}                                                                                                  \
+	SCOPE_EXIT(mysql_stmt_close(stmt));                                                                \
+	if(mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {                                          \
+		log(LOG_LEVEL_ERROR, "mysql_stmt_prepare() failed: %s", mysql_stmt_error(stmt));               \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_PREPARE_FAILED, 0, mysql_stmt_error(stmt)); \
 	}
-
 
 // Create and prepare the input array used to bind variables to the query string.
 #define MYSQL_INPUT_INIT(count)      \
@@ -1494,18 +1540,18 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 #define MYSQL_INPUT_BIND_AND_EXECUTE()                                                                     \
 	if(mysql_stmt_bind_param(stmt, input) != 0) {                                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_param() failed: %s", mysql_stmt_error(stmt));                \
-		return {ERROR_MYSQL_BIND_PARAM_FAILED, {}, 0};                                                     \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_BIND_PARAM_FAILED, 0, mysql_stmt_error(stmt));       \
 	}                                                                                                      \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, {}, 0};                                                   \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
 	}
 
-// A query with no output params
+// A query with no output value.
 #define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_EXECUTE_FAILED, {}, 0};                                                   \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
 	}
 
 // Prepare an array to hold the output from a query.
@@ -1526,71 +1572,70 @@ static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to
 	output[(index)].error = &is_error[(index)];
 
 // Bind the output array to the statement.
-#define MYSQL_OUTPUT_BIND_AND_STORE()                                                        \
-    if(mysql_stmt_bind_result(stmt, output) != 0) {                                          \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_result() failed: %s", mysql_stmt_error(stmt)); \
-		return {ERROR_MYSQL_STMT_BIND_RESULT_FAILED, {}, 0};                                 \
-    }                                                                                        \
-    if(mysql_stmt_store_result(stmt) != 0) {                                                 \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_store_result: %s", mysql_stmt_error(stmt));         \
-		return {ERROR_MYSQL_STMT_STORE_RESULT_FAILED, {}, 0};                                \
+#define MYSQL_OUTPUT_BIND_AND_STORE()                                                                       \
+    if(mysql_stmt_bind_result(stmt, output) != 0) {                                                         \
+		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_result() failed: %s", mysql_stmt_error(stmt));                \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_BIND_RESULT_FAILED, 0, mysql_stmt_error(stmt));  \
+    }                                                                                                       \
+    if(mysql_stmt_store_result(stmt) != 0) {                                                                \
+		log(LOG_LEVEL_ERROR, "mysql_stmt_store_result: %s", mysql_stmt_error(stmt));                        \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_STORE_RESULT_FAILED, 0, mysql_stmt_error(stmt)); \
     }
 
 // Return for queries that don't return any rows
 #define MYSQL_RETURN() \
-	return {ERROR_NONE, {}, 0};
+	return {{}, 0};
 
 // Return for queries that are expected to fetch zero or one rows
-#define MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS()                                                      \
-	u64 row_count = 0;                                                                                 \
-	while(true) {                                                                                      \
-		int status = mysql_stmt_fetch(stmt);                                                           \
-		if(status == 1) {                                                                              \
-			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));             \
-			return {ERROR_MYSQL_STMT_FETCH_FAILED, {}, row_count};                                     \
-		}                                                                                              \
-		if(status == MYSQL_NO_DATA) break;                                                             \
-		++row_count;                                                                                   \
-	}                                                                                                  \
-	if(row_count > 1) {                                                                                \
-		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);  \
-		return {ERROR_DATABASE_TOO_MANY_RESULTS, {}, row_count};                                       \
-	}                                                                                                  \
-	return {ERROR_NONE, result, row_count};
+#define MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS()                                                                \
+	u64 row_count = 0;                                                                                           \
+	while(true) {                                                                                                \
+		int status = mysql_stmt_fetch(stmt);                                                                     \
+		if(status == 1) {                                                                                        \
+			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
+			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
+		}                                                                                                        \
+		if(status == MYSQL_NO_DATA) break;                                                                       \
+		++row_count;                                                                                             \
+	}                                                                                                            \
+	if(row_count > 1) {                                                                                          \
+		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);            \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_DATABASE_TOO_MANY_RESULTS, row_count, row_count);                \
+	}                                                                                                            \
+	return {{result}, row_count};
 
 // Return for queries that are expected to fetch and return a single row of data.
-#define MYSQL_FETCH_AND_RETURN_SINGLE_ROW()                                                            \
-	u64 row_count = 0;                                                                                 \
-	while(true) {                                                                                      \
-		int status = mysql_stmt_fetch(stmt);                                                           \
-		if(status == 1) {                                                                              \
-			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));             \
-			return {ERROR_MYSQL_STMT_FETCH_FAILED, {}, row_count};                                     \
-		}                                                                                              \
-		if(status == MYSQL_NO_DATA) break;                                                             \
-		++row_count;                                                                                   \
-	}                                                                                                  \
-	if(row_count != 1) {                                                                               \
-		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);       \
-		return {ERROR_DATABASE_UNEXPECTED_RESULT, {}, row_count};                                      \
-	}                                                                                                  \
-	return {ERROR_NONE, {result}, 1};
-
+#define MYSQL_FETCH_AND_RETURN_SINGLE_ROW()                                                                      \
+	u64 row_count = 0;                                                                                           \
+	while(true) {                                                                                                \
+		int status = mysql_stmt_fetch(stmt);                                                                     \
+		if(status == 1) {                                                                                        \
+			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
+			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
+		}                                                                                                        \
+		if(status == MYSQL_NO_DATA) break;                                                                       \
+		++row_count;                                                                                             \
+	}                                                                                                            \
+	if(row_count != 1) {                                                                                         \
+		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);                 \
+		return MAKE_DATABASE_ERROR_RESULT(ERROR_DATABASE_UNEXPECTED_ROW_COUNT, row_count, row_count);            \
+	}                                                                                                            \
+	return {{result}, 1};
 
 // Return for queries that are expected to fetch and return 0 or more rows of data.
-#define MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS()                                             \
-	u64 row_count = 0;                                                                     \
-	while(true) {                                                                          \
-		int status = mysql_stmt_fetch(stmt);                                               \
-		if(status == 1) {                                                                  \
-			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt)); \
-			return {ERROR_MYSQL_STMT_FETCH_FAILED, {}, row_count};                         \
-		}                                                                                  \
-		if(status == MYSQL_NO_DATA) break;                                                 \
-		results.push_back(result);                                                         \
-		++row_count;                                                                       \
-	}                                                                                      \
-	return {ERROR_NONE, results, row_count};
+#define MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS()                                                                   \
+	u64 row_count = 0;                                                                                           \
+	while(true) {                                                                                                \
+		int status = mysql_stmt_fetch(stmt);                                                                     \
+		if(status == 1) {                                                                                        \
+			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
+			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
+		}                                                                                                        \
+		if(status == MYSQL_NO_DATA) break;                                                                       \
+		results.push_back(result);                                                                               \
+		++row_count;                                                                                             \
+	}                                                                                                            \
+	return {results, row_count};
 
 
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
@@ -2623,15 +2668,14 @@ struct Image {
 	int channels;
 	void* data;
 };
-static_assert(std::is_trivially_copyable<Image>(), "struct Image is not trivially copyable");
-
+static_assert(std::is_trivially_copyable_v<Image> == true, "struct Image is not trivially copyable");
 
 static Result<Image> make_image(int width, int height, int channels, u32 color) {
 	Image result;
 
 	result.data = malloc(width * height * channels);
 	if(result.data == NULL) {
-		return MAKE_ERROR(ERROR_OUT_OF_MEMORY);
+		return MAKE_ERROR_RESULT(ERROR_OUT_OF_MEMORY);
 	}
 
 	result.channels = channels;
@@ -2653,19 +2697,16 @@ static Result<Image> make_image(int width, int height, int channels, u32 color) 
 		}
 	}
 
-	return MAKE_RESULT(result);
+	return {result};
 }
 
 static Result<Image> load_image(const char* file, int channels) {
 	Image result;
-
 	result.data = stbi_load(file, &result.w, &result.h, &result.channels, channels);
 	if(result.data == NULL) {
-		log(LOG_LEVEL_ERROR, fmt::format("{} file: '{}', reason: {}", to_cstring(ERROR_LOAD_ART_FAILED), file, stbi_failure_reason()).c_str());
-		return MAKE_ERROR(ERROR_LOAD_ART_FAILED);
+		return MAKE_ERROR_RESULT(ERROR_LOAD_ART_FAILED, file, stbi_failure_reason());
 	}
-
-	return MAKE_RESULT(result);
+	return {result};
 }
 
 
@@ -2922,7 +2963,7 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 
 	Result<Image> upscaled = make_image(dim.w, dim.h, 1, 0x00000000);
 	SCOPE_EXIT(free(upscaled.value.data));
-	if(is_error(upscaled)) return;// MAKE_ERROR(upscaled.error);
+	if(is_error(upscaled)) return;// MAKE_ERROR_RESULT(upscaled.error);
 	render_text_to_image(font, str, upscaled_font_size, &upscaled.value, 0, 0, {.c=shadow_color});
 
 	Result<Image> downscaled;
@@ -3076,7 +3117,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		int result = stbtt_InitFont(&g_banner_font, buffer, stbtt_GetFontOffsetForIndex(buffer, 0));
 		if(result == 0) {
 			free(buffer);
-			return MAKE_ERROR(ERROR_LOAD_FONT_FAILED);
+			return MAKE_ERROR_RESULT(ERROR_LOAD_FONT_FAILED);
 		}
 		g_banner_font_loaded = true;
 	}
@@ -3104,7 +3145,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	Result<Image> banner = make_image(BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
 	SCOPE_EXIT(free(banner.value.data));
 	if(is_error(banner)) {
-		return MAKE_ERROR(banner.error);
+		return MAKE_ERROR_RESULT(banner.error);
 	}
 
 	// blit the background image(s)
@@ -3112,11 +3153,11 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		// A single piece of key art is to be used.
 		Result<Image> scaled = make_image(KEY_ART_WIDTH, KEY_ART_HEIGHT, 3, 0x00000000);
 		SCOPE_EXIT(free(scaled.value.data));
-		if(is_error(scaled)) return MAKE_ERROR(scaled.error);
+		if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
 
 		Result<Image> img = load_image(opts->images[0].c_str(), 3);
 		SCOPE_EXIT(stbi_image_free(img.value.data));
-		if(is_error(img)) return MAKE_ERROR(img.error);
+		if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
 
 		stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 				(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
@@ -3126,12 +3167,12 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		// Three pack images given.
 		Result<Image> scaled = make_image(PACK_IMAGE_WIDTH, PACK_IMAGE_HEIGHT, 3, 0x00000000);
 		SCOPE_EXIT(free(scaled.value.data));
-		if(is_error(scaled)) return MAKE_ERROR(scaled.error);
+		if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
 
 		for(size_t f = 0; f < opts->images.size(); ++f) {
 			Result<Image> img = load_image(opts->images[f].c_str(), 3);
 			SCOPE_EXIT(stbi_image_free(img.value.data));
-			if(is_error(img)) return MAKE_ERROR(img.error);
+			if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 					(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
@@ -3142,21 +3183,20 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		// FIXME: Replace this with a draw_rect function to avoid unnecessary heap allocations for each line.
 		Result<Image> line = make_image(3, BANNER_IMAGE_HEIGHT-BANNER_PACK_DIVIDER_YPOS, 4, 0xFF000000);
 		SCOPE_EXIT(free(line.value.data));
-		if(is_error(line)) return MAKE_ERROR(line.error);
+		if(is_error(line)) return MAKE_ERROR_RESULT(line.error);
 
 		for(int i = 1; i < 3; ++i) {
 			blit_RGBA_to_RGBA(&line.value, &banner.value, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);		
 		}
 	} else {
-		log(LOG_LEVEL_ERROR, fmt::format("{} count: {}", to_cstring(ERROR_INVALID_PACK_COUNT), opts->images.size()).c_str());
-		return MAKE_ERROR(ERROR_INVALID_PACK_COUNT);
+		return MAKE_ERROR_RESULT(ERROR_INVALID_PACK_COUNT, opts->images.size());
 	}
 
 	// Blit the gradient. TODO: This could be done in code instead of using an image...
 	{
 		Result<Image> grad = load_image(BANNER_GRADIENT_FILE, 1);
 		SCOPE_EXIT(stbi_image_free(grad.value.data));
-		if(is_error(grad)) return MAKE_ERROR(grad.error);
+		if(is_error(grad)) return MAKE_ERROR_RESULT(grad.error);
 
 		blit_A8_to_RGBA(&grad.value, grad.value.w, {.c=0xFF000000}, &banner.value, 0, 0);
 	}
@@ -3167,21 +3207,21 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 			// Top
 			Result<Image> frame = load_image(BANNER_FRAME_TOP_FILE, 1);
 			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR(frame.error);
+			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 57);
 		}
 		{
 			// Bottom
 			Result<Image> frame = load_image(BANNER_FRAME_BOTTOM_FILE, 1);
 			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR(frame.error);
+			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 530);
 		}
 		{
 			// Left & right
 			Result<Image> frame = load_image(BANNER_FRAME_SIDE_FILE, 1);
 			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR(frame.error);
+			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
 
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 108);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 807, 108);
@@ -3193,7 +3233,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		Text_Dim dim = get_text_dimensions(&g_banner_font, BANNER_DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
 		Result<Image> img = make_image(dim.w, dim.h, 1, 0x00000000);
 		SCOPE_EXIT(free(img.value.data));
-		if(is_error(img)) return MAKE_ERROR(img.error);
+		if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
 
 		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), BANNER_DATETIME_FONT_SIZE, &img.value, 0, 0, {.c=0xFFFFFFFF});
 		if(img.value.w < (BANNER_IMAGE_WIDTH - 10)) {
@@ -3205,7 +3245,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 
 			Result<Image> scaled = make_image((BANNER_IMAGE_WIDTH-10), height, 1, 0x00000000);
 			SCOPE_EXIT(free(scaled.value.data));
-			if(is_error(scaled)) return MAKE_ERROR(scaled.error);
+			if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 			                        (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
@@ -3220,7 +3260,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		// Blit the subtitle box
 		Result<Image> sub = load_image(BANNER_SUBTITLE_FILE, 1);
 		SCOPE_EXIT(stbi_image_free(sub.value.data));
-		if(is_error(sub)) return MAKE_ERROR(sub.error);
+		if(is_error(sub)) return MAKE_ERROR_RESULT(sub.error);
 
 		blit_A8_to_RGBA_no_alpha(&sub.value, sub.value.w, {.c=opts->league_color}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(sub.value.w/2), BANNER_SUBTITLE_FRAME_YPOS);
 
@@ -3229,7 +3269,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		if(icon != NULL) {
 			Result<Image> icon_image = load_image(icon->file, 4);
 			SCOPE_EXIT(stbi_image_free(icon_image.value.data));
-			if(is_error(icon_image)) return MAKE_ERROR(icon_image.error);
+			if(is_error(icon_image)) return MAKE_ERROR_RESULT(icon_image.error);
 
 			blit_RGBA_to_RGBA(&icon_image.value, &banner.value, icon->x, icon->y);
 		}
@@ -3244,10 +3284,10 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	image_max_alpha(&banner.value);
 	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
 	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
-		return MAKE_ERROR(ERROR_FAILED_TO_SAVE_BANNER);
+		return MAKE_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 	}
 
-	return MAKE_RESULT(file_path);
+	return {file_path};
 }
 
 // Users on Discord have two names per guild: Their global name or an optional per-guild nickname.
@@ -3702,7 +3742,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 	text += "Minutemage sign ups are now open. If needed, a minutemage will be selected at random to fill an empty seat.\n\n";
 	text += fmt::format("If playing, check your XMage install is up-to-date by starting the XMage launcher, updating if necessary, and connecting to {}.", draft_event.value->xmage_server);
 
-	const Database_Result<XMage_Version> xmage_version = database_get_xmage_version();
+	const auto xmage_version = database_get_xmage_version();
 	if(!is_error(xmage_version)) {
 		u64 timestamp = xmage_version.value.timestamp + SERVER_TIME_ZONE_OFFSET;
 		// Note: The leading space is intentional as this joins with the previous line.
