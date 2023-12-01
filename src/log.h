@@ -8,6 +8,8 @@
 #include <string.h>
 #include <time.h>
 
+#include <string>
+
 static const size_t LOG_LINE_BYTES_MAX = 2048;
 
 enum LOG_LEVEL : int {
@@ -69,6 +71,11 @@ void log(LOG_LEVEL level, const char *fmt, ...) {
     fflush(g_log_descriptor);
     pthread_mutex_unlock(&g_log_lock);
     va_end(args);
+}
+
+void log(LOG_LEVEL level, const std::string& str) {
+	if(level > g_log_level) return;
+	log(level, str.c_str());
 }
 
 #endif // LOG_H_INCLUDED
