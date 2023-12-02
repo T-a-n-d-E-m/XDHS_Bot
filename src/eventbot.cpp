@@ -36,7 +36,6 @@
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
-// TODO: Parameterize #IN_THE_MOMENT_DRAFT_CHANNEL_ID so we can use the bot for team drafts?
 
 // Code/performance improvements
 // TODO: Thread pools for database connections
@@ -1284,7 +1283,9 @@ struct Draft_Event {
 	char banner_file[BANNER_FILENAME_MAX + 1]; // Relative path to the banner image for this draft.
 	time_t banner_timestamp;
 
-	u64 channel_id; // Eventually EventBot might support sign up for the team drafts, which go to a different channel...
+	u64 signup_channel_id;
+	u64 reminder_channel_id;
+	u64 hosting_channel_id;
 
 	u64 details_id; // Message ID of the post in #-pre-register describing the format.
 	u64 signups_id; // Message ID of the sign up sheet posted in #-pre-register.
@@ -1658,15 +1659,17 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 			set_list,     -- 13
 			color,        -- 14
 			xmage_server, -- 15
-			draftmancer_draft, -- 16
-			banner_file,       -- 17
-			channel_id         -- 18
+			draftmancer_draft,   -- 16
+			banner_file,         -- 17
+			signup_channel_id,   -- 18
+			reminder_channel_id, -- 19
+			hosting_channel_id   -- 20
 		)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(19);
+	MYSQL_INPUT_INIT(21);
 	MYSQL_INPUT( 0, MYSQL_TYPE_LONGLONG, &guild_id,                 sizeof(guild_id));
 	MYSQL_INPUT( 1, MYSQL_TYPE_STRING,   event->pings,              strlen(event->pings));
 	MYSQL_INPUT( 2, MYSQL_TYPE_STRING,   event->draft_code,         strlen(event->draft_code));
@@ -1685,7 +1688,9 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,       strlen(event->xmage_server));
 	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
 	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_file,        strlen(event->banner_file));
-	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->channel_id,        sizeof(event->channel_id));
+	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->signup_channel_id, sizeof(event->signup_channel_id));
+	MYSQL_INPUT(19, MYSQL_TYPE_LONGLONG, &event->reminder_channel_id, sizeof(event->reminder_channel_id));
+	MYSQL_INPUT(20, MYSQL_TYPE_LONGLONG, &event->hosting_channel_id, sizeof(event->hosting_channel_id));
 
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
@@ -1709,12 +1714,14 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 			xmage_server=?, -- 10
 			draftmancer_draft=?, -- 11
 			banner_file=?,  -- 12
-			channel_id=?    -- 13
-		WHERE guild_id=? AND draft_code=? -- 14,15
+			signup_channel_id=?,    -- 13
+			reminder_channel_id=?, -- 14
+			hosting_channel_id=? -- 15
+		WHERE guild_id=? AND draft_code=? -- 16,17
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(16);
+	MYSQL_INPUT_INIT(18);
 	MYSQL_INPUT( 0, MYSQL_TYPE_STRING,   event->format,          strlen(event->format));
 	MYSQL_INPUT( 1, MYSQL_TYPE_LONG,     &event->time,           sizeof(event->time));
 	MYSQL_INPUT( 2, MYSQL_TYPE_FLOAT,    &event->duration,       sizeof(event->duration));
@@ -1728,9 +1735,11 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
 	MYSQL_INPUT(11, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
 	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_file,     strlen(event->banner_file));
-	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->channel_id,     sizeof(event->channel_id));
-	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
-	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
+	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->signup_channel_id, sizeof(event->signup_channel_id));
+	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &event->reminder_channel_id, sizeof(event->reminder_channel_id));
+	MYSQL_INPUT(15, MYSQL_TYPE_LONGLONG, &event->hosting_channel_id, sizeof(event->hosting_channel_id));
+	MYSQL_INPUT(16, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
+	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1761,10 +1770,12 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 			draftmancer_draft,   -- 16
 			banner_file,         -- 17
 			banner_timestamp,    -- 18
-			channel_id,          -- 19
-			details_id,          -- 20
-			signups_id,          -- 21
-			reminder_id          -- 22
+			signup_channel_id,   -- 19
+			reminder_channel_id, -- 20
+			hosting_channel_id,  -- 21
+			details_id,          -- 22
+			signups_id,          -- 23
+			reminder_id          -- 24
 		FROM draft_events
 		WHERE guild_id=? AND draft_code=?
 	)";
@@ -1777,7 +1788,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 
 	auto result = std::make_shared<Draft_Event>();
 
-	MYSQL_OUTPUT_INIT(23);
+	MYSQL_OUTPUT_INIT(25);
 	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result->status,         sizeof(result->status));
 	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result->pings,           PING_STRING_LENGTH_MAX + 1);
@@ -1797,10 +1808,12 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->draftmancer_draft, sizeof(result->draftmancer_draft));
 	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_file,     BANNER_FILENAME_MAX + 1);
 	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result->banner_timestamp, sizeof(result->banner_timestamp));
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->channel_id,     sizeof(result->channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
+	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->signup_channel_id,     sizeof(result->signup_channel_id));
+	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->reminder_channel_id,     sizeof(result->reminder_channel_id));
+	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->hosting_channel_id,     sizeof(result->hosting_channel_id));
+	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
+	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
+	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -1830,10 +1843,12 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 			draftmancer_draft,   -- 16
 			banner_file,         -- 17
 			banner_timestamp,    -- 18
-			channel_id,          -- 19
-			details_id,          -- 20
-			signups_id,          -- 21
-			reminder_id          -- 22
+			signup_channel_id,   -- 19
+			reminder_channel_id, -- 20
+			hosting_channel_id,  -- 21
+			details_id,          -- 22
+			signups_id,          -- 23
+			reminder_id          -- 24
 		FROM draft_events
 		WHERE guild_id=?
 	)";
@@ -1846,7 +1861,7 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 	//auto results = std::vector<Draft_Event>();
 	Draft_Event result;
 
-	MYSQL_OUTPUT_INIT(23);
+	MYSQL_OUTPUT_INIT(25);
 	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result.status,         sizeof(result.status));
 	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result.draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result.pings,           PING_STRING_LENGTH_MAX + 1);
@@ -1866,10 +1881,12 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result.draftmancer_draft, sizeof(result.draftmancer_draft));
 	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result.banner_file,     BANNER_FILENAME_MAX + 1);
 	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result.banner_timestamp, sizeof(result.banner_timestamp)); 
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result.channel_id,     sizeof(result.channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result.details_id,     sizeof(result.details_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result.signups_id,     sizeof(result.signups_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result.reminder_id,    sizeof(result.reminder_id));
+	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result.signup_channel_id, sizeof(result.signup_channel_id));
+	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result.reminder_channel_id, sizeof(result.reminder_channel_id));
+	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result.hosting_channel_id, sizeof(result.hosting_channel_id));
+	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result.details_id,     sizeof(result.details_id));
+	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result.signups_id,     sizeof(result.signups_id));
+	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result.reminder_id,    sizeof(result.reminder_id));
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Draft_Event> results;
@@ -2420,7 +2437,7 @@ struct Draft_Post_IDs {
 // TODO: Don't need this? No function calls this that doesn't call database_get_event
 static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
 	MYSQL_CONNECT();
-	static const char* query = "SELECT channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?"; 
+	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?"; 
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
@@ -3335,7 +3352,7 @@ static void delete_draft_posts(dpp::cluster& bot, const u64 guild_id, const std:
 			}
 		});
 	} else {
-		log(LOG_LEVEL_ERROR, "database_get_draft_post_ids() failed");
+		log(LOG_LEVEL_ERROR, ids.errstr);
 	}
 }
 
@@ -3343,6 +3360,7 @@ static void delete_temp_roles(dpp::cluster& bot, const u64 guild_id, const std::
 	// Get the temporary roles created for this draft
 	auto roles = database_get_temp_roles(guild_id, draft_code.c_str());
 	if(is_error(roles)) {
+		log(LOG_LEVEL_ERROR, roles.errstr);
 		// TODO: Now what?
 	}
 
@@ -3519,6 +3537,7 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_event->draft_code);
 	if(is_error(sign_ups)) {
+		log(LOG_LEVEL_ERROR, sign_ups.errstr);
 		// TODO: Now what?
 	}
 
@@ -3659,12 +3678,12 @@ static void redraw_signup(dpp::cluster& bot, const u64 guild_id, const u64 messa
 
 
 static void edit_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_ptr<Draft_Event> draft) {
-	redraw_details(bot, guild_id, draft->details_id, draft->channel_id, draft);
+	redraw_details(bot, guild_id, draft->details_id, draft->signup_channel_id, draft);
 
-	redraw_signup(bot, guild_id, draft->signups_id, draft->channel_id, draft);
+	redraw_signup(bot, guild_id, draft->signups_id, draft->signup_channel_id, draft);
 
 	if(draft->reminder_id != 0) {
-		redraw_signup(bot, guild_id, draft->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft);
+		redraw_signup(bot, guild_id, draft->reminder_id, draft->reminder_channel_id, draft);
 	}
 }
 
@@ -3673,7 +3692,7 @@ static void post_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_
 	dpp::message details;
 	details.set_type(dpp::message_type::mt_default);
 	details.set_guild_id(guild_id);
-	details.set_channel_id(draft->channel_id);
+	details.set_channel_id(draft->signup_channel_id);
 	details.set_content(":hourglass:");
 	details.set_allowed_mentions(true, true, true, false, {}, {});
 	bot.message_create(details, [&bot, guild_id, draft](const dpp::confirmation_callback_t& callback) {
@@ -3687,7 +3706,7 @@ static void post_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_
 			dpp::message sign_up;
 			sign_up.set_type(dpp::message_type::mt_default);
 			sign_up.set_guild_id(guild_id);
-			sign_up.set_channel_id(draft->channel_id);
+			sign_up.set_channel_id(draft->signup_channel_id);
 			sign_up.set_content(":hourglass:");
 			bot.message_create(sign_up, [&bot, guild_id, draft](const dpp::confirmation_callback_t& callback) {
 				if(!callback.is_error()) {
@@ -3714,7 +3733,7 @@ static void post_draft(dpp::cluster& bot, const u64 guild_id, const std::shared_
 static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const char* draft_code) {
 	auto draft_event = database_get_event(guild_id, draft_code);
 	if(is_error(draft_event)) {
-		log(LOG_LEVEL_ERROR, "database_get_event() error");
+		log(LOG_LEVEL_ERROR, draft_event.errstr);
 		return;
 	};		
 
@@ -3726,7 +3745,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 	dpp::message message;
 	message.set_type(dpp::message_type::mt_default);
 	message.set_guild_id(guild_id);
-	message.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+	message.set_channel_id(draft_event.value->reminder_channel_id);
 	message.set_allowed_mentions(true, true, true, true, {}, {});
 
 	std::string text;
@@ -3760,7 +3779,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 			dpp::message signup;
 			signup.set_type(dpp::message_type::mt_default);
 			signup.set_guild_id(guild_id);
-			signup.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+			signup.set_channel_id(draft_event->reminder_channel_id);
 			add_sign_up_embed_to_message(guild_id, signup, draft_event);
 			add_sign_up_buttons_to_message(signup, draft_event);
 			bot.message_create(signup, [&bot, guild_id, draft_event](const dpp::confirmation_callback_t& callback) {
@@ -3770,7 +3789,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 					(void)database_set_reminder_message_id(guild_id, draft_event->draft_code, message.id);
 					(void)database_set_draft_status(GUILD_ID, draft_event->draft_code, DRAFT_STATUS_REMINDER_SENT);
 					// Redraw the #-pre-register sign up so the minutemage button gets unlocked.
-					redraw_signup(bot, guild_id, draft_event->signups_id, draft_event->channel_id, draft_event);
+					redraw_signup(bot, guild_id, draft_event->signups_id, draft_event->signup_channel_id, draft_event);
 				}
 			});
 
@@ -3802,7 +3821,7 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 		dpp::message message;
 		message.set_type(dpp::message_type::mt_default);
 		message.set_guild_id(guild_id);
-		message.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+		message.set_channel_id(draft_event.value->reminder_channel_id);
 		message.set_allowed_mentions(true, true, true, true, {}, {});
 
 		std::string text;
@@ -3817,7 +3836,7 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 
 		text += "\n\n";
 		text += fmt::format("**:warning: Tentatives, this is your 10 minute reminder for {}: {} :warning:**\n", draft_event.value->draft_code, draft_event.value->format);
-		text += fmt::format("Please confirm whether you are joining the imminent draft by clicking your desired pod role or Decline if you are not drafting today: https://discord.com/channels/{}/{}/{}", guild_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft_event.value->reminder_id);
+		text += fmt::format("Please confirm whether you are joining the imminent draft by clicking your desired pod role or Decline if you are not drafting today: https://discord.com/channels/{}/{}/{}", guild_id, draft_event.value->reminder_channel_id, draft_event.value->reminder_id);
 
 		message.set_content(text);
 
@@ -3832,8 +3851,8 @@ static void ping_tentatives(dpp::cluster& bot, const u64 guild_id, const char* d
 		log(LOG_LEVEL_DEBUG, "No tentatives to ping");
 	}
 
-	redraw_signup(bot, guild_id, draft_event.value->signups_id, draft_event.value->channel_id, draft_event.value);
-	redraw_signup(bot, guild_id, draft_event.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft_event.value);
+	redraw_signup(bot, guild_id, draft_event.value->signups_id, draft_event.value->signup_channel_id, draft_event.value);
+	redraw_signup(bot, guild_id, draft_event.value->reminder_id, draft_event.value->reminder_channel_id, draft_event.value);
 
 	database_set_draft_status(GUILD_ID, draft_event.value->draft_code, DRAFT_STATUS_TENTATIVES_PINGED);
 }
@@ -3859,7 +3878,7 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 		dpp::message message;
 		message.set_type(dpp::message_type::mt_default);
 		message.set_guild_id(guild_id);
-		message.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+		message.set_channel_id(draft_event.value->reminder_channel_id);
 		message.set_allowed_mentions(true, true, true, true, {}, {});
 		std::string text;
 
@@ -3956,34 +3975,37 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 	}
 
 	// Redraw the sign up buttons so all buttons appear locked and any automatically added minutemages are showin in the playing column.
-	redraw_signup(bot, GUILD_ID, draft_event.value->signups_id, draft_event.value->channel_id, draft_event.value);
-	redraw_signup(bot, GUILD_ID, draft_event.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft_event.value);
+	redraw_signup(bot, GUILD_ID, draft_event.value->signups_id, draft_event.value->signup_channel_id, draft_event.value);
+	redraw_signup(bot, GUILD_ID, draft_event.value->reminder_id, draft_event.value->reminder_channel_id, draft_event.value);
 }
 
 // Post a message to the hosts-only #-current-draft-management channel outlining the procedures for correctly managing the firing of the draft.
 static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
-	std::string text = fmt::format("# :alarm_clock: Attention hosts! Draft {} has now been locked. :alarm_clock:\n\n", draft_code);
+	auto draft = database_get_event(GUILD_ID, draft_code);
+	if(has_value(draft)) {
+		std::string text = fmt::format("# :alarm_clock: Attention hosts! Draft {} has now been locked. :alarm_clock:\n\n", draft_code);
 
-	text += "## Use the following EventBot commands to manage the draft.\n\n";
+		text += "## Use the following EventBot commands to manage the draft.\n\n";
 
-	text += "### :one: Before pod allocations can be posted the :white_check_mark:Playing column on the sign-up sheet needs to show only players who are confirmed to be playing. The following commands can be used to add or remove players from the sheet:\n";
-	text += "	**/add_player** - Add a player to the :white_check_mark:Playing column. Use this for adding Minutemages or players who want to play but didn't sign up before the draft was locked.\n";
-	text += "	**/remove_player** - Remove a player from the :white_check_mark:Playing column. Use this for no-shows or people volunteering to drop to make an even number of players.\n";
-	text += "\n";
+		text += "### :one: Before pod allocations can be posted the :white_check_mark:Playing column on the sign-up sheet needs to show only players who are confirmed to be playing. The following commands can be used to add or remove players from the sheet:\n";
+		text += "	**/add_player** - Add a player to the :white_check_mark:Playing column. Use this for adding Minutemages or players who want to play but didn't sign up before the draft was locked.\n";
+		text += "	**/remove_player** - Remove a player from the :white_check_mark:Playing column. Use this for no-shows or people volunteering to drop to make an even number of players.\n";
+		text += "\n";
 
-	text += "### :two: Once all players in the :white_check_mark:Playing column are confirmed to be playing:\n";
-	text += fmt::format("	**/post_allocations** - Create threads for each pod and post the pod allocations to <#{}> channel. This will also give all players the 'current draft' role and a 'Pod-X' role. Use these roles to ping all players or players in a specific pod.\n", IN_THE_MOMENT_DRAFT_CHANNEL_ID);
-	text += "\n";
+		text += "### :two: Once all players in the :white_check_mark:Playing column are confirmed to be playing:\n";
+		text += fmt::format("	**/post_allocations** - Create threads for each pod and post the pod allocations to <#{}> channel. This will also give all players the 'current draft' role and a 'Pod-X' role. Use these roles to ping all players or players in a specific pod.\n", draft.value->reminder_channel_id);
+		text += "\n";
 
-	text += "### :three: The follow commands can be used during the draft:\n";
-	text += "	**/timer**   - After a Draftmancer draft, use this command to post a 10 minute countdown timer to remind players to finish constructing their decks in a timely manner.\n";
-	text += "	**/dropper** - Increment the drop counter for a player. This needs to be done before the draft is completed.\n";
-	text += "\n";
+		text += "### :three: The follow commands can be used during the draft:\n";
+		text += "	**/timer**   - After a Draftmancer draft, use this command to post a 10 minute countdown timer to remind players to finish constructing their decks in a timely manner.\n";
+		text += "	**/dropper** - Increment the drop counter for a player. This needs to be done before the draft is completed.\n";
+		text += "\n";
 
-	text += "### :four: After all pods have completed round 3:\n";
-	text += fmt::format("	**/finish** - Post the post-draft reminder message to <#{}> draft.\n", IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+		text += "### :four: After all pods have completed round 3:\n";
+		text += fmt::format("	**/finish** - Post the post-draft reminder message to <#{}> draft.\n", draft.value->reminder_channel_id);
 
-	send_message(bot, CURRENT_DRAFT_MANAGEMENT_ID, text);
+		send_message(bot, draft.value->hosting_channel_id, text);
+	}
 }
 
 static void set_bot_presence(dpp::cluster& bot) {
@@ -4059,7 +4081,10 @@ static void output_sql() {
 	fprintf(stdout, "banner_timestamp BIGINT NOT NULL DEFAULT 0,\n");
 
 	//fprintf(stdout, "deleted BOOLEAN NOT NULL DEFAULT 0,\n"); // Has the event been deleted?
-	fprintf(stdout, "channel_id BIGINT NOT NULL,\n"); // The channel the post is going to.
+	fprintf(stdout, "signup_channel_id BIGINT NOT NULL,\n"); // The channel the sign up post goes to
+	fprintf(stdout, "reminder_channel_id BIGINT NOT NULL,\n"); // The channel the reminder post goes to
+	fprintf(stdout, "hosting_channel_id BIGINT NOT NULL,\n"); // The channel the hosting guide post goes to
+
 	fprintf(stdout, "details_id BIGINT NOT NULL DEFAULT 0,\n"); // The message ID of the details post.
 	fprintf(stdout, "signups_id BIGINT NOT NULL DEFAULT 0,\n"); // The message ID of the signup post.
 	fprintf(stdout, "reminder_id BIGINT NOT NULL DEFAULT 0,\n");
@@ -4450,7 +4475,10 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_string, "color", "Override the default color for the league. Must be RGB in hexidecimal. i.e. 8CE700", false));
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "draftmancer_draft", "Will the draft potion be run on Draftmancer?", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "xmage_server", "Override the default XMage server. i.e. xmage.today:17172", false));
-				cmd.add_option(dpp::command_option(dpp::co_channel, "channel", "Channel to post the sign up. Defaults to #-pre-register.", false));
+				cmd.add_option(dpp::command_option(dpp::co_channel, "signup_channel", "Channel to post the sign up. Defaults to #-pre-register.", false));
+				cmd.add_option(dpp::command_option(dpp::co_channel, "reminder_channel", "Channel to post the pre-draft reminder message. Defaults to #-in-the-moment-draft.", false));
+				cmd.add_option(dpp::command_option(dpp::co_channel, "hosting_channel", "Channel to post the hosting guide. Defaults to #-current-draft-management.", false));
+
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
@@ -4480,7 +4508,9 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_string, "color", "Override the default color for the league. Must be RGB in hexidecimal. i.e. 8CE700", false));
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "draftmancer_draft", "Will the draft potion be run on Draftmancer?", false));
 				cmd.add_option(dpp::command_option(dpp::co_string, "xmage_server", "Override the default XMage server. i.e. xmage.today:17172", false));
-				//cmd.add_option(dpp::command_option(dpp::co_channel, "channel", "Channel to post the sign up. Defaults to #-pre-register.", false));
+				cmd.add_option(dpp::command_option(dpp::co_channel, "signup_channel", "Channel to post the sign up.", false));
+				cmd.add_option(dpp::command_option(dpp::co_channel, "reminder_channel", "Channel to post the pre-draft reminder message.", false));
+				cmd.add_option(dpp::command_option(dpp::co_channel, "hosting_channel", "Channel to post the hosting guide.", false));
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
@@ -4954,11 +4984,27 @@ int main(int argc, char* argv[]) {
 			}
 			strcpy(draft_event.xmage_server, xmage_server.c_str());
 
-			draft_event.channel_id = PRE_REGISTER_CHANNEL_ID;
+			draft_event.signup_channel_id = PRE_REGISTER_CHANNEL_ID;
 			{
-				auto opt = event.get_parameter("channel");
+				auto opt = event.get_parameter("signup_channel");
 				if(std::holds_alternative<dpp::snowflake>(opt)) {
-					draft_event.channel_id = std::get<dpp::snowflake>(opt);
+					draft_event.signup_channel_id = std::get<dpp::snowflake>(opt);
+				}
+			}
+
+			draft_event.reminder_channel_id = IN_THE_MOMENT_DRAFT_CHANNEL_ID;
+			{
+				auto opt = event.get_parameter("reminder_channel_id");
+				if(std::holds_alternative<dpp::snowflake>(opt)) {
+					draft_event.reminder_channel_id = std::get<dpp::snowflake>(opt);
+				}
+			}
+
+			draft_event.hosting_channel_id = CURRENT_DRAFT_MANAGEMENT_ID;
+			{
+				auto opt = event.get_parameter("hosting_channel_id");
+				if(std::holds_alternative<dpp::snowflake>(opt)) {
+					draft_event.hosting_channel_id = std::get<dpp::snowflake>(opt);
 				}
 			}
 
@@ -5024,27 +5070,29 @@ int main(int argc, char* argv[]) {
 			
 			std::string text;
 			text += "```";
-			text += fmt::format("           status: {}\n", draft_status_to_string(draft.value->status));
-			text += fmt::format("       draft_code: {}\n", draft.value->draft_code);
-			//text += fmt::format("           status: {}\n", to_cstring(draft.value->status));
-			text += fmt::format("            pings: {}\n", draft.value->pings); 
-			text += fmt::format("      league_name: {}\n", draft.value->league_name);
-			text += fmt::format("           format: {}\n", draft.value->format);
-			text += fmt::format("        time_zone: {}\n", draft.value->time_zone);
-			text += fmt::format("             time: {}\n", time_string);
-			text += fmt::format("         duration: {}\n", draft.value->duration);
+			text += fmt::format("             status: {}\n", draft_status_to_string(draft.value->status));
+			text += fmt::format("         draft_code: {}\n", draft.value->draft_code);
+			//text += fmt::format("             status: {}\n", to_cstring(draft.value->status));
+			text += fmt::format("              pings: {}\n", draft.value->pings); 
+			text += fmt::format("        league_name: {}\n", draft.value->league_name);
+			text += fmt::format("             format: {}\n", draft.value->format);
+			text += fmt::format("          time_zone: {}\n", draft.value->time_zone);
+			text += fmt::format("               time: {}\n", time_string);
+			text += fmt::format("           duration: {}\n", draft.value->duration);
 			for(size_t i = 0; i < BLURB_COUNT; ++i) {
-				text += fmt::format("          blurb_{}: {}\n", i+1, draft.value->blurbs[i]);
+				text += fmt::format("            blurb_{}: {}\n", i+1, draft.value->blurbs[i]);
 			}
-			text += fmt::format("  draft_guide_url: {}\n", draft.value->draft_guide_url);
-			text += fmt::format("    card_list_url: {}\n", draft.value->card_list_url);
-			text += fmt::format("         set_list: {}\n", draft.value->set_list);
-			text += fmt::format("            color: {:x}\n", draft.value->color);
-			text += fmt::format("     xmage_server: {}\n", draft.value->xmage_server);
-			text += fmt::format("draftmancer_draft: {}\n", draft.value->draftmancer_draft);
-			text += fmt::format("      banner_file: {}\n", draft.value->banner_file);
-			text += fmt::format(" banner_timestamp: {}\n", draft.value->banner_timestamp);
-			text += fmt::format("       channel_id: {}\n", draft.value->channel_id);
+			text += fmt::format("    draft_guide_url: {}\n", draft.value->draft_guide_url);
+			text += fmt::format("      card_list_url: {}\n", draft.value->card_list_url);
+			text += fmt::format("           set_list: {}\n", draft.value->set_list);
+			text += fmt::format("              color: {:x}\n", draft.value->color);
+			text += fmt::format("       xmage_server: {}\n", draft.value->xmage_server);
+			text += fmt::format("  draftmancer_draft: {}\n", draft.value->draftmancer_draft);
+			text += fmt::format("        banner_file: {}\n", draft.value->banner_file);
+			text += fmt::format("   banner_timestamp: {}\n", draft.value->banner_timestamp);
+			text += fmt::format("  signup_channel_id: {}\n", draft.value->signup_channel_id);
+			text += fmt::format("reminder_channel_id: {}\n", draft.value->reminder_channel_id);
+			text += fmt::format(" hosting_channel_id: {}\n", draft.value->hosting_channel_id);
 			text += "```";
 
 			event.reply(text);
@@ -5247,6 +5295,27 @@ int main(int argc, char* argv[]) {
 				}
 			}
 
+			{
+				auto opt = event.get_parameter("signup_channel_id");
+				if(std::holds_alternative<dpp::snowflake>(opt)) {
+					draft_event.value->signup_channel_id = std::get<dpp::snowflake>(opt);
+				}
+			}
+
+			{
+				auto opt = event.get_parameter("reminder_channel_id");
+				if(std::holds_alternative<dpp::snowflake>(opt)) {
+					draft_event.value->reminder_channel_id = std::get<dpp::snowflake>(opt);
+				}
+			}
+
+			{
+				auto opt = event.get_parameter("hosting_channel_id");
+				if(std::holds_alternative<dpp::snowflake>(opt)) {
+					draft_event.value->hosting_channel_id = std::get<dpp::snowflake>(opt);
+				}
+			}
+
 			auto result = database_edit_draft(guild_id, draft_event.value);
 			if(!is_error(result)) {
 				event.reply(fmt::format("Draft {} updated", draft_code));
@@ -5300,11 +5369,11 @@ int main(int argc, char* argv[]) {
 			(void)database_sign_up_to_a_draft(guild_id, g_current_draft_code, member_id, preferred_name, time(NULL), pod);
 
 			// Redraw the sign up sheet in the #-pre-register channel.
-			redraw_signup(bot, guild_id, draft.value->signups_id, draft.value->channel_id, draft.value);
+			redraw_signup(bot, guild_id, draft.value->signups_id, draft.value->signup_channel_id, draft.value);
 
 			// Redraw the sign up sheet on the reminder message sent to #-in-the-moment-draft
 			if(draft.value->reminder_id != 0) {
-				redraw_signup(bot, guild_id, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
+				redraw_signup(bot, guild_id, draft.value->reminder_id, draft.value->reminder_channel_id, draft.value);
 			}
 
 			event.reply(fmt::format("{} added to {} {} pod.", preferred_name, g_current_draft_code, to_cstring(pod)));
@@ -5337,11 +5406,11 @@ int main(int argc, char* argv[]) {
 			(void)database_sign_up_to_a_draft(guild_id, g_current_draft_code, member_id, preferred_name, current_sign_up_status.value.timestamp, (SIGNUP_STATUS)(current_sign_up_status.value.status | SIGNUP_STATUS_REMOVED));
 
 			// Redraw the sign up sheet in the #-pre-register channel.
-			redraw_signup(bot, guild_id, draft.value->signups_id, draft.value->channel_id, draft.value);
+			redraw_signup(bot, guild_id, draft.value->signups_id, draft.value->signup_channel_id, draft.value);
 
 			// Redraw the sign up sheet on the reminder message sent to #-in-the-moment-draft
 			if(draft.value->reminder_id != 0) {
-				redraw_signup(bot, guild_id, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
+				redraw_signup(bot, guild_id, draft.value->reminder_id, draft.value->reminder_channel_id, draft.value);
 			}
 
 			event.reply(fmt::format("{} removed from {}.", preferred_name, g_current_draft_code));
@@ -5651,7 +5720,7 @@ int main(int argc, char* argv[]) {
 			draft_role.set_guild_id(guild_id);
 			draft_role.set_name("current draft");
 			draft_role.set_color(league->color);
-			bot.role_create(draft_role, [&bot, guild_id, tournament, league, sign_ups, pod_allocations](const dpp::confirmation_callback_t& callback) {
+			bot.role_create(draft_role, [&bot, guild_id, tournament, league, sign_ups, pod_allocations, draft](const dpp::confirmation_callback_t& callback) {
 				if(!callback.is_error()) {
 					// "current draft" role successfully created. Add it to the database so it can be deleted after the draft has finished.
 					dpp::role draft_role = std::get<dpp::role>(callback.value);
@@ -5705,15 +5774,15 @@ int main(int argc, char* argv[]) {
 							dpp::message post;
 							post.set_type(dpp::message_type::mt_default);
 							post.set_guild_id(guild_id);
-							post.set_channel_id(IN_THE_MOMENT_DRAFT_CHANNEL_ID);
+							post.set_channel_id(draft.value->reminder_channel_id);
 							post.set_allowed_mentions(true, true, true, false, {}, {});
 							post.set_content(pod_allocations[P]);
 							// TODO: Need to pass in an array of members in this pod and why there were allocated here
-							bot.message_create(post, [&bot, guild_id, P, tournament](const dpp::confirmation_callback_t& callback) {
+							bot.message_create(post, [&bot, guild_id, P, tournament, draft](const dpp::confirmation_callback_t& callback) {
 								if(!callback.is_error()) {
 									// Message posted. Create a thread attached to it.
 									const dpp::message& message = std::get<dpp::message>(callback.value);
-									bot.thread_create_with_message(fmt::format("{} - Pod {}", g_current_draft_code, P + 1), IN_THE_MOMENT_DRAFT_CHANNEL_ID, message.id, 1440, 0, [&bot, guild_id, P, tournament](const dpp::confirmation_callback_t& callback) {
+									bot.thread_create_with_message(fmt::format("{} - Pod {}", g_current_draft_code, P + 1), draft.value->reminder_channel_id, message.id, 1440, 0, [&bot, guild_id, P, tournament](const dpp::confirmation_callback_t& callback) {
 										if(!callback.is_error()) {
 											//  Add the thread to the database with the draft code so when the draft is deleted the threads are archived.
 											dpp::thread thread = std::get<dpp::thread>(callback.value);
@@ -5842,7 +5911,7 @@ int main(int argc, char* argv[]) {
 			text += fmt::format("* If you want feedback on your draft, just ask or give yourself the Civilized Scholar role in <#{}>).\n", ROLE_SELF_ASSIGNMENT_CHANNEL_ID);
 			text += fmt::format("* You can also upload your draftlog to <https://magic.flooey.org/draft/upload> and share it in <#{}>.\n", P1P1_AND_DRAFT_LOG_CHANNEL_ID);
 			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with the /feedback command.\n", FEEDBACK_CHANNEL_ID);
-			text += fmt::format("* Check out <#{}> to see upcoming events, and sign up in <#{}>!", CALENDAR_CHANNEL_ID, PRE_REGISTER_CHANNEL_ID);
+			text += fmt::format("* Check out <#{}> and sign up to some upcoming events!", CALENDAR_CHANNEL_ID);
 			event.reply(text);
 		}
 	});
@@ -5927,18 +5996,18 @@ int main(int argc, char* argv[]) {
 		event.reply(); // Acknowledge the interaction, but show nothing to the user.
 
 		// The sign up sheet in the #-pre-register channel.
-		redraw_signup(bot, guild_id, draft.value->signups_id, draft.value->channel_id, draft.value);
+		redraw_signup(bot, guild_id, draft.value->signups_id, draft.value->signup_channel_id, draft.value);
 
 		// The sign up sheet on the reminder message sent to #-in-the-moment-draft
 		if(draft.value->reminder_id != 0) {
-			redraw_signup(bot, guild_id, draft.value->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft.value);
+			redraw_signup(bot, guild_id, draft.value->reminder_id, draft.value->reminder_channel_id, draft.value);
 		}
 
 		// If the draft has been locked, alert the hosts when someone has clicked the minutemage button.
 		if(new_sign_up_status == SIGNUP_STATUS_MINUTEMAGE) {
 			time_t draft_start = unpack_and_make_timestamp(draft.value->time, draft.value->time_zone);
 			if(now >= draft_start) {
-				send_message(bot, IN_THE_MOMENT_DRAFT_CHANNEL_ID, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
+				send_message(bot, draft.value->hosting_channel_id, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
 			}
 		}
 	});
@@ -5955,9 +6024,9 @@ int main(int argc, char* argv[]) {
 				for(const auto& D : drafts.value) {
 					const std::shared_ptr<Draft_Event> draft = std::make_shared<Draft_Event>(D);
 					if(draft->signups_id != 0) {
-						redraw_signup(bot, GUILD_ID, draft->signups_id, draft->channel_id, draft);
+						redraw_signup(bot, GUILD_ID, draft->signups_id, draft->signup_channel_id, draft);
 						if(draft->reminder_id != 0) { 
-							redraw_signup(bot, GUILD_ID, draft->reminder_id, IN_THE_MOMENT_DRAFT_CHANNEL_ID, draft);
+							redraw_signup(bot, GUILD_ID, draft->reminder_id, draft->reminder_channel_id, draft);
 						}
 					}
 				}
