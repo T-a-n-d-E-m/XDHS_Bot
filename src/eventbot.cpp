@@ -29,8 +29,8 @@
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
-// FIXME: dpp::utility::read_file can throw... just use slurp
 // Note: Only one minutemage will be asked to fill a seat.
+// FIXME: dpp::utility::read_file can throw... just use slurp
 
 // Nice functionality, but not needed before going live
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
@@ -863,7 +863,7 @@ enum LEAGUE_ID {
 	LEAGUE_ID_PACIFIC_CHRONO,
 	LEAGUE_ID_ATLANTIC_BONUS,
 	LEAGUE_ID_AMERICAS_BONUS,
-	LEAGUE_ID_EURO_BONUS
+	LEAGUE_ID_EURO_BONUS,
 };
 
 static const char* to_cstring(const LEAGUE_ID id) {
@@ -4798,7 +4798,7 @@ int main(int argc, char* argv[]) {
 			// First, check if the draft code is valid and if it is get a copy of the XDHS_League it applies to.
 			const auto draft_code = parse_draft_code(draft_code_str.c_str());
 			if(is_error(draft_code)) {
-				event.reply(to_cstring(draft_code.error));
+				event.reply(dpp::message(draft_code.errstr).set_flags(dpp::m_ephemeral));;
 				return;
 			}
 			strcpy(draft_event.draft_code, draft_code_str.c_str());
@@ -4809,7 +4809,7 @@ int main(int argc, char* argv[]) {
 
 			auto format = std::get<std::string>(event.get_parameter("format"));
 			if(format.length() > FORMAT_STRING_LEN_MAX) {
-				event.reply(fmt::format("Format string exceeds maximum allowed length of {} bytes.", FORMAT_STRING_LEN_MAX));
+				event.reply(dpp::message(fmt::format("Format string exceeds maximum allowed length of {} bytes.", FORMAT_STRING_LEN_MAX)).set_flags(dpp::m_ephemeral));
 				return;
 			}
 			strcpy(draft_event.format, format.c_str());
@@ -4822,7 +4822,7 @@ int main(int argc, char* argv[]) {
 			{
 				const auto result = parse_date_string(date_string.c_str());
 				if(is_error(result)) {
-					event.reply(to_cstring(result.error));
+					event.reply(dpp::message(result.errstr).set_flags(dpp::m_ephemeral));
 					return;
 				}
 				date = result.value;
@@ -4838,7 +4838,7 @@ int main(int argc, char* argv[]) {
 					std::string start_time_string = std::get<std::string>(opt);
 					const auto start_time_override = parse_start_time_string(start_time_string.c_str());
 					if(is_error(start_time_override)) {
-						event.reply(to_cstring(start_time_override.error));
+						event.reply(dpp::message(start_time_override.errstr).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					start_time = start_time_override.value;
@@ -4855,12 +4855,12 @@ int main(int argc, char* argv[]) {
 				Result<Heap_Buffer> download = download_file(banner.url.c_str());
 				SCOPE_EXIT(free(download.value.data));
 				if(is_error(download)) {
-					event.reply(to_cstring(download.error));
+					event.reply(dpp::message(download.errstr).set_flags(dpp::m_ephemeral));
 					return;
 				}
 
 				if(download.value.size > DOWNLOAD_BYTES_MAX) {
-					event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
+					event.reply(dpp::message(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT)).set_flags(dpp::m_ephemeral));
 					return;
 				}
 
@@ -4894,7 +4894,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					auto blurb = std::get<std::string>(opt);
 					if(blurb.length() > DRAFT_BLURB_LENGTH_MAX) {
-						event.reply(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					strcpy(&draft_event.blurbs[i][0], blurb.c_str()); 
@@ -4917,12 +4917,12 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					auto color_hex = std::get<std::string>(opt);
 					if(color_hex.length() != strlen("RRGGBB")) {
-						event.reply("Invalid hex string for color. Color should be written as RRGGBB.");
+						event.reply(dpp::message("Invalid hex string for color. Color should be written as RRGGBB.").set_flags(dpp::m_ephemeral));
 						return;
 					}
 					for(size_t i = 0; i < color_hex.length(); ++i) {
 						if(!isxdigit(color_hex[i])) {
-							event.reply("Invalid hex digit in color string.");
+							event.reply(dpp::message("Invalid hex digit in color string.").set_flags(dpp::m_ephemeral));
 							return;
 						}
 					}
@@ -4937,7 +4937,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					guide_url = std::get<std::string>(opt);
 					if(guide_url.length() > URL_LENGTH_MAX) {
-						event.reply(fmt::format("guide_url exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("guide_url exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 				}
@@ -4951,7 +4951,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					card_list = std::get<std::string>(opt);
 					if(card_list.length() > URL_LENGTH_MAX) {
-						event.reply(fmt::format("card_list exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("card_list exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 				}
@@ -4964,7 +4964,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					set_list = std::get<std::string>(opt);
 					if(set_list.length() > SET_LIST_LENGTH_MAX) {
-						event.reply(fmt::format("set_list exceeds maximum allowed length of {} bytes.", SET_LIST_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("set_list exceeds maximum allowed length of {} bytes.", SET_LIST_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 				}
@@ -4977,7 +4977,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					xmage_server = std::get<std::string>(opt);
 					if(xmage_server.length() > XMAGE_SERVER_LENGTH_MAX) {
-						event.reply(fmt::format("xmage_server string exceeds maximum allowed length of {} bytes.", XMAGE_SERVER_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("xmage_server string exceeds maximum allowed length of {} bytes.", XMAGE_SERVER_LENGTH_MAX)).set_flags(dpp::m_ephemeral));;
 						return;
 					}
 				}
@@ -4994,7 +4994,7 @@ int main(int argc, char* argv[]) {
 
 			draft_event.reminder_channel_id = IN_THE_MOMENT_DRAFT_CHANNEL_ID;
 			{
-				auto opt = event.get_parameter("reminder_channel_id");
+				auto opt = event.get_parameter("reminder_channel");
 				if(std::holds_alternative<dpp::snowflake>(opt)) {
 					draft_event.reminder_channel_id = std::get<dpp::snowflake>(opt);
 				}
@@ -5002,7 +5002,7 @@ int main(int argc, char* argv[]) {
 
 			draft_event.hosting_channel_id = CURRENT_DRAFT_MANAGEMENT_ID;
 			{
-				auto opt = event.get_parameter("hosting_channel_id");
+				auto opt = event.get_parameter("hosting_channel");
 				if(std::holds_alternative<dpp::snowflake>(opt)) {
 					draft_event.hosting_channel_id = std::get<dpp::snowflake>(opt);
 				}
@@ -5014,7 +5014,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<f64>(opt)) {
 					const f64 duration = std::get<f64>(opt);
 					if(duration < 0.0) {
-						event.reply(fmt::format("Duration must be a positive number."));
+						event.reply(dpp::message(fmt::format("Duration must be a positive number.")).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					draft_event.duration = duration;
@@ -5043,22 +5043,22 @@ int main(int argc, char* argv[]) {
 			strcpy(draft_event.pings, ping_string);
 
 			// Add the event to the database.
-			if(!is_error(database_add_draft(guild_id, &draft_event))) {
-				const dpp::user& issuing_user = event.command.get_issuing_user();
-				event.reply(fmt::format("{} created {}. Use ``/post_draft`` to post it.", issuing_user.global_name, draft_code_str));
+			auto result = database_add_draft(guild_id, &draft_event);
+			if(!is_error(result)) {
+				//const dpp::user& issuing_user = event.command.get_issuing_user();
+				event.reply(dpp::message(fmt::format("Draft {} created. Use ``/view_draft`` to view the settings, ``/edit_draft`` to make changes and ``/post_draft`` to post it.", draft_code_str)).set_flags(dpp::m_ephemeral));
 			} else {
-				event.reply(fmt::format("⚠️ There was an error saving the details of the draft to the database. This is not your fault! Please try again, but in the meantime <@{}> has been alerted.", TANDEM_DISCORD_ID));
-				log(LOG_LEVEL_ERROR, "Adding draft to database failed.");
+				event.reply(result.errstr);
 			}
 		} else
 		if(command_name == "post_draft") {
 			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
 			auto draft = database_get_event(guild_id, draft_code);
 			if(!is_error(draft)) {
-				event.reply(fmt::format("Draft {} posted.", draft_code));
 				post_draft(bot, guild_id, draft.value);
+				event.reply(dpp::message(fmt::format("Draft {} posted to <#{}>", draft_code, draft.value->signup_channel_id)).set_flags(dpp::m_ephemeral));
 			} else {
-				event.reply(fmt::format("Failed to find draft {} in the database. This shouldn't be possible!", draft_code));
+				event.reply(draft.errstr);
 			}
 		} else
 		if(command_name == "view_draft") {
@@ -5072,7 +5072,6 @@ int main(int argc, char* argv[]) {
 			text += "```";
 			text += fmt::format("             status: {}\n", draft_status_to_string(draft.value->status));
 			text += fmt::format("         draft_code: {}\n", draft.value->draft_code);
-			//text += fmt::format("             status: {}\n", to_cstring(draft.value->status));
 			text += fmt::format("              pings: {}\n", draft.value->pings); 
 			text += fmt::format("        league_name: {}\n", draft.value->league_name);
 			text += fmt::format("             format: {}\n", draft.value->format);
@@ -5095,7 +5094,7 @@ int main(int argc, char* argv[]) {
 			text += fmt::format(" hosting_channel_id: {}\n", draft.value->hosting_channel_id);
 			text += "```";
 
-			event.reply(text);
+			event.reply(text); // TODO: Do we want this to be ephemeral?
 		} else
 		if(command_name == "edit_draft") {
 			const std::string draft_code = std::get<std::string>(event.get_parameter("draft_code"));
@@ -5118,7 +5117,7 @@ int main(int argc, char* argv[]) {
 					const std::string date_string = std::get<std::string>(opt);
 					const auto date = parse_date_string(date_string.c_str());
 					if(is_error(date)) {
-						event.reply(to_cstring(date.error));
+						event.reply(dpp::message(date.errstr).set_flags(dpp::m_ephemeral));
 						return;
 					}
 
@@ -5135,7 +5134,7 @@ int main(int argc, char* argv[]) {
 					const std::string start_time = std::get<std::string>(opt);
 					const auto st = parse_start_time_string(start_time.c_str());
 					if(is_error(st)) {
-						event.reply(to_cstring(st.error));
+						event.reply(dpp::message(st.errstr).set_flags(dpp::m_ephemeral));
 						return;
 					}
 
@@ -5151,7 +5150,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<f64>(opt)) {
 					const f64 duration = std::get<f64>(opt);
 					if(duration < 0.0) {
-						event.reply(fmt::format("Duration must be a positive number."));
+						event.reply(dpp::message("Duration must be a positive number.").set_flags(dpp::m_ephemeral));
 						return;
 					}
 					draft_event.value->duration = duration;
@@ -5169,12 +5168,12 @@ int main(int argc, char* argv[]) {
 					auto download = download_file(banner.url.c_str());
 					SCOPE_EXIT(free(download.value.data));
 					if(is_error(download)) {
-						event.reply(to_cstring(download.error));
+						event.reply(dpp::message(download.errstr).set_flags(dpp::m_ephemeral));
 						return;
 					}
 
 					if(download.value.size > DOWNLOAD_BYTES_MAX) {
-						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
+						event.reply(dpp::message(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 
@@ -5190,11 +5189,11 @@ int main(int argc, char* argv[]) {
 							stat(filename.c_str(), &file_attributes); // FIXME: This can fail!
 							//draft_event.value->banner_timestamp = file_attributes.st_mtime;
 						} else {
-							event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+							event.reply(dpp::message("Saving the provided art image has failed. This is not your fault! Please try again.").set_flags(dpp::m_ephemeral));
 							return;
 						}
 					} else {
-						event.edit_response("Saving the provided art image has failed. This is not your fault! Please try again.");
+						event.reply(dpp::message("Saving the provided art image has failed. This is not your fault! Please try again.").set_flags(dpp::m_ephemeral));
 						return;
 					}
 				}
@@ -5209,7 +5208,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					auto blurb = std::get<std::string>(opt);
 					if(blurb.length() > DRAFT_BLURB_LENGTH_MAX) {
-						event.reply(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					strcpy(&draft_event.value->blurbs[i][0], blurb.c_str()); 
@@ -5222,7 +5221,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string guide_url = std::get<std::string>(opt);
 					if(guide_url.length() > URL_LENGTH_MAX) {
-						event.reply(fmt::format("guide_url exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("guide_url exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					strcpy(draft_event.value->draft_guide_url, guide_url.c_str());
@@ -5235,7 +5234,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string card_list = std::get<std::string>(opt);
 					if(card_list.length() > URL_LENGTH_MAX) {
-						event.reply(fmt::format("card_list exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("card_list exceeds maximum allowed length of {} bytes.", URL_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					strcpy(draft_event.value->card_list_url, card_list.c_str());
@@ -5248,7 +5247,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string set_list = std::get<std::string>(opt);
 					if(set_list.length() > SET_LIST_LENGTH_MAX) {
-						event.reply(fmt::format("set_list exceeds maximum allowed length of {} bytes.", SET_LIST_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("set_list exceeds maximum allowed length of {} bytes.", SET_LIST_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					strcpy(draft_event.value->set_list, set_list.c_str());
@@ -5261,12 +5260,12 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					const auto color_hex = std::get<std::string>(opt);
 					if(color_hex.length() != strlen("RRGGBB")) {
-						event.reply("Invalid hex string for color. Color should be written as RRGGBB.");
+						event.reply(dpp::message("Invalid hex string for color. Color should be written as RRGGBB.").set_flags(dpp::m_ephemeral));
 						return;
 					}
 					for(size_t i = 0; i < color_hex.length(); ++i) {
 						if(!isxdigit(color_hex[i])) {
-							event.reply("Invalid hex digit in color string.");
+							event.reply(dpp::message("Invalid hex digit in color string.").set_flags(dpp::m_ephemeral));
 							return;
 						}
 					}
@@ -5288,7 +5287,7 @@ int main(int argc, char* argv[]) {
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string xmage_server = std::get<std::string>(opt);
 					if(xmage_server.length() > XMAGE_SERVER_LENGTH_MAX) {
-						event.reply(fmt::format("xmage_server string exceeds maximum allowed length of {} bytes.", XMAGE_SERVER_LENGTH_MAX));
+						event.reply(dpp::message(fmt::format("xmage_server string exceeds maximum allowed length of {} bytes.", XMAGE_SERVER_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
 					strcpy(draft_event.value->xmage_server, xmage_server.c_str());
@@ -5296,21 +5295,21 @@ int main(int argc, char* argv[]) {
 			}
 
 			{
-				auto opt = event.get_parameter("signup_channel_id");
+				auto opt = event.get_parameter("signup_channel");
 				if(std::holds_alternative<dpp::snowflake>(opt)) {
 					draft_event.value->signup_channel_id = std::get<dpp::snowflake>(opt);
 				}
 			}
 
 			{
-				auto opt = event.get_parameter("reminder_channel_id");
+				auto opt = event.get_parameter("reminder_channel");
 				if(std::holds_alternative<dpp::snowflake>(opt)) {
 					draft_event.value->reminder_channel_id = std::get<dpp::snowflake>(opt);
 				}
 			}
 
 			{
-				auto opt = event.get_parameter("hosting_channel_id");
+				auto opt = event.get_parameter("hosting_channel");
 				if(std::holds_alternative<dpp::snowflake>(opt)) {
 					draft_event.value->hosting_channel_id = std::get<dpp::snowflake>(opt);
 				}
@@ -5318,11 +5317,10 @@ int main(int argc, char* argv[]) {
 
 			auto result = database_edit_draft(guild_id, draft_event.value);
 			if(!is_error(result)) {
-				event.reply(fmt::format("Draft {} updated", draft_code));
+				event.reply(dpp::message(fmt::format("Draft {} updated", draft_code)).set_flags(dpp::m_ephemeral));
 				edit_draft(bot, guild_id, draft_event.value);
 			} else {
-				// TODO: What now?
-				event.reply("Failed to edit the draft. This is not your fault!");
+				event.reply(dpp::message(result.errstr).set_flags(dpp::m_ephemeral));
 			}
 		} else
 		if(command_name == "delete_draft") {
@@ -5341,10 +5339,10 @@ int main(int argc, char* argv[]) {
 
 			if(purge == false) {
 				(void)database_clear_draft_post_ids(guild_id, draft_code);
-				event.reply(fmt::format("Draft {} post deleted. Use ``/post_draft`` to repost it.", draft_code));
+				event.reply(dpp::message(fmt::format("Draft {} post deleted. Use ``/post_draft`` to repost it.", draft_code)).set_flags(dpp::m_ephemeral));
 			} else {
 				database_purge_draft_event(guild_id, draft_code);
-				event.reply(fmt::format("Draft {} and all sign ups purged.", draft_code));
+				event.reply(dpp::message(fmt::format("Draft {} and all sign ups purged.", draft_code)).set_flags(dpp::m_ephemeral));
 			}
 		} else
 		if(command_name == "add_player") {
@@ -5353,10 +5351,7 @@ int main(int argc, char* argv[]) {
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
 #if TESTING
 			if(!BIT_SET(draft.value->status, DRAFT_STATUS_LOCKED)) {
-				dpp::message message;
-				message.set_flags(dpp::m_ephemeral);
-				message.set_content(dpp::message{"This command can only be used once the draft is locked."}.set_flags(dpp::m_ephemeral));
-				event.reply(message);
+				event.reply(dpp::message("This command can only be used once the draft is locked.").set_flags(dpp::m_ephemeral));
 				return;
 			}
 #endif
@@ -5385,10 +5380,7 @@ int main(int argc, char* argv[]) {
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
 #if TESTING
 			if(!BIT_SET(draft.value->status, DRAFT_STATUS_LOCKED)) {
-				dpp::message message;
-				message.set_flags(dpp::m_ephemeral);
-				message.set_content(dpp::message{"This command can only be used once the draft is locked."}.set_flags(dpp::m_ephemeral));
-				event.reply(message);
+				event.reply(dpp::message("This command can only be used once the draft is locked.").set_flags(dpp::m_ephemeral));
 				return;
 			}
 #endif
@@ -5433,7 +5425,7 @@ int main(int argc, char* argv[]) {
 			// A bad draft code should be impossible at this point, but just to be safe...
 			const auto draft_code = parse_draft_code(g_current_draft_code.c_str());
 			if(is_error(draft_code)) {
-				event.reply(fmt::format("Internal EventBot error: Unable to parse draft code '{}'. Reason: {}", g_current_draft_code, to_cstring(draft_code.error)));
+				event.reply(dpp::message(draft_code.errstr).set_flags(dpp::m_ephemeral));
 				return;
 			}
 
@@ -5448,7 +5440,7 @@ int main(int argc, char* argv[]) {
 			auto sign_ups = database_get_sign_ups(guild_id, g_current_draft_code, league_code, draft_code.value.season);
 			if(is_error(sign_ups)) {
 				log(LOG_LEVEL_ERROR, "database_get_sign_ups(%lu, %s, %s, %d) failed", guild_id, g_current_draft_code, league_code, draft_code.value.season);
-				event.reply(dpp::message{"Internal EventBot error: A database query has failed. This is not your fault! Please try again."}.set_flags(dpp::m_ephemeral));
+				event.reply(dpp::message(sign_ups.errstr).set_flags(dpp::m_ephemeral));
 				return;
 			}
 
@@ -5459,17 +5451,17 @@ int main(int argc, char* argv[]) {
 			(void)erased_count;
 
 			if(sign_ups.count < POD_SEATS_MIN) {
-				event.reply(dpp::message{fmt::format("At least {} players needed. Recruit more players and use /add_player to add them to the sign up sheet.", POD_SEATS_MIN)}.set_flags(dpp::m_ephemeral));
+				event.reply(dpp::message(fmt::format("At least {} players needed. Recruit more players and use /add_player to add them to the sign up sheet.", POD_SEATS_MIN)).set_flags(dpp::m_ephemeral));
 				return;
 			}
 
 			if((sign_ups.count % 2) == 1) {
-				event.reply(dpp::message{"An even number of sign ups is required before using this command. Recruit more players and use /add_player to add them to the sign up sheet, or use /remove_player to remove someone."}.set_flags(dpp::m_ephemeral));
+				event.reply(dpp::message("An even number of sign ups is required before using this command. Recruit more players and use /add_player to add them to the sign up sheet, or use /remove_player to remove someone.").set_flags(dpp::m_ephemeral));
 				return;
 			}
 
 			if(sign_ups.count > PLAYERS_MAX) {
-				event.reply(dpp::message{"Maximum player count of {} exceeded. You're on your own!"}.set_flags(dpp::m_ephemeral));
+				event.reply(dpp::message("Maximum player count of {} exceeded. You're on your own!").set_flags(dpp::m_ephemeral));
 				return;
 			}
 
@@ -5520,7 +5512,7 @@ int main(int argc, char* argv[]) {
 
 			if(tournament.pod_count == 0) {
 				// Shouldn't be possible with the above checks.
-				event.reply("Insufficient players to form a pod.");
+				event.reply(dpp::message("Insufficient players to form a pod.").set_flags(dpp::m_ephemeral));;
 				return;
 			}
 
@@ -5901,7 +5893,7 @@ int main(int argc, char* argv[]) {
 				const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
 				event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
 			} else {
-				event.reply("Internal EventBot error: database_add_dropper() failed.  This is not your fault! Please try again.");
+				event.reply(result.errstr);
 			}
 		} else
 		if(command_name == "finish") {
@@ -5929,7 +5921,7 @@ int main(int argc, char* argv[]) {
 		// Get the current sign up status (if any) for this member.
 		auto current_sign_up_status = database_get_members_sign_up_status(guild_id, draft_code, member_id);
 		if(is_error(current_sign_up_status)) {
-			log(LOG_LEVEL_ERROR, "%s", to_cstring(current_sign_up_status.error));
+			log(LOG_LEVEL_ERROR, current_sign_up_status.errstr);
 			// TODO: Now what? Send an error to #bot-commands or something?
 		}
 
