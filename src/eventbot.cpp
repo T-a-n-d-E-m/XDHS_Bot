@@ -4178,7 +4178,7 @@ static void output_sql() {
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS droppers(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
-	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
 	fprintf(stdout, "note VARCHAR(%lu)\n", DISCORD_MESSAGE_CHARACTER_LIMIT);
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
