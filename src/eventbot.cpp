@@ -762,7 +762,7 @@ static Set_List get_set_list_from_string(const char* format) {
 	Set_List list;
 	list.count = 0;
 	while(!done) {
-		while(*end != '/' && *end != '\\' && *end != '|' && *end != '\0') {
+		while(*end != '/' && *end != '-' && *end != '\\' && *end != '|' && *end != '\0') {
 			end++;
 		}
 		if(*end == 0) done = true;
