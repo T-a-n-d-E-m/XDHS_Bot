@@ -626,6 +626,7 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"WOE", "Wilds of Eldraine",                           1, false},
 	{"LCI", "Lost Caverns of Ixalan",                      1, false},
 	{"RVR", "Ravnica Remastered",                          1, false},
+    {"MKM", "Murders at Karlov Manor",                     0, false}, // TODO: Need art
 	{"PIP", "Fallout",                                     0, false}, // TODO: Need art
 
 	// FIXME: Find art for these from their full name, not set codes.
