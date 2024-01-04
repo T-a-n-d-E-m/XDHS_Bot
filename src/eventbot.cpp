@@ -67,7 +67,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_PSD
 #define STBI_NO_TGA
-#define STBI_FAILURE_USRMSG
+#define STBI_FAILURE_USERMSG
 #define STBI_NO_HDR
 #define STBI_MAX_DIMENSIONS (1<<11)
 #include "stb_image.h"
@@ -2771,10 +2771,10 @@ void blit_RGBA_to_RGBA(const Image* src, const Image* dst, int x, int y) {
 
 			const f32 one_minus_source_alpha = (1.0f - src_a);
             Pixel out;
-            out.components.r = 255 * ((src_r * src_a) + (dst_r * (one_minus_source_alpha)));
-            out.components.g = 255 * ((src_g * src_a) + (dst_g * (one_minus_source_alpha)));
-            out.components.b = 255 * ((src_b * src_a) + (dst_b * (one_minus_source_alpha)));
-            out.components.a = 255 * ((src_a * src_a) + (dst_a * (one_minus_source_alpha)));
+            out.components.r = 255 * ((src_r * src_a) + (dst_r * one_minus_source_alpha));
+            out.components.g = 255 * ((src_g * src_a) + (dst_g * one_minus_source_alpha));
+            out.components.b = 255 * ((src_b * src_a) + (dst_b * one_minus_source_alpha));
+            out.components.a = 255 * ((src_a * src_a) + (dst_a * one_minus_source_alpha));
 
             *write_ptr++ = out.c;
         }
