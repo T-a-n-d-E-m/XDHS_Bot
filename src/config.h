@@ -23,6 +23,7 @@ struct config {
 #if defined(EVENTBOT)
 	char* xmage_server;
 	char* eventbot_host;
+    char* api_key;
 #endif
 
 	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
@@ -38,6 +39,7 @@ struct config {
 #endif
 		if(xmage_server != NULL)   free(xmage_server);
 		if(eventbot_host != NULL)  free(eventbot_host);
+        if(api_key != NULL)        free(api_key);
 	}
 } g_config;
 
@@ -79,7 +81,10 @@ static void config_file_kv_pair_callback(const char* key, const char* value) {
 	} else
 	if(strcmp(key, "eventbot_host") == 0) {
 		g_config.eventbot_host = strndup(value, value_len);
-	}
+	} else
+    if(strcmp(key, "api_key") == 0) {
+		g_config.api_key = strndup(value, value_len);
+    }
 #endif // EVENTBOT
 }
 
@@ -91,7 +96,7 @@ typedef void (*config_key_value_callback)(const char*, const char*);
 // Returns 1 on success, 0 otherwise.
 static int load_config_file(const char* path, config_key_value_callback callback) {
     static const size_t KEY_LENGTH_MAX = 64;
-    static const size_t VAL_LENGTH_MAX = 128;
+    static const size_t VAL_LENGTH_MAX = 256;
     FILE* f = fopen(path, "r");
     if(f == NULL) {
         fprintf(stderr, "Error loading config file: %s\n", strerror(errno));
