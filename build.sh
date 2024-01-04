@@ -19,7 +19,7 @@ fi
 LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1" # -DAUTO_DOWNLOAD=1
 
 # Libraries to link with
-LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpthread"
+LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpoppler-cpp -lpthread"
 
 # -Wno-volatile for mongoose
 # -Wno-unused_function for stbi_resize
