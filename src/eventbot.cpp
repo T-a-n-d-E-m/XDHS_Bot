@@ -70,7 +70,10 @@
 #define STBI_FAILURE_USERMSG
 #define STBI_NO_HDR
 #define STBI_MAX_DIMENSIONS (1<<11)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include "stb_image.h"
+#pragma GCC diagnostic pop
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #pragma GCC diagnostic push
@@ -200,6 +203,8 @@ static void sig_handler(int signo) {
     }
     g_exit_code = signo;
 }
+
+
 
 enum GLOBAL_ERROR {
 	ERROR_NONE,
