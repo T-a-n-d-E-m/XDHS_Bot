@@ -63,6 +63,7 @@
 #include <fmt/format.h>
 
 // Local libraries
+#ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_PSD
 #define STBI_NO_TGA
@@ -73,23 +74,28 @@
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include "stb_image.h"
 #pragma GCC diagnostic pop
+#endif // #ifndef
 
+#ifndef STB_IMAGE_RESIZE_IMPLEMENTATION
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #include "stb_image_resize2.h"
 #pragma GCC diagnostic pop
+#endif // #ifndef
 
+#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#endif // #ifndef
 
+#ifndef STB_TRUETYPE_IMPLEMENTATION
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
+#endif // #ifndef
 
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
-#ifdef ENABLE_HTTP_SERVER
-#include "mongoose.h" // mongoose HTTP server - Disabled for now
-#endif
+#include "http_server.h"
 #include "database.h"
 #include "result.h"
 #include "log.h"
@@ -128,13 +134,6 @@ static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 
 // How long we allow for deck construction
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
-
-// The interface and port the internal HTTP server listens on. NOTE: Remember to open this port in the firewall, or close it if changing to something else!
-#ifdef ENABLE_HTTP_SERVER
-static const char* HTTP_SERVER_INTERFACE                    = "0.0.0.0";
-static const u16   HTTP_SERVER_PORT                         = 8181;
-#endif
-static const char* HTTP_SERVER_ROOT_DIR                     = "www-root";
 
 // The directory where the RELEASE build is run from.
 static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
@@ -228,65 +227,6 @@ static std::string random_string(const int len) {
 
 // Reject any banner images that exceed this size.
 static const size_t DOWNLOAD_BYTES_MAX = (3 * 1024 * 1024);
-
-struct Heap_Buffer {
-	size_t size;
-	u8* data;
-};
-
-static size_t curl_write_memory_callback(void* data, size_t size, size_t nmemb, void* usr_ptr) {
-    size_t real_size = size * nmemb;
-    Heap_Buffer* mem = (Heap_Buffer*)usr_ptr;
-
-    // TODO: Keep track of how much we've allocated so far and error out if over some maximum amount to prevent denial of service attacks from giant files being sent.
-
-    u8* ptr = (u8*) realloc(mem->data, mem->size + real_size);
-    if(ptr == NULL) {
-		log(LOG_LEVEL_ERROR, "%s: out of memeory", __FUNCTION__); // TODO: Now what? On the potato server EventBot is on this could happen...
-        return 0;
-    }
-
-    mem->data = ptr;
-    memcpy(mem->data + mem->size, data, real_size);
-    mem->size += real_size;
-
-    return real_size;
-}
-
-static Result<Heap_Buffer> download_file(const char* url) {
-    //curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    CURL* curl = curl_easy_init();
-    if(curl == NULL) {
-        return MAKE_ERROR_RESULT(ERROR_CURL_INIT);
-    }
-
-    // Disable checking SSL certs
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    // Disable checking SSL certs are valid
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-
-	Heap_Buffer buffer = {0, NULL};
-
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_memory_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
-
-    CURLcode result = curl_easy_perform(curl);
-    if(result != CURLE_OK) {
-        return MAKE_ERROR_RESULT(ERROR_DOWNLOAD_FAILED, url, curl_easy_strerror(result));
-    }
-
-    curl_easy_cleanup(curl);
-
-    //curl_global_cleanup();
-
-    return {buffer};
-}
-
 
 // Send a message to a channel. Mostly used for posting what the bot is currently doing.
 static void send_message(dpp::cluster& bot, const u64 channel_id, const std::string& text) {
@@ -3891,13 +3831,6 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	return result;
 }
 
-#ifdef ENABLE_HTTP_SERVER
-static void http_server_callback_func(mg_connection* c, int ev, void* ev_data, void* fn_data) {
-	mg_http_serve_opts opts = {.root_dir = HTTP_SERVER_ROOT_DIR};
-	if(ev == MG_EV_HTTP_MSG) mg_http_serve_dir(c, (mg_http_message*)ev_data, &opts);
-}
-#endif
-
 int main(int argc, char* argv[]) {
 	if(argc > 1) {
 		if(strcmp(argv[1], "-sql") == 0) {
@@ -3967,14 +3900,7 @@ int main(int argc, char* argv[]) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 	mysql_library_init(0, NULL, NULL);
 
-#ifdef ENABLE_HTTP_SERVER
-    // Mongoose HTTP server
-	mg_mgr http_server;
-	mg_mgr_init(&http_server);
-	char http_server_address[128];
-	snprintf(http_server_address, 128, "http://%s:%d", HTTP_SERVER_INTERFACE, HTTP_SERVER_PORT);
-	mg_http_listen(&http_server, http_server_address, http_server_callback_func, &http_server);
-#endif
+    http_server_init();
 
 	srand(time(NULL));
 
@@ -3986,9 +3912,7 @@ int main(int argc, char* argv[]) {
     log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
 	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
-#ifdef ENABLE_HTTP_SERVER
 	log(LOG_LEVEL_INFO, "mongoose version: %s",       MG_VERSION);
-#endif
 
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
@@ -4397,11 +4321,11 @@ int main(int argc, char* argv[]) {
 					auto art = itr->second;
             		event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
 		            auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
-					SCOPE_EXIT(free(download.value.data));
 					if(is_error(download)) {
 		                event.edit_response(to_cstring(download.error));
 		                return;
         		    }
+					SCOPE_EXIT(free(download.value.data));
 
 					if(download.value.size > DOWNLOAD_BYTES_MAX) {
 						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
@@ -4526,7 +4450,7 @@ int main(int argc, char* argv[]) {
 					return;
 				}
 
-				std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_ROOT_DIR, draft_code_str);
+				std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_DOC_ROOT, draft_code_str);
 				FILE* file = fopen(filename.c_str(), "wb");
 				if(file) {
 					SCOPE_EXIT(fclose(file));
@@ -4839,7 +4763,7 @@ int main(int argc, char* argv[]) {
 						return;
 					}
 
-					std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_ROOT_DIR, draft_code);
+					std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_DOC_ROOT, draft_code);
 					FILE* file = fopen(filename.c_str(), "wb");
 					if(file) {
 						SCOPE_EXIT(fclose(file));
@@ -5762,19 +5686,13 @@ int main(int argc, char* argv[]) {
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
     while(g_exit_code == 0) {
-#ifdef ENABLE_HTTP_SERVER
-		mg_mgr_poll(&http_server, 1000);
-#else
-		sleep(1);
-#endif
+        http_server_poll();
     }
 
 	bot.shutdown();
 	mysql_library_end();
+    http_server_free();
     curl_global_cleanup();
-#ifdef ENABLE_HTTP_SERVER
-	mg_mgr_free(&http_server);
-#endif
 
 	log(LOG_LEVEL_INFO, "Exiting");
 
