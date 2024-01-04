@@ -700,8 +700,6 @@ static void http_server_func(struct mg_connection *con, int event, void *event_d
 mg_mgr g_mgr;
 
 void http_server_init() {
-    //curl_global_init(CURL_GLOBAL_DEFAULT);
-
 	mg_log_level = MG_LL_DEBUG;
 	mg_mgr_init(&g_mgr);
 	mg_log_set(MG_LL_DEBUG);
@@ -709,11 +707,6 @@ void http_server_init() {
 	snprintf(listen, 64, "%s:%d", HTTP_SERVER_BIND_ADDRESS, HTTP_SERVER_BIND_PORT);
 	mg_http_listen(&g_mgr, listen, http_server_func, NULL);
 	mg_wakeup_init(&g_mgr);
-	//for (;;) {
-	//	mg_mgr_poll(&g_mgr, 1000);
-	//}
-
-    //curl_global_cleanup();
 }
 
 void http_server_poll() {
