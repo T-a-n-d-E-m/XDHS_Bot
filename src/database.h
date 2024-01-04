@@ -85,7 +85,7 @@ struct Database_No_Value {};
 		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
 	}
 
-// A query with no output value.
+// A query with no input values.
 #define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
