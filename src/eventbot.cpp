@@ -57,7 +57,6 @@
 
 // System libraries
 #include <curl/curl.h>
-#include <mysql.h>
 
 // User libraries
 #include <dpp/dpp.h>
@@ -91,6 +90,8 @@
 #ifdef ENABLE_HTTP_SERVER
 #include "mongoose.h" // mongoose HTTP server - Disabled for now
 #endif
+#include "database.h"
+#include "result.h"
 #include "log.h"
 #include "config.h"
 #include "scope_exit.h"
@@ -203,184 +204,6 @@ static void sig_handler(int signo) {
     }
     g_exit_code = signo;
 }
-
-
-
-enum GLOBAL_ERROR {
-	ERROR_NONE,
-
-	ERROR_OUT_OF_MEMORY,
-
-	ERROR_INVALID_FUNCTION_PARAMETER,
-
-	// database
-	ERROR_MYSQL_INIT_FAILED,
-	ERROR_MYSQL_REAL_CONNECT_FAILED,
-	ERROR_MYSQL_STMT_INIT_FAILED,
-	ERROR_MYSQL_STMT_PREPARE_FAILED,
-	ERROR_MYSQL_BIND_PARAM_FAILED,
-	ERROR_MYSQL_STMT_EXECUTE_FAILED,
-	ERROR_MYSQL_STMT_BIND_RESULT_FAILED,
-	ERROR_MYSQL_STMT_STORE_RESULT_FAILED,
-	ERROR_MYSQL_STMT_FETCH_FAILED,
-
-	ERROR_DATABASE_TOO_MANY_RESULTS,
-	ERROR_DATABASE_UNEXPECTED_ROW_COUNT,
-
-	// parse_date_string
-	ERROR_MALFORMED_DATE_STRING,
-	ERROR_DATE_IS_IN_PAST,
-	ERROR_INVALID_MONTH,
-	ERROR_INVALID_DAY_28,
-	ERROR_INVALID_DAY_29,
-	ERROR_INVALID_DAY_30,
-	ERROR_INVALID_DAY_31,
-
-	// parse_draft_code
-	ERROR_MALFORMED_DRAFT_CODE,
-	ERROR_LEAGUE_NOT_FOUND,
-
-	// parse_time_string
-	ERROR_MALFORMED_START_TIME_STRING,
-	ERROR_INVALID_HOUR,
-	ERROR_INVALID_MINUTE,
-
-	// render_banner
-	ERROR_LOAD_FONT_FAILED,
-	ERROR_LOAD_ART_FAILED,
-	ERROR_INVALID_PACK_COUNT,
-	ERROR_FAILED_TO_SAVE_BANNER,
-
-	// download_file
-	ERROR_CURL_INIT,
-	ERROR_DOWNLOAD_FAILED,
-};
-
-static const char* to_cstring(const GLOBAL_ERROR e) {
-	switch(e) {
-		case ERROR_NONE: return "no error";
-
-		case ERROR_OUT_OF_MEMORY: return "Internal EventBot error: The server is out of memory.";
-
-		case ERROR_INVALID_FUNCTION_PARAMETER: return "Internal EventBot error: Invalid function parameter.";
-
-		case ERROR_MYSQL_INIT_FAILED:              return "Internal EventBot Error: mysql_init() failed.";
-		case ERROR_MYSQL_REAL_CONNECT_FAILED:      return "Internal EventBot Error: mysql_real_connect() failed: {}";
-		case ERROR_MYSQL_STMT_INIT_FAILED:         return "Internal EventBot Error: mysql_stmt_init() failed: {}";
-		case ERROR_MYSQL_STMT_PREPARE_FAILED:      return "Internal EventBot Error: mysql_stmt_prepare() failed: {}";
-		case ERROR_MYSQL_BIND_PARAM_FAILED:        return "Internal EventBot Error: mysql_bind_param() failed: {}";
-		case ERROR_MYSQL_STMT_EXECUTE_FAILED:      return "Internal EventBot Error: mysql_stmt_execute() failed: {}";
-		case ERROR_MYSQL_STMT_BIND_RESULT_FAILED:  return "Internal EventBot Error: mysql_stmt_bind_result() failed: {}";
-		case ERROR_MYSQL_STMT_STORE_RESULT_FAILED: return "Internal EventBot Error: mysql_stmt_store_result() failed: {}";
-		case ERROR_MYSQL_STMT_FETCH_FAILED:        return "Internal EventBot Error: mysql_stmt_fetch() failed: {}";
-		case ERROR_DATABASE_TOO_MANY_RESULTS:      return "Internal EventBot Error: Database query returned {} rows, but 0 or 1 was expected.";
-		case ERROR_DATABASE_UNEXPECTED_ROW_COUNT:  return "Internal EventBot Error: Database query returned unexpected row count of {} rows.";
-
-		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD."; 
-		case ERROR_DATE_IS_IN_PAST:       return "The date is in the past and time travel does not yet exist.";
-		case ERROR_INVALID_MONTH:         return "Month should be between 01 and 12.";
-		case ERROR_INVALID_DAY_28:        return "Day should be between 01 and 28 for the specified month.";
-		case ERROR_INVALID_DAY_29:        return "Day should be between 01 and 29 for the specified month.";
-		case ERROR_INVALID_DAY_30:        return "Day should be between 01 and 30 for the specified month.";
-		case ERROR_INVALID_DAY_31:        return "Day should be between 01 and 31 for the specified month.";
-
-		case ERROR_MALFORMED_DRAFT_CODE: return "**Malformed draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus.";
-		case ERROR_LEAGUE_NOT_FOUND:     return "No matching league found for draft code.";
-
-		case ERROR_MALFORMED_START_TIME_STRING: return "Malformed start time string. Start time should be written as HH:MM in 24 hour time.";
-		case ERROR_INVALID_HOUR:                return "Hour should be between 0 and 23.";
-		case ERROR_INVALID_MINUTE:              return "Minute should be between 1 and 59.";
-
-		case ERROR_LOAD_FONT_FAILED:      return "Internal EventBot error: stbtt_InitFont() failed to load banner font.";
-		case ERROR_LOAD_ART_FAILED:       return "Internal EventBot error: stbi_load() failed to load art file. file: '{}' reason: {}";
-		case ERROR_INVALID_PACK_COUNT:    return "Internal EventBot error: Unexpected background image count of {}.";
-		case ERROR_FAILED_TO_SAVE_BANNER: return "Internal EventBot error: Failed to save generated banner to storage. If this is the first instance of seeing this error, please try again.";
-
-		case ERROR_CURL_INIT:       return "Internal EventBot error: curl_easy_init() failed.";
-		case ERROR_DOWNLOAD_FAILED: return "Internal EventBot error: Downloading file '{}' failed: {}";
-	}
-
-	return "unknown error";
-}
-
-template<typename Value_Type, typename Error_String_Type = std::string>
-struct Result {
-	GLOBAL_ERROR error;
-	union {
-		Value_Type value;
-		Error_String_Type errstr;
-	};
-
-	Result() {}
-
-	Result(const Value_Type& val)
-		: error(ERROR_NONE)
-		, value(val)
-	{}
-
-	Result& operator=(const Result& other) {
-		error = other.error;
-		if(error == ERROR_NONE) {
-			value = other.value;
-		} else {
-			errstr = other.errstr;
-		}
-		return *this;
-	}
-
-	Result(GLOBAL_ERROR err, const Error_String_Type& str)
-		: error(err)
-		, errstr(str)
-	{}
-
-	Result(const Result& other) {
-		error = other.error;
-		if(error == ERROR_NONE) {
-			value = other.value;
-		} else {
-			errstr = other.errstr;
-		}
-	}
-
-	// Both Value_Type and Error_String_Type have destructors.
-	~Result() requires (std::is_destructible<Value_Type>::value == true) && (std::is_destructible<Error_String_Type>::value == true) {
-		if(error == ERROR_NONE) {
-			this->value.~Value_Type();
-		} else {
-			this->errstr.~Error_String_Type();
-		}
-	}
-
-	// Value_Type has no destructor, Error_String_Type has a destructor.
-	~Result() requires (std::is_destructible<Value_Type>::value == false) && (std::is_destructible<Error_String_Type>::value == true) {
-		if(error != ERROR_NONE) {
-			this->errstr.~Error_String_Type();
-		}
-	}
-
-	// Value_Type has a destructor, Error_String_Type has no destructor.
-	~Result() requires (std::is_destructible<Value_Type>::value == true) && (std::is_destructible<Error_String_Type>::value == false) {
-		if(error == ERROR_NONE) {
-			this->value.~Value_Type();
-		}
-	}
-
-	// Neither Value_Type or Error_String_Type have a destructor.
-	~Result() requires (std::is_destructible<Value_Type>::value == false) && (std::is_destructible<Error_String_Type>::value == false) = delete;
-};
-
-template<typename T>
-static inline bool has_value(const Result<T>& result) {
-	return result.error == ERROR_NONE;
-}
-
-template<typename T>
-static inline bool is_error(const Result<T>& result) {
-	return result.error != ERROR_NONE;
-}
-
-#define MAKE_ERROR_RESULT(code, ...) {.error=code, .errstr={fmt::format(to_cstring(code) __VA_OPT__(,) __VA_ARGS__)}}
-
 
 static std::string to_upper(const char* src) {
 	const size_t len = strlen(src);
@@ -1476,177 +1299,10 @@ static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 	return tournament;
 }
 
-template<typename Value_Type, typename Error_String_Type = std::string>
-struct Database_Result : Result<Value_Type, Error_String_Type> {
-	u64 count;
-
-	Database_Result(const Value_Type& value, u64 count)
-		: Result<Value_Type, Error_String_Type>(value)
-		, count(count)
-	{}
-
-	Database_Result(GLOBAL_ERROR error, const Error_String_Type& value, u64 count)
-		: Result<Value_Type, Error_String_Type>(error, value)
-		, count(count)
-	{}
-};
-
-#define MAKE_DATABASE_VALUE_RESULT(result, cnt) {.error=(ERROR_NONE), .value={result}, .count=(cnt)}
-#define MAKE_DATABASE_ERROR_RESULT(code, cnt, ...) {.error=(code), .errstr={fmt::format(to_cstring(code) __VA_OPT__(,) __VA_ARGS__)}, .count=(cnt)}
-
-// For database_ functions that return no data. We could use template specialization here but this is simpler.
-struct Database_No_Value {};
-
-static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to use different databases, right?
-
-// Connect to the MySQL database specified in the bot.ini file and request access to the XDHS table.
-#define MYSQL_CONNECT()                                                                            \
-	MYSQL* mysql = mysql_init(NULL);                                                               \
-	if(mysql == NULL) {                                                                            \
-		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");                                           \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_INIT_FAILED, 0);                             \
-	}                                                                                              \
-	SCOPE_EXIT(mysql_close(mysql));                                                                \
-	MYSQL* connection = mysql_real_connect(mysql,                                                  \
-		g_config.mysql_host,                                                                       \
-		g_config.mysql_username,                                                                   \
-		g_config.mysql_password,                                                                   \
-		DATABASE_NAME,                                                                             \
-		g_config.mysql_port,                                                                       \
-		NULL, 0);                                                                                  \
-	if(connection == NULL) {                                                                       \
-		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed");                                       \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_REAL_CONNECT_FAILED, 0, mysql_error(mysql)); \
-	}
-
-// Prepare a MySQL statement using the provided query.
-#define MYSQL_STATEMENT()                                                                              \
-	MYSQL_STMT* stmt = mysql_stmt_init(connection);                                                    \
-	if(stmt == NULL) {                                                                                 \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_init(connection) failed: %s", mysql_stmt_error(stmt));        \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_INIT_FAILED, 0, mysql_stmt_error(stmt));    \
-	}                                                                                                  \
-	SCOPE_EXIT(mysql_stmt_close(stmt));                                                                \
-	if(mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {                                          \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_prepare() failed: %s", mysql_stmt_error(stmt));               \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_PREPARE_FAILED, 0, mysql_stmt_error(stmt)); \
-	}
-
-// Create and prepare the input array used to bind variables to the query string.
-#define MYSQL_INPUT_INIT(count)      \
-	MYSQL_BIND input[(count)];       \
-	memset(input, 0, sizeof(input));
-
-// Add an item to the input array. One of these is needed for each input variable.
-#define MYSQL_INPUT(index, type, pointer, size) \
-	input[(index)].buffer_type = (type);        \
-	input[(index)].buffer = (void*) (pointer);  \
-	input[(index)].buffer_length = (size);
-
-// Once all input variables have been declared, bind them to the query and execute the statement.
-#define MYSQL_INPUT_BIND_AND_EXECUTE()                                                                     \
-	if(mysql_stmt_bind_param(stmt, input) != 0) {                                                          \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_param() failed: %s", mysql_stmt_error(stmt));                \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_BIND_PARAM_FAILED, 0, mysql_stmt_error(stmt));       \
-	}                                                                                                      \
-	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
-		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
-	}
-
-// A query with no output value.
-#define MYSQL_EXECUTE()                                                                                    \
-	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
-		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
-	}
-
-// Prepare an array to hold the output from a query.
-#define MYSQL_OUTPUT_INIT(count)       \
-	MYSQL_BIND output[(count)];        \
-	memset(output, 0, sizeof(output)); \
-	unsigned long length[(count)];     \
-	my_bool is_null[(count)];          \
-	my_bool is_error[(count)];
-
-// Set up an item in the output array.
-#define MYSQL_OUTPUT(index, type, pointer, size) \
-	output[(index)].buffer_type = (type);        \
-	output[(index)].buffer = (void*) (pointer);  \
-	output[(index)].buffer_length = (size);      \
-	output[(index)].is_null = &is_null[(index)]; \
-	output[(index)].length = &length[(index)];   \
-	output[(index)].error = &is_error[(index)];
-
-// Bind the output array to the statement.
-#define MYSQL_OUTPUT_BIND_AND_STORE()                                                                       \
-    if(mysql_stmt_bind_result(stmt, output) != 0) {                                                         \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_result() failed: %s", mysql_stmt_error(stmt));                \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_BIND_RESULT_FAILED, 0, mysql_stmt_error(stmt));  \
-    }                                                                                                       \
-    if(mysql_stmt_store_result(stmt) != 0) {                                                                \
-		log(LOG_LEVEL_ERROR, "mysql_stmt_store_result: %s", mysql_stmt_error(stmt));                        \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_STORE_RESULT_FAILED, 0, mysql_stmt_error(stmt)); \
-    }
-
-// Return for queries that don't return any rows
-#define MYSQL_RETURN() \
-	return {{}, 0};
-
-// Return for queries that are expected to fetch zero or one rows
-#define MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS()                                                                \
-	u64 row_count = 0;                                                                                           \
-	while(true) {                                                                                                \
-		int status = mysql_stmt_fetch(stmt);                                                                     \
-		if(status == 1) {                                                                                        \
-			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
-			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
-		}                                                                                                        \
-		if(status == MYSQL_NO_DATA) break;                                                                       \
-		++row_count;                                                                                             \
-	}                                                                                                            \
-	if(row_count > 1) {                                                                                          \
-		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);            \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_DATABASE_TOO_MANY_RESULTS, row_count, row_count);                \
-	}                                                                                                            \
-	return {{result}, row_count};
-
-// Return for queries that are expected to fetch and return a single row of data.
-#define MYSQL_FETCH_AND_RETURN_SINGLE_ROW()                                                                      \
-	u64 row_count = 0;                                                                                           \
-	while(true) {                                                                                                \
-		int status = mysql_stmt_fetch(stmt);                                                                     \
-		if(status == 1) {                                                                                        \
-			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
-			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
-		}                                                                                                        \
-		if(status == MYSQL_NO_DATA) break;                                                                       \
-		++row_count;                                                                                             \
-	}                                                                                                            \
-	if(row_count != 1) {                                                                                         \
-		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);                 \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_DATABASE_UNEXPECTED_ROW_COUNT, row_count, row_count);            \
-	}                                                                                                            \
-	return {{result}, 1};
-
-// Return for queries that are expected to fetch and return 0 or more rows of data.
-#define MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS()                                                                   \
-	u64 row_count = 0;                                                                                           \
-	while(true) {                                                                                                \
-		int status = mysql_stmt_fetch(stmt);                                                                     \
-		if(status == 1) {                                                                                        \
-			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
-			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
-		}                                                                                                        \
-		if(status == MYSQL_NO_DATA) break;                                                                       \
-		results.push_back(result);                                                                               \
-		++row_count;                                                                                             \
-	}                                                                                                            \
-	return {results, row_count};
-
+//static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to use different databases, right?
 
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	const char* query = R"(
 		INSERT INTO draft_events(
 			guild_id,     -- 0
@@ -1704,7 +1360,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 }
 
 static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id, const std::shared_ptr<Draft_Event> event) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	const char* query = R"(
 		UPDATE draft_events SET
 			format=?,       -- 0
@@ -1753,7 +1409,7 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 
 // TODO: Rename database_get_draft?
 static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 
 	const char* query = R"(
 		SELECT
@@ -1826,7 +1482,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 }
 
 static const Database_Result<std::vector<Draft_Event>> database_get_all_events(const u64 guild_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 
 	const char* query = R"(
 		SELECT
@@ -1944,7 +1600,7 @@ struct Draft_Signup_Status {
 };
 
 static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(const u64 guild_id, const std::string& draft_code, const u64 member_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	const char* query = "SELECT status, time, preferred_name FROM draft_signups WHERE guild_id=? AND member_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -1971,7 +1627,7 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 }
 
 static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 guild_id, const std::string& draft_code, const u64 member_id, const std::string& preferred_name, const time_t timestamp, const SIGNUP_STATUS status) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	const char* query = "INSERT INTO draft_signups (guild_id, member_id, preferred_name, draft_code, time, status) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE preferred_name=?, time=?, status=?";
 	MYSQL_STATEMENT();
 
@@ -1993,7 +1649,7 @@ static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 
 // Get a list of all sign ups for a draft, sorted by time
 // TODO: This gets passed around a bunch of threads so likely should be a shared_ptr
 static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draft_sign_ups(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	const char* query = "SELECT member_id, preferred_name, time, status FROM draft_signups WHERE guild_id=? AND draft_code=? ORDER BY time";
 	MYSQL_STATEMENT();
 
@@ -2043,7 +1699,7 @@ struct Draft_Sign_Up {
 
 // TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
 static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = R"(
 		SELECT
 			draft_signups.member_id,
@@ -2133,7 +1789,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 #if 0
 // TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
 static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = R"(
 		SELECT
 			draft_signups.member_id,
@@ -2229,7 +1885,7 @@ struct Member {
 };
 
 static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const char* draft_code, std::string& prefix) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	prefix += "%";
 	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT 25";
 	MYSQL_STATEMENT();
@@ -2253,7 +1909,7 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 }
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
 	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
@@ -2279,7 +1935,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 }
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_edit_draft_autocomplete(const u64 guild_id, std::string& prefix) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
 	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
@@ -2302,7 +1958,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 }
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_delete_draft_autocomplete(const u64 guild_id, std::string& prefix) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
 	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status>=? AND status<? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
@@ -2330,7 +1986,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 }
 
 static Database_Result<Database_No_Value> database_set_details_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET details_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2344,7 +2000,7 @@ static Database_Result<Database_No_Value> database_set_details_message_id(const 
 }
 
 static Database_Result<Database_No_Value> database_set_signups_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET signups_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2358,7 +2014,7 @@ static Database_Result<Database_No_Value> database_set_signups_message_id(const 
 }
 
 static Database_Result<Database_No_Value> database_set_reminder_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET reminder_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2372,7 +2028,7 @@ static Database_Result<Database_No_Value> database_set_reminder_message_id(const
 }
 
 static Database_Result<std::string> database_get_next_upcoming_draft(const u64 guild_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "SELECT draft_code FROM draft_events WHERE status>? AND status<? AND guild_id=? ORDER BY time ASC LIMIT 1";
 	MYSQL_STATEMENT();
 
@@ -2395,7 +2051,7 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 }
 
 static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET details_id=0, signups_id=0 WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2408,7 +2064,7 @@ static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u6
 }
 
 static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string& draft_code, const DRAFT_STATUS status) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET status=status|? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2422,7 +2078,7 @@ static Database_Result<Database_No_Value> database_set_draft_status(const u64 gu
 }
 
 static Database_Result<Database_No_Value> database_purge_draft_event(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "DELETE FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2442,7 +2098,7 @@ struct Draft_Post_IDs {
 
 // TODO: Don't need this? No function calls this that doesn't call database_get_event
 static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?"; 
 	MYSQL_STATEMENT();
 
@@ -2463,7 +2119,7 @@ static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 gui
 }
 
 static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild_id, const char* draft_code, const u64 role_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_roles (guild_id, draft_code, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
@@ -2477,7 +2133,7 @@ static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild
 }
 
 static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "SELECT role_id FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2498,7 +2154,7 @@ static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild
 }
 
 static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "DELETE FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2512,7 +2168,7 @@ static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guil
 
 #if 0
 static Database_Result<Database_No_Value> database_add_temp_thread(const u64 guild_id, const u64 thread_id, const char* draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_threads (guild_id, draft_code, thread_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
@@ -2528,7 +2184,7 @@ static Database_Result<Database_No_Value> database_add_temp_thread(const u64 gui
 
 #if 0
 static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "SELECT thread_id FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2552,7 +2208,7 @@ static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 gui
 
 #if 0
 static Database_Result<Database_No_Value> database_del_temp_threads(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char *query = "DELETE FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2569,7 +2225,7 @@ static Database_Result<Database_No_Value> database_del_temp_threads(const u64 gu
 #if 0
 // Not used, but may want this back in the short term.
 static Database_Result<Database_No_Value> database_add_temp_member_role(const u64 guild_id, const u64 member_id, const u64 role_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_members (guild_id, member_id, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
@@ -2584,7 +2240,7 @@ static Database_Result<Database_No_Value> database_add_temp_member_role(const u6
 #endif
 
 static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const char* draft_code) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
@@ -2598,7 +2254,7 @@ static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id
 }
 
 static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const char* draft_code, const char* note) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
 
@@ -2613,7 +2269,7 @@ static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_i
 }
 
 static Database_Result<Database_No_Value> database_delete_member_from_all_sign_ups(const u64 guild_id, const u64 member_id) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "DELETE FROM draft_signups WHERE guild_id=? AND member_id=?";
 	MYSQL_STATEMENT();
 
@@ -2626,7 +2282,7 @@ static Database_Result<Database_No_Value> database_delete_member_from_all_sign_u
 }
 
 static Database_Result<Database_No_Value> database_update_banner_timestamp(const u64 guild_id, const char* draft_code, const time_t timestamp) {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET banner_timestamp=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
@@ -2648,7 +2304,7 @@ struct XMage_Version {
 };
 
 static Database_Result<XMage_Version> database_get_xmage_version() {
-	MYSQL_CONNECT();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
 	static const char* query = "SELECT version, timestamp FROM xmage_version ORDER BY timestamp DESC LIMIT 1";
 	MYSQL_STATEMENT();
 
