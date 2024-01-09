@@ -3,6 +3,8 @@
 
 #include <string>
 
+#include <fmt/format.h>
+
 enum GLOBAL_ERROR {
 	ERROR_NONE,
 
