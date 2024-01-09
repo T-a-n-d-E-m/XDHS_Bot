@@ -3733,7 +3733,7 @@ static void output_sql() {
 	fprintf(stdout, "week_13 INT DEFAULT NULL,\n");
 	fprintf(stdout, "points INT NOT NULL DEFAULT 0,\n"); // TODO: Calculate this in a query? SUM(week_01, week_02, ...) etc.
 	fprintf(stdout, "average FLOAT NOT NULL DEFAULT 0.0,\n"); // TODO: Calculate this in a query.
-	fprintf(stdout, "drafts INT NOT NULL DEFAULT 0,\n");
+	fprintf(stdout, "drafts INT NOT NULL DEFAULT 0,\n"); // TODO: This could be TINY
 	fprintf(stdout, "trophies INT NOT NULL DEFAULT 0,\n"); // TODO: Calculate this in a query
 	fprintf(stdout, "win_rate FLOAT NOT NULL DEFAULT 0.0,\n");
 	fprintf(stdout, "UNIQUE KEY key_triplicate(league, season, member_id)\n");
@@ -3888,6 +3888,7 @@ int main(int argc, char* argv[]) {
     fprintf(stdout, "logfile_path   = '%s'\n", g_config.logfile_path);
     fprintf(stdout, "discord_token  = '%s'\n", g_config.discord_token);
     fprintf(stdout, "xmage_server   = '%s'\n", g_config.xmage_server);
+    fprintf(stdout, "api_key        = '%s'\n", g_config.api_key);
 #endif
 
 	// EventBot runs as a Linux systemd service, so we need to gracefully handle these signals.

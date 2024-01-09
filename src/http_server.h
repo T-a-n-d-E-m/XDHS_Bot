@@ -50,11 +50,10 @@
 
 
 static const char* HTTP_SERVER_BIND_ADDRESS = "0.0.0.0";
-static const uint16_t HTTP_SERVER_BIND_PORT = 8000;
+static const uint16_t HTTP_SERVER_BIND_PORT = 8181;
 static const char* HTTP_SERVER_FQDN = "http://harvest-sigma.bnr.la"; // FIXME: This mirrors g_config.eventbot_host
-static const char* HTTP_SERVER_DOC_ROOT = "./www-root/";
+static const char* HTTP_SERVER_DOC_ROOT = "www-root"; // Relative to executable
 
-static const char* HTTP_SERVER_API_KEY = "1234567890ABCDEF";
 
 static void start_thread(void *(*f)(void *), void *p) {
 	pthread_t thread_id = (pthread_t) 0;
@@ -489,6 +488,67 @@ void print_leaderboard(const Leaderboard* l) {
 	fprintf(stderr, "]\n");
 }
 
+static Database_Result<Database_No_Value> database_upsert_leaderboard(const Leaderboard* leaderboard) {
+    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	static const char* query = R"(REPLACE INTO leaderboards (
+        league,    -- 0
+        season,    -- 1
+        member_id, -- 2
+        rank,      -- 3
+        week_01,   -- 4
+        week_02,   -- 5
+        week_03,   -- 6
+        week_04,   -- 7
+        week_05,   -- 8
+        week_06,   -- 9
+        week_07,   -- 10
+        week_08,   -- 11
+        week_09,   -- 12
+        week_10,   -- 13
+        week_11,   -- 14
+        week_12,   -- 15
+        week_13,   -- 16
+        points,    -- 17
+        average,   -- 18
+        drafts,    -- 19
+        trophies,  -- 20
+        win_rate)  -- 21
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+    for(int row = 0; row < leaderboard->row_count; ++row) {
+        MYSQL_STATEMENT();
+
+        MYSQL_INPUT_INIT(22);
+            MYSQL_INPUT( 0, MYSQL_TYPE_STRING, leaderboard->league, strlen(leaderboard->league));
+            MYSQL_INPUT( 1, MYSQL_TYPE_LONG, &leaderboard->season, sizeof(leaderboard->season));
+            MYSQL_INPUT( 2, MYSQL_TYPE_LONGLONG, &leaderboard->rows[row].member_id, sizeof(leaderboard->rows[row].member_id));
+            MYSQL_INPUT( 3, MYSQL_TYPE_LONG, &leaderboard->rows[row].rank, sizeof(leaderboard->rows[row].rank));
+
+            MYSQL_INPUT( 4, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 0], sizeof(leaderboard->rows[row].points[ 0]));
+            MYSQL_INPUT( 5, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 1], sizeof(leaderboard->rows[row].points[ 1]));
+            MYSQL_INPUT( 6, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 2], sizeof(leaderboard->rows[row].points[ 2]));
+            MYSQL_INPUT( 7, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 3], sizeof(leaderboard->rows[row].points[ 3]));
+            MYSQL_INPUT( 8, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 4], sizeof(leaderboard->rows[row].points[ 4]));
+            MYSQL_INPUT( 9, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 5], sizeof(leaderboard->rows[row].points[ 5]));
+            MYSQL_INPUT(10, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 6], sizeof(leaderboard->rows[row].points[ 6]));
+            MYSQL_INPUT(11, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 7], sizeof(leaderboard->rows[row].points[ 7]));
+            MYSQL_INPUT(12, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 8], sizeof(leaderboard->rows[row].points[ 8]));
+            MYSQL_INPUT(13, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 9], sizeof(leaderboard->rows[row].points[ 9]));
+            MYSQL_INPUT(14, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[10], sizeof(leaderboard->rows[row].points[10]));
+            MYSQL_INPUT(15, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[11], sizeof(leaderboard->rows[row].points[11]));
+            MYSQL_INPUT(16, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[12], sizeof(leaderboard->rows[row].points[12]));
+
+            MYSQL_INPUT(17, MYSQL_TYPE_LONG, &leaderboard->rows[row].points, sizeof(leaderboard->rows[row].points));
+            MYSQL_INPUT(18, MYSQL_TYPE_FLOAT, &leaderboard->rows[row].average, sizeof(leaderboard->rows[row].average));
+            MYSQL_INPUT(19, MYSQL_TYPE_LONG, &leaderboard->rows[row].drafts, sizeof(leaderboard->rows[row].drafts));
+            MYSQL_INPUT(20, MYSQL_TYPE_LONG, &leaderboard->rows[row].trophies, sizeof(leaderboard->rows[row].trophies));
+            MYSQL_INPUT(21, MYSQL_TYPE_FLOAT, &leaderboard->rows[row].win_rate, sizeof(leaderboard->rows[row].win_rate));
+        MYSQL_INPUT_BIND_AND_EXECUTE();
+    }
+
+    MYSQL_RETURN();
+}
+
 http_response parse_leaderboards(const mg_str json) {
 	Leaderboard leaderboard;
 	memset(&leaderboard, 0, sizeof(Leaderboard));
@@ -573,6 +633,10 @@ http_response parse_leaderboards(const mg_str json) {
 
 	print_leaderboard(&leaderboard);
 
+    if(is_error(database_upsert_leaderboard(&leaderboard))) {
+	    return {200, mg_mprintf(R"({"result":"database_upsert_leaderboard() failed"})")};
+    }
+
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
 
@@ -594,10 +658,11 @@ http_response make_thumbnail(const mg_str json) {
 	}
 
 	char local_file_path[FILENAME_MAX];
-	snprintf(local_file_path, FILENAME_MAX, "./static/badge_thumbnails/%s", filename);
+	snprintf(local_file_path, FILENAME_MAX, "%s/static/badge_thumbnails/%s", HTTP_SERVER_DOC_ROOT, filename);
 	if(access(local_file_path, F_OK) == 0) {
 		return {200, mg_mprintf(R"({"result":"%s"})", filename)};
 	} else {
+        log(LOG_LEVEL_DEBUG, "%s: downloadfile(%s)", __FUNCTION__, url);
 		auto buffer = download_file(url);
 		if(has_value(buffer)) {
 			SCOPE_EXIT(free(buffer.value.data));
@@ -610,10 +675,10 @@ http_response make_thumbnail(const mg_str json) {
 				uint8_t* resized = (uint8_t*)alloca(THUMBNAIL_SIZE*THUMBNAIL_SIZE*4);
 				stbir_resize_uint8_srgb(img, width, height, 0, resized, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 0, STBIR_RGBA);
 
-				snprintf(local_file_path, FILENAME_MAX, "static/badge_thumbnails/%s", filename);
+				snprintf(local_file_path, FILENAME_MAX, "%s/static/badge_thumbnails/%s", HTTP_SERVER_DOC_ROOT, filename);
 				stbi_write_png_compression_level = 9;
 				if(stbi_write_png(local_file_path, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 4, resized, THUMBNAIL_SIZE*4) != 0) {
-					return {201, mg_mprintf(R"({"result":"%s:%s/%s"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, local_file_path)};
+					return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_thumbnails/%s"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, filename)};
 				} else {
 					return {500, mg_mprintf(R"({"result":"%s"})", "saving file failed")};
 				}
@@ -690,11 +755,12 @@ http_response pdf_to_png(const mg_str json) {
     poppler::page_renderer renderer;
     poppler::image img = renderer.render_page(page, dpi, dpi, 0, 0, width, height);
 
+    time_t timestamp = time(NULL);
 	char file_path[FILENAME_MAX];
-	snprintf(file_path, FILENAME_MAX, "static/badge_cards/%lu_%lu.png", member_id, time(NULL));
+	snprintf(file_path, FILENAME_MAX, "%s/static/badge_cards/%lu_%lu.png", HTTP_SERVER_DOC_ROOT, member_id, timestamp);
     img.save(file_path, "png");
 
-	return {201, mg_mprintf(R"({"result":"%s:%d/%s"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, file_path)};
+	return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_cards/%lu_%lu.png"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp)};
 }
 
 static Database_Result<Database_No_Value> database_clear_commands() {
@@ -822,7 +888,7 @@ static void *post_thread_function(void *param) {
 	if(p->content_type.ptr == NULL || mg_strcmp(p->content_type, mg_str("application/json")) != 0) {
 		response = {400, strdup("JSON payload required")};
 	} else
-	if(p->api_key.ptr == NULL || mg_strcmp(p->api_key, mg_str(HTTP_SERVER_API_KEY)) != 0) {
+	if(p->api_key.ptr == NULL || mg_strcmp(p->api_key, mg_str(g_config.api_key)) != 0) {
 		response = {401, strdup("Invalid API key")};
 	} else {
 		if(mg_match(p->uri, mg_str("/api/v1/stats"), NULL)) {
@@ -923,4 +989,4 @@ void http_server_free() {
 	mg_mgr_free(&g_mgr);
 }
 
-#endif // HTTP_SERVER_H_INCLUDD
+#endif // HTTP_SERVER_H_INCLUDED
