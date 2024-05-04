@@ -397,6 +397,9 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"RVR", "Ravnica Remastered",                          1, false},
     {"MKM", "Murders at Karlov Manor",                     0, false}, // TODO: Need art
 	{"PIP", "Fallout",                                     0, false}, // TODO: Need art
+    {"OTJ", "Outlaws of Thunder Junction",                 0, false},
+    {"MH3", "Modern Horizons 3",                           0, false},
+    {"BLB", "Bloomburrow",                                 0, false},
 
 	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
