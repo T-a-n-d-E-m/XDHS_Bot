@@ -395,11 +395,10 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"WOE", "Wilds of Eldraine",                           1, false},
 	{"LCI", "Lost Caverns of Ixalan",                      1, false},
 	{"RVR", "Ravnica Remastered",                          1, false},
-    {"MKM", "Murders at Karlov Manor",                     0, false}, // TODO: Need art
-	{"PIP", "Fallout",                                     0, false}, // TODO: Need art
-    {"OTJ", "Outlaws of Thunder Junction",                 0, false},
-    {"MH3", "Modern Horizons 3",                           0, false},
-    {"BLB", "Bloomburrow",                                 0, false},
+	{"MKM", "Murders at Karlov Manor",                     1, false},
+	{"OTJ", "Outlaws of Thunder Junction",                 1, false},
+	{"MH3", "Modern Horizons 3",                           1, false},
+	{"BLB", "Bloomburrow",                                 1, false},
 
 	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
