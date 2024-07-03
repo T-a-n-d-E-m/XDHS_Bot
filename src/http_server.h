@@ -393,23 +393,23 @@ http_response parse_stats(const mg_str json) {
 
 	if(mg_json_get_num(json, "$.win_rate_recent.chrono", &stats.win_rate_recent.chrono) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_recent.chrono' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_recent.bonus", &stats.win_rate_recent.bonus) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_recent.bonus' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_recent.overall", &stats.win_rate_recent.overall) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_recent.overall' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_all_time.chrono", &stats.win_rate_all_time.chrono) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.chrono' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_all_time.bonus", &stats.win_rate_all_time.bonus) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.bonus' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_all_time.overall", &stats.win_rate_all_time.overall) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.overall' key not found"})")};
@@ -923,7 +923,7 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 
 	if (event == MG_EV_HTTP_MSG) {
 		mg_http_message *message = (mg_http_message *) event_data;
-		
+
 		if(mg_match(message->method, mg_str("GET"), NULL)) {
 			mg_http_serve_opts opts;
 			memset(&opts, 0, sizeof(mg_http_serve_opts));
@@ -961,9 +961,9 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 	if (event == MG_EV_WAKEUP) {
 		http_response* response = (http_response*) ((mg_str*)event_data)->ptr;
 		mg_http_reply(con,
-				response->result,
-				"",
-				"%s\n", response->str);
+			response->result,
+			"",
+			"%s\n", response->str);
 
 		free((void*)response->str);
 	}
@@ -975,8 +975,8 @@ void http_server_init() {
 	mg_log_level = MG_LL_DEBUG;
 	mg_mgr_init(&g_mgr);
 	mg_log_set(MG_LL_DEBUG);
-	char listen[32];
-	snprintf(listen, 32, "%s:%d", HTTP_SERVER_BIND_ADDRESS, HTTP_SERVER_BIND_PORT);
+	char listen[64];
+	snprintf(listen, 64, "%s:%d", HTTP_SERVER_BIND_ADDRESS, HTTP_SERVER_BIND_PORT);
 	mg_http_listen(&g_mgr, listen, http_server_func, NULL);
 	mg_wakeup_init(&g_mgr);
 }

@@ -48,3 +48,5 @@ DPP: https://github.com/brainboxdotcc/DPP
 fmt: https://github.com/fmtlib/fmt
 
 MySQL or MariaDB, curl (Install with package manager)
+
+ libpoppler-cpp https://poppler.freedesktop.org/api/cpp/
