@@ -635,7 +635,6 @@ enum LEAGUE_ID {
 	LEAGUE_ID_EURO_CHRONO,
 	LEAGUE_ID_ASIA_CHRONO,
 	LEAGUE_ID_PACIFIC_CHRONO,
-	LEAGUE_ID_ATLANTIC_BONUS,
 	LEAGUE_ID_AMERICAS_BONUS,
 	LEAGUE_ID_EURO_BONUS,
 };
@@ -646,7 +645,6 @@ static const char* to_cstring(const LEAGUE_ID id) {
 		case LEAGUE_ID_EURO_CHRONO:     return "Euro Chrono";
 		case LEAGUE_ID_ASIA_CHRONO:     return "Asia Chrono";
 		case LEAGUE_ID_PACIFIC_CHRONO:  return "Pacific Chrono";
-		case LEAGUE_ID_ATLANTIC_BONUS:  return "Atlantic Bonus";
 		case LEAGUE_ID_AMERICAS_BONUS:  return "Americas Bonus";
 		case LEAGUE_ID_EURO_BONUS:      return "Euro Bonus";
 	}
@@ -702,14 +700,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		"America/New_York",
 		{20,50},
 		{"Pacific", NULL},
-	},
-	{
-		LEAGUE_ID_ATLANTIC_BONUS,
-		'T','B',
-		0x00ed8821,
-		"Europe/Berlin",
-		{19,50},
-		{"Euro", "Americas"},
 	},
 	{
 		LEAGUE_ID_AMERICAS_BONUS,
@@ -4060,12 +4050,6 @@ int main(int argc, char* argv[]) {
 					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
 
 					opts.datetime += date::format(" || %a %b %d @ %H:%M %Z", date::make_zoned("Australia/Sydney", zoned_time));
-				} break;
-
-				case LEAGUE_ID_ATLANTIC_BONUS: {
-					// Euro and American - Date is the same
-					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/New_York", zoned_time));
-					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
 				} break;
 
 				case LEAGUE_ID_EURO_BONUS: {
