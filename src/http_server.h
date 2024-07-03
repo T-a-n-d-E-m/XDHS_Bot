@@ -660,7 +660,7 @@ http_response make_thumbnail(const mg_str json) {
 	char local_file_path[FILENAME_MAX];
 	snprintf(local_file_path, FILENAME_MAX, "%s/static/badge_thumbnails/%s", HTTP_SERVER_DOC_ROOT, filename);
 	if(access(local_file_path, F_OK) == 0) {
-		return {200, mg_mprintf(R"({"result":"%s"})", filename)};
+		return {200, mg_mprintf(R"({"result":"%s:%d/static/badge_thumbnails/%s"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, filename)};
 	} else {
         log(LOG_LEVEL_DEBUG, "%s: downloadfile(%s)", __FUNCTION__, url);
 		auto buffer = download_file(url);
