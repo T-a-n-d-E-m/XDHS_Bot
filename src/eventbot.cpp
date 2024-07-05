@@ -95,6 +95,7 @@
 #endif // #ifndef
 
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
+#include "constants.h"
 #include "http_server.h"
 #include "image.h"
 #include "database.h"
@@ -144,7 +145,7 @@ static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
 #ifdef DEBUG
 // The bot will be running in debug mode on the XDHS Dev server.
 static const char* BUILD_MODE                    = "Debug";
-static const char* DATABASE_NAME                 = "XDHS";//_Debug
+//static const char* DATABASE_NAME                 = "EventBot_Debug";
 static const u64 GUILD_ID                        = 882164794566791179;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft sign up.
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 1087299085612109844;
@@ -163,7 +164,7 @@ static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
 #ifdef RELEASE
 // The bot will be running in release mode on the XDHS public server.
 static const char* BUILD_MODE                    = "Release";
-static const char* DATABASE_NAME                 = "XDHS_Release";
+//static const char* DATABASE_NAME                 = "EventBot_Release";
 static const u64 GUILD_ID                        = 528728694680715324;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 753639027428687962; // Default channel to post the draft sign up.
 static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 921027014822068234;
@@ -945,9 +946,6 @@ static const size_t DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX = 128;
 
 // The maximum allowed byte length for each 'blurb' paragraph in the draft details post.
 static const size_t DRAFT_BLURB_LENGTH_MAX = 512;
-
-// URLs can potentially be much longer than this but with Discord message character limits we want to keep things short and sweet.
-static const size_t URL_LENGTH_MAX = 512;
 
 // Maximum length of the filename for a downloaded banner file.
 static const size_t BANNER_FILENAME_MAX = 64;
@@ -3687,7 +3685,7 @@ int main(int argc, char* argv[]) {
     log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
 	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
-	log(LOG_LEVEL_INFO, "mongoose version: %s",       MG_VERSION);
+	log(LOG_LEVEL_INFO, "mongoose version: %s [%lu]", MG_VERSION, MG_MAX_RECV_SIZE);
 
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
