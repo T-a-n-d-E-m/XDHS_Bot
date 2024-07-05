@@ -12,18 +12,21 @@
 if [[ $1 == 'release' ]]; then
 	BUILD_MODE="-DRELEASE -O3"
 else
-	BUILD_MODE="-DDEBUG -g"
+	BUILD_MODE="-DDEBUG -g -O3"
 fi
 
 # Opts for Howard Hinnant's date/tz library.
 LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1" # -DAUTO_DOWNLOAD=1
+
+# Opts for mongoose HTTP server
+MONGOOSE_OPTS="-DMG_MAX_RECV_SIZE=52428800 -DMG_IO_SIZE=1048576"
 
 # Libraries to link with
 LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpoppler-cpp -lpthread"
 
 # -Wno-volatile for mongoose
 # -Wno-unused_function for stbi_resize
-time g++ -std=c++20 $BUILD_MODE -DEVENTBOT -Wall -Werror -Wpedantic -Wno-volatile -Wno-unused-function -fno-rtti $LIB_DATE_OPTS -I./src/date ./src/mongoose.c ./src/tz.cpp ./src/eventbot.cpp $LIBS -o eventbot
+time g++ -std=c++20 $BUILD_MODE -DEVENTBOT -Wall -Werror -Wpedantic -Wno-volatile -Wno-unused-function -fno-rtti $LIB_DATE_OPTS $MONGOOSE_OPTS -I./src/date ./src/mongoose.c ./src/tz.cpp ./src/eventbot.cpp $LIBS -o eventbot
 
 # If compiling elsewhere...
 if [ "$HOSTNAME" != harvest-sigma ]; then
