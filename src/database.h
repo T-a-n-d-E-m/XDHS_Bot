@@ -10,6 +10,8 @@
 #include <mysql.h>
 #include <fmt/format.h>
 
+static const char* DATABASE_NAME                 = "XDHS";//_Debug
+
 template<typename Value_Type, typename Error_String_Type = std::string>
 struct Database_Result : Result<Value_Type, Error_String_Type> {
     std::uint64_t count;
@@ -31,7 +33,7 @@ struct Database_Result : Result<Value_Type, Error_String_Type> {
 // For database_ functions that return no data. We could use template specialization here but this is simpler.
 struct Database_No_Value {};
 
-#define MYSQL_CONNECT(host, username, password, database, port)                                                                            \
+#define MYSQL_CONNECT(host, username, password, database, port)                     \
 	MYSQL* mysql = mysql_init(NULL);                                                \
 	if(mysql == NULL) {                                                             \
 		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");                            \
