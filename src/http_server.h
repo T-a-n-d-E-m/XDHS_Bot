@@ -12,6 +12,8 @@
 #include "mongoose.h"
 #define closesocket(x) close(x)
 
+#include "constants.h"
+
 #include "database.h"
 #include "config.h"
 #include "curl.h"
@@ -691,6 +693,22 @@ http_response make_thumbnail(const mg_str json) {
 	}
 }
 
+static Database_Result<Database_No_Value> database_upsert_badge_card(const uint64_t member_id, const char* url) {
+    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	static const char* query = "REPLACE INTO badges (id, url, timestamp) VALUES (?,?,?)";
+	MYSQL_STATEMENT();
+
+	time_t timestamp = time(NULL);
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING, url, strlen(url));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &timestamp, sizeof(timestamp));
+    MYSQL_INPUT_BIND_AND_EXECUTE();
+
+    MYSQL_RETURN();
+}
+
 
 http_response pdf_to_png(const mg_str json) {
 	int width;
@@ -753,6 +771,7 @@ http_response pdf_to_png(const mg_str json) {
     poppler::page *page = pdf->create_page(0);
     SCOPE_EXIT(delete page);
     poppler::page_renderer renderer;
+	renderer.set_render_hints(poppler::page_renderer::text_antialiasing | poppler::page_renderer::text_hinting);
     poppler::image img = renderer.render_page(page, dpi, dpi, 0, 0, width, height);
 
     time_t timestamp = time(NULL);
@@ -760,7 +779,12 @@ http_response pdf_to_png(const mg_str json) {
 	snprintf(file_path, FILENAME_MAX, "%s/static/badge_cards/%lu_%lu.png", HTTP_SERVER_DOC_ROOT, member_id, timestamp);
     img.save(file_path, "png");
 
-	return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_cards/%lu_%lu.png"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp)};
+	char url[URL_LENGTH_MAX + 1];
+	snprintf(url, URL_LENGTH_MAX, "%s:%d/static/badge_cards/%lu_%lu.png", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp);
+	database_upsert_badge_card(member_id, url);
+
+	//return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_cards/%lu_%lu.png"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp)};
+	return {201, mg_mprintf(R"({"result":"%s"})", url)};
 }
 
 static Database_Result<Database_No_Value> database_clear_commands() {
@@ -972,9 +996,8 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 mg_mgr g_mgr;
 
 void http_server_init() {
-	mg_log_level = MG_LL_DEBUG;
+	mg_log_set(MG_LL_INFO);
 	mg_mgr_init(&g_mgr);
-	mg_log_set(MG_LL_DEBUG);
 	char listen[64];
 	snprintf(listen, 64, "%s:%d", HTTP_SERVER_BIND_ADDRESS, HTTP_SERVER_BIND_PORT);
 	mg_http_listen(&g_mgr, listen, http_server_func, NULL);
