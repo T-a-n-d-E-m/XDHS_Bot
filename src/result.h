@@ -53,6 +53,10 @@ enum GLOBAL_ERROR {
 	// download_file
 	ERROR_CURL_INIT,
 	ERROR_DOWNLOAD_FAILED,
+
+	// upload file
+	ERROR_UPLOAD_FAILED,
+	ERROR_UPLOAD_TO_IMGUR_FAILED
 };
 
 static const char* to_cstring(const GLOBAL_ERROR e) {
@@ -95,8 +99,11 @@ static const char* to_cstring(const GLOBAL_ERROR e) {
 		case ERROR_INVALID_PACK_COUNT:    return "Internal EventBot error: Unexpected background image count of {}.";
 		case ERROR_FAILED_TO_SAVE_BANNER: return "Internal EventBot error: Failed to save generated banner to storage. If this is the first instance of seeing this error, please try again.";
 
-		case ERROR_CURL_INIT:       return "Internal EventBot error: curl_easy_init() failed.";
-		case ERROR_DOWNLOAD_FAILED: return "Internal EventBot error: Downloading file '{}' failed: {}";
+		case ERROR_CURL_INIT:       return "Internal error: curl_easy_init() failed.";
+		case ERROR_DOWNLOAD_FAILED: return "Internal error: Downloading file '{}' failed: {}";
+
+		case ERROR_UPLOAD_FAILED: return "Internal error: Uploading file to Imgur failed: {}";
+		case ERROR_UPLOAD_TO_IMGUR_FAILED:   return "Internal error: Uploading file to Imgur failed: {}";
 	}
 
 	return "unknown error";

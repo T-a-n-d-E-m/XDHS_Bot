@@ -17,13 +17,11 @@ struct config {
     char* logfile_path;
     char* discord_token;
 #endif // BADGEBOT_BOT || EVENTBOT
-#if defined(BADGEBOT_BOT)
-    char* imgur_client_secret;
-#endif
 #if defined(EVENTBOT)
 	char* xmage_server;
 	char* eventbot_host;
     char* api_key;
+    char* imgur_client_secret;
 #endif
 
 	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
@@ -34,9 +32,7 @@ struct config {
 		if(mysql_password != NULL) free(mysql_password);
 		if(logfile_path != NULL)   free(logfile_path);
 		if(discord_token != NULL)  free(discord_token);
-#if defined(BADGEBOT_BOT)
 		if(imgur_client_secret != NULL) free(imgur_client_secret);
-#endif
 		if(xmage_server != NULL)   free(xmage_server);
 		if(eventbot_host != NULL)  free(eventbot_host);
         if(api_key != NULL)        free(api_key);
@@ -68,12 +64,6 @@ static void config_file_kv_pair_callback(const char* key, const char* value) {
         g_config.discord_token = strndup(value, value_len);
     }
 #endif // BADGEBOT_BOT || EVENTBOT
-#if defined(BADGEBOT_BOT)
-	else
-    if(strcmp(key, "imgur_client_secret") == 0) {
-        g_config.imgur_client_secret = strndup(value, value_len);
-    }
-#endif // BADGEBOT_BOT
 #if defined(EVENTBOT)
 	else
 	if(strcmp(key, "xmage_server") == 0) {
@@ -84,6 +74,9 @@ static void config_file_kv_pair_callback(const char* key, const char* value) {
 	} else
     if(strcmp(key, "api_key") == 0) {
 		g_config.api_key = strndup(value, value_len);
+    } else
+    if(strcmp(key, "imgur_client_secret") == 0) {
+        g_config.imgur_client_secret = strndup(value, value_len);
     }
 #endif // EVENTBOT
 }

@@ -26,3 +26,6 @@ xmage_server = xmage.today
 
 # The HTTP server API_KEY
 api_key = 1234567890ABCDEF
+
+# Imgur client secret key
+imgur_client_secret = 1234567890ABCDEF

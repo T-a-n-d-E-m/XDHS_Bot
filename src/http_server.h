@@ -50,10 +50,19 @@
 #include "poppler/cpp/poppler-page.h"
 #include "poppler/cpp/poppler-page-renderer.h"
 
+// NOTE to future me. For reasons I don't care to investigate right now, the
+// timestamps that Python generates are 10 hours behind the timestamps
+// that time(NULL) returns.
+//
+// As a temporary fix I'm subtracting 10 hours from timestamps.
+//
+// Once the Python API server is completely gone
+// find everywhere in here that calls time(NULL)-(10*60*60) and remove the
+// adjustment.
 
 static const char* HTTP_SERVER_BIND_ADDRESS = "0.0.0.0";
 static const uint16_t HTTP_SERVER_BIND_PORT = 8181;
-static const char* HTTP_SERVER_FQDN = "http://harvest-sigma.bnr.la"; // FIXME: This mirrors g_config.eventbot_host
+static const char* HTTP_SERVER_FQDN = "http://harvest-sigma.bnr.la"; // FIXME: This mirrors g_config.eventbot_host.
 static const char* HTTP_SERVER_DOC_ROOT = "www-root"; // Relative to executable
 
 
@@ -137,7 +146,7 @@ static Database_Result<Database_No_Value> database_touch_stats(const Stats* stat
     static const char* query = "REPLACE INTO stats (id, timestamp) VALUES (?,?)";
     MYSQL_STATEMENT();
 
-    time_t timestamp = time(NULL);
+    time_t timestamp = time(NULL) - (10*60*60); // NOTE: Temporary time adjustment until the ?stats command is moved to C++
 
     MYSQL_INPUT_INIT(2);
     MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
@@ -263,35 +272,35 @@ static Database_Result<Database_No_Value> database_upsert_win_rate_recent(const 
 
 
 void print_stats(const Stats* s) {
-	fprintf(stderr, "member_id : %lu\n", s->member_id);
-	fprintf(stderr, "devotion.name  : %s\n", s->devotion.name);
-	fprintf(stderr, "devotion.value : %d\n", s->devotion.value);
-	fprintf(stderr, "devotion.next  : %d\n", s->devotion.next);
+	log(LOG_LEVEL_DEBUG, "member_id : %lu\n", s->member_id);
+	log(LOG_LEVEL_DEBUG, "devotion.name  : %s\n", s->devotion.name);
+	log(LOG_LEVEL_DEBUG, "devotion.value : %d\n", s->devotion.value);
+	log(LOG_LEVEL_DEBUG, "devotion.next  : %d\n", s->devotion.next);
 
-	fprintf(stderr, "victory.name  : %s\n", s->victory.name);
-	fprintf(stderr, "victory.value : %d\n", s->victory.value);
-	fprintf(stderr, "victory.next  : %d\n", s->victory.next);
+	log(LOG_LEVEL_DEBUG, "victory.name  : %s\n", s->victory.name);
+	log(LOG_LEVEL_DEBUG, "victory.value : %d\n", s->victory.value);
+	log(LOG_LEVEL_DEBUG, "victory.next  : %d\n", s->victory.next);
 
-	fprintf(stderr, "trophies.name  : %s\n", s->trophies.name);
-	fprintf(stderr, "trophies.value : %d\n", s->trophies.value);
-	fprintf(stderr, "trophies.next  : %d\n", s->trophies.next);
+	log(LOG_LEVEL_DEBUG, "trophies.name  : %s\n", s->trophies.name);
+	log(LOG_LEVEL_DEBUG, "trophies.value : %d\n", s->trophies.value);
+	log(LOG_LEVEL_DEBUG, "trophies.next  : %d\n", s->trophies.next);
 
-	fprintf(stderr, "hero.name  : %s\n", s->hero.name);
-	fprintf(stderr, "hero.value : %d\n", s->hero.value);
-	fprintf(stderr, "hero.next  : %d\n", s->hero.next);
+	log(LOG_LEVEL_DEBUG, "hero.name  : %s\n", s->hero.name);
+	log(LOG_LEVEL_DEBUG, "hero.value : %d\n", s->hero.value);
+	log(LOG_LEVEL_DEBUG, "hero.next  : %d\n", s->hero.next);
 
-	fprintf(stderr, "shark.name  : %s\n", s->shark.name);
-	fprintf(stderr, "shark.value : %d\n", s->shark.value);
-	fprintf(stderr, "shark.next  : %d\n", s->shark.next);
-	fprintf(stderr, "shark.shark : %d\n", s->shark.is_shark);
+	log(LOG_LEVEL_DEBUG, "shark.name  : %s\n", s->shark.name);
+	log(LOG_LEVEL_DEBUG, "shark.value : %d\n", s->shark.value);
+	log(LOG_LEVEL_DEBUG, "shark.next  : %d\n", s->shark.next);
+	log(LOG_LEVEL_DEBUG, "shark.shark : %d\n", s->shark.is_shark);
 
-	fprintf(stderr, "win_rate_recent.chrono : %f\n", s->win_rate_recent.chrono);
-	fprintf(stderr, "win_rate_recent.bonus : %f\n", s->win_rate_recent.bonus);
-	fprintf(stderr, "win_rate_recent.overall : %f\n", s->win_rate_recent.overall);
+	log(LOG_LEVEL_DEBUG, "win_rate_recent.chrono : %f\n", s->win_rate_recent.chrono);
+	log(LOG_LEVEL_DEBUG, "win_rate_recent.bonus : %f\n", s->win_rate_recent.bonus);
+	log(LOG_LEVEL_DEBUG, "win_rate_recent.overall : %f\n", s->win_rate_recent.overall);
 
-	fprintf(stderr, "win_rate_all_time.chrono : %f\n", s->win_rate_all_time.chrono);
-	fprintf(stderr, "win_rate_all_time.bonus : %f\n", s->win_rate_all_time.bonus);
-	fprintf(stderr, "win_rate_all_time.overall : %f\n", s->win_rate_all_time.overall);
+	log(LOG_LEVEL_DEBUG, "win_rate_all_time.chrono : %f\n", s->win_rate_all_time.chrono);
+	log(LOG_LEVEL_DEBUG, "win_rate_all_time.bonus : %f\n", s->win_rate_all_time.bonus);
+	log(LOG_LEVEL_DEBUG, "win_rate_all_time.overall : %f\n", s->win_rate_all_time.overall);
 }
 
 http_response parse_stats(const mg_str json) {
@@ -417,7 +426,7 @@ http_response parse_stats(const mg_str json) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.overall' key not found"})")};
 	}
 
-	print_stats(&stats);
+	//print_stats(&stats);
 
     if(is_error(database_touch_stats(&stats))) {
         return {500, mg_mprintf(R"({"result":"database_touch_stats failed"})")};
@@ -467,55 +476,57 @@ struct Leaderboard {
 };
 
 void print_leaderboard(const Leaderboard* l) {
-	fprintf(stderr, "league: %s\n", l->league);
-	fprintf(stderr, "season: %d\n", l->season);
-	fprintf(stderr, "rows : [\n");
+	log(LOG_LEVEL_DEBUG, "league: %s\n", l->league);
+	log(LOG_LEVEL_DEBUG, "season: %d\n", l->season);
+	log(LOG_LEVEL_DEBUG, "rows : [\n");
 	for(size_t row = 0; row < MAX_LEADERBOARD_ROWS; ++row) {
 		if(l->rows[row].member_id != 0) {
-			fprintf(stderr, "{\n");
-			fprintf(stderr, "	member_id: %lu\n", l->rows[row].member_id);
-			fprintf(stderr, "	rank     : %d\n", l->rows[row].rank);
-			fprintf(stderr, "	average  : %f\n", l->rows[row].average);
-			fprintf(stderr, "	drafts   : %d\n", l->rows[row].drafts);
-			fprintf(stderr, "	trophies : %d\n", l->rows[row].trophies);
-			fprintf(stderr, "	win_rate : %f\n", l->rows[row].win_rate);
-			fprintf(stderr, "	points   : [ ");
+			log(LOG_LEVEL_DEBUG, "{\n");
+			log(LOG_LEVEL_DEBUG, "	member_id: %lu\n", l->rows[row].member_id);
+			log(LOG_LEVEL_DEBUG, "	rank     : %d\n", l->rows[row].rank);
+			log(LOG_LEVEL_DEBUG, "	average  : %f\n", l->rows[row].average);
+			log(LOG_LEVEL_DEBUG, "	drafts   : %d\n", l->rows[row].drafts);
+			log(LOG_LEVEL_DEBUG, "	trophies : %d\n", l->rows[row].trophies);
+			log(LOG_LEVEL_DEBUG, "	win_rate : %f\n", l->rows[row].win_rate);
+			log(LOG_LEVEL_DEBUG, "	points   : [ ");
 			for(size_t week = 0; week < MAX_WEEKS_PER_SEASON; ++week) {
-				fprintf(stderr, "%d, ", l->rows[row].points[week]);
+				log(LOG_LEVEL_DEBUG, "%d, ", l->rows[row].points[week]);
 			}
-			fprintf(stderr, "]\n");
-			fprintf(stderr, "}\n");
+			log(LOG_LEVEL_DEBUG, "]\n");
+			log(LOG_LEVEL_DEBUG, "}\n");
 		}
 	}
-	fprintf(stderr, "]\n");
+	log(LOG_LEVEL_DEBUG, "]\n");
 }
 
 static Database_Result<Database_No_Value> database_upsert_leaderboard(const Leaderboard* leaderboard) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-	static const char* query = R"(REPLACE INTO leaderboards (
-        league,    -- 0
-        season,    -- 1
-        member_id, -- 2
-        rank,      -- 3
-        week_01,   -- 4
-        week_02,   -- 5
-        week_03,   -- 6
-        week_04,   -- 7
-        week_05,   -- 8
-        week_06,   -- 9
-        week_07,   -- 10
-        week_08,   -- 11
-        week_09,   -- 12
-        week_10,   -- 13
-        week_11,   -- 14
-        week_12,   -- 15
-        week_13,   -- 16
-        points,    -- 17
-        average,   -- 18
-        drafts,    -- 19
-        trophies,  -- 20
-        win_rate)  -- 21
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	static const char* query = R"(
+		REPLACE INTO leaderboards(
+			league,    -- 0
+			season,    -- 1
+			member_id, -- 2
+			rank,      -- 3
+			week_01,   -- 4
+			week_02,   -- 5
+			week_03,   -- 6
+			week_04,   -- 7
+			week_05,   -- 8
+			week_06,   -- 9
+			week_07,   -- 10
+			week_08,   -- 11
+			week_09,   -- 12
+			week_10,   -- 13
+			week_11,   -- 14
+			week_12,   -- 15
+			week_13,   -- 16
+			points,    -- 17
+			average,   -- 18
+			drafts,    -- 19
+			trophies,  -- 20
+			win_rate)  -- 21
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		;)";
 
     for(int row = 0; row < leaderboard->row_count; ++row) {
         MYSQL_STATEMENT();
@@ -633,7 +644,7 @@ http_response parse_leaderboards(const mg_str json) {
 		leaderboard.row_count++;
 	}
 
-	print_leaderboard(&leaderboard);
+	//print_leaderboard(&leaderboard);
 
     if(is_error(database_upsert_leaderboard(&leaderboard))) {
 	    return {200, mg_mprintf(R"({"result":"database_upsert_leaderboard() failed"})")};
@@ -698,7 +709,7 @@ static Database_Result<Database_No_Value> database_upsert_badge_card(const uint6
 	static const char* query = "REPLACE INTO badges (id, url, timestamp) VALUES (?,?,?)";
 	MYSQL_STATEMENT();
 
-	time_t timestamp = time(NULL);
+    time_t timestamp = time(NULL) - (10*60*60); // NOTE: Temporary time adjustment until the ?stats command is moved to C++
 
 	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
@@ -709,6 +720,23 @@ static Database_Result<Database_No_Value> database_upsert_badge_card(const uint6
     MYSQL_RETURN();
 }
 
+/* struct Mem_Buffer {
+	// TODO: Do the stb callback functions call once or multiple times?
+	//std::vector<char> bytes;
+	size_t size;
+	char* bytes;
+};
+
+void stb_write_callback(void* context, void* data, int size) {
+	Mem_Buffer* ctx = (Mem_Buffer*)context;
+	//ctx->bytes.insert(ctx->bytes.end(), (char*)data, (char*)data + size);
+	ctx->bytes = (char*) malloc(size);
+	if(bytes != NULL) {
+		ctx->size = size;
+		memcpy(ctx->bytes, data, size);
+	}
+}
+*/
 
 http_response pdf_to_png(const mg_str json) {
 	int width;
@@ -772,18 +800,36 @@ http_response pdf_to_png(const mg_str json) {
     SCOPE_EXIT(delete page);
     poppler::page_renderer renderer;
 	renderer.set_render_hints(poppler::page_renderer::text_antialiasing | poppler::page_renderer::text_hinting);
+	renderer.set_image_format(poppler::image::format_enum::format_rgb24);
     poppler::image img = renderer.render_page(page, dpi, dpi, 0, 0, width, height);
 
-    time_t timestamp = time(NULL);
-	char file_path[FILENAME_MAX];
-	snprintf(file_path, FILENAME_MAX, "%s/static/badge_cards/%lu_%lu.png", HTTP_SERVER_DOC_ROOT, member_id, timestamp);
-    img.save(file_path, "png");
+	//Mem_Buffer ctx;
+	//stbi_write_png_to_func(stb_write_callback, &ctx, img.width(), img.height(), 3, img.data(), img.bytes_per_row());
+	int size;
+	unsigned char* png = stbi_write_png_to_mem((const unsigned char*)img.data(), img.bytes_per_row(), img.width(), img.height(), 3, &size);
+	if(png == NULL) {
+		return {500, mg_mprintf(R"({"result":"Error decoding PDF to PNG"})")};
+	}
+	SCOPE_EXIT(STBIW_FREE(png));
 
-	char url[URL_LENGTH_MAX + 1];
-	snprintf(url, URL_LENGTH_MAX, "%s:%d/static/badge_cards/%lu_%lu.png", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp);
-	database_upsert_badge_card(member_id, url);
+	auto upload = upload_img_to_imgur((const char*)png, size);
+	if(is_error(upload)) {
+		return {500, mg_mprintf(R"({"result":"Error uploading to Imgur: %s"})", upload.errstr)};
+	}
+	SCOPE_EXIT(free(upload.value.data));
 
-	//return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_cards/%lu_%lu.png"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp)};
+	mg_str result_json = {(const char*)upload.value.data, upload.value.size};
+	char* url = mg_json_get_str(result_json, "$.data.link");
+	if(url == NULL) {
+		return {500, mg_mprintf(R"({"result":"JSON parse error"})")};
+	}
+
+	auto db_result = database_upsert_badge_card(member_id, url);
+	if(is_error(db_result)) {
+		// NOTE: This is an error, but not treated as fatal.
+		log(LOG_LEVEL_ERROR, db_result.errstr);
+	}
+
 	return {201, mg_mprintf(R"({"result":"%s"})", url)};
 }
 
@@ -802,7 +848,7 @@ static Database_Result<Database_No_Value> database_insert_command(const char* na
 
     MYSQL_INPUT_INIT(3);
     MYSQL_INPUT(0, MYSQL_TYPE_STRING, name, strlen(name));
-    MYSQL_INPUT(1, MYSQL_TYPE_TINY, team, sizeof(team));
+    MYSQL_INPUT(1, MYSQL_TYPE_TINY, &team, sizeof(team));
     MYSQL_INPUT(2, MYSQL_TYPE_STRING, content, strlen(content));
     MYSQL_INPUT_BIND_AND_EXECUTE();
 
@@ -815,13 +861,14 @@ http_response parse_commands(const mg_str json) {
         bool team;
         char* text;
 
-        ~Command() {
+        /* ~Command() {
             free(name);
             free(text);
-        }
+        } */
     };
 
     std::vector<Command> commands;
+	commands.reserve(100);
 
 	int index = 0;
 	while(true) {
@@ -853,27 +900,50 @@ http_response parse_commands(const mg_str json) {
 		}
 		//SCOPE_EXIT(free((void*)text));
 
-		//bool team;
 		if(mg_json_get_bool(row, "$.team", &cmd.team) == false) {
 			return {400, mg_mprintf(R"({"result":"'team' key not found"})")};
 		}
 
-		fprintf(stderr, "command %d: %s, %d, %s\n", index, cmd.name, cmd.team, cmd.text);
+		//log(LOG_LEVEL_DEBUG, "command %d: %s, %d, %s", index, cmd.name, cmd.team, cmd.text);
+
+		commands.push_back(cmd);
 
 		index++;
 	}
 
     if(is_error(database_clear_commands())) {
+		// FIXME: leaks cmd.name and cmd.text
     	return {500, mg_mprintf(R"({"result":"database_clear_commands() failed"})")};
     }
 
     for(auto& c : commands) {
         if(is_error(database_insert_command(c.name, c.team, c.text))) {
+			// FIXME: leaks cmd.name and cmd.text
     	    return {500, mg_mprintf(R"({"result":"database_insert_command() failed"})")};
-        }
+        } else {
+			log(LOG_LEVEL_INFO, "Added command %s", c.name);
+		}
+
+		free(c.name);
+		free(c.text);
     }
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
+}
+
+Database_Result<Database_No_Value> database_update_xmage_version(const char* version) {
+    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	static const char* query = "REPLACE INTO xmage_version (version, timestamp) VALUES (?,?)";
+	MYSQL_STATEMENT();
+
+	time_t timestamp = time(NULL) - (10*60*60);
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING, version, strlen(version));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &timestamp, sizeof(timestamp));
+    MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
 }
 
 http_response parse_xmage_version(const mg_str json) {
@@ -883,8 +953,9 @@ http_response parse_xmage_version(const mg_str json) {
 	}
 	SCOPE_EXIT(free(xmage_version));
 
-	fprintf(stderr, "XMage version: %s\n", xmage_version);
-	//database_update_xmage_version(...);
+	log(LOG_LEVEL_DEBUG, "XMage version: %s\n", xmage_version);
+
+	database_update_xmage_version(xmage_version);
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
@@ -915,10 +986,10 @@ static void *post_thread_function(void *param) {
 	if(p->api_key.ptr == NULL || mg_strcmp(p->api_key, mg_str(g_config.api_key)) != 0) {
 		response = {401, strdup("Invalid API key")};
 	} else {
-		if(mg_match(p->uri, mg_str("/api/v1/stats"), NULL)) {
+		if(mg_match(p->uri, mg_str("/api/v1/upload_stats"), NULL)) {
 			response = parse_stats(p->body);
 		} else
-		if(mg_match(p->uri, mg_str("/api/v1/leaderboards"), NULL)) {
+		if(mg_match(p->uri, mg_str("/api/v1/upload_leaderboard"), NULL)) {
 			response = parse_leaderboards(p->body);
 		} else
 		if(mg_match(p->uri, mg_str("/api/v1/upload_commands"), NULL)) {
@@ -927,13 +998,13 @@ static void *post_thread_function(void *param) {
 		if(mg_match(p->uri, mg_str("/api/v1/make_thumbnail"), NULL)) {
 			response = make_thumbnail(p->body);
 		} else
-		if(mg_match(p->uri, mg_str("/api/v1/xmage_version"), NULL)) {
+		if(mg_match(p->uri, mg_str("/api/v1/update_xmage_version"), NULL)) {
 			response = parse_xmage_version(p->body);
 		} else
 		if(mg_match(p->uri, mg_str("/api/v1/pdf2png"), NULL)) {
 			response = pdf_to_png(p->body);
 		} else {
-			response = {400, strdup("Invalid API endpoint")};
+			response = {400, strdup(R"({"result":"Invalid API endpoint"})")};
 		}
 	}
 
