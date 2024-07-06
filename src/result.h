@@ -79,7 +79,7 @@ static const char* to_cstring(const GLOBAL_ERROR e) {
 		case ERROR_DATABASE_TOO_MANY_RESULTS:      return "Internal EventBot Error: Database query returned {} rows, but 0 or 1 was expected.";
 		case ERROR_DATABASE_UNEXPECTED_ROW_COUNT:  return "Internal EventBot Error: Database query returned unexpected row count of {} rows.";
 
-		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD."; 
+		case ERROR_MALFORMED_DATE_STRING: return "Malformed date string. The date should be written as YYYY-MM-DD.";
 		case ERROR_DATE_IS_IN_PAST:       return "The date is in the past and time travel does not yet exist.";
 		case ERROR_INVALID_MONTH:         return "Month should be between 01 and 12.";
 		case ERROR_INVALID_DAY_28:        return "Day should be between 01 and 28 for the specified month.";

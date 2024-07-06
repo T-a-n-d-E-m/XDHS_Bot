@@ -195,17 +195,17 @@ static int g_exit_code = 0;
 
 static void sig_handler(int signo) {
 	// TODO: All database writes need to be done as transactions so a sudden shutdown of the service here won't mess up the database.
-    switch(signo) {
-        case SIGINT:  // Fall through
-        case SIGABRT: // Fall through
-        case SIGHUP:  // Fall through
-        case SIGTERM:
-            log(LOG_LEVEL_INFO, "Caught signal %d", strsignal(signo));
-        	break;
+	switch(signo) {
+		case SIGINT:  // Fall through
+		case SIGABRT: // Fall through
+		case SIGHUP:  // Fall through
+		case SIGTERM:
+			log(LOG_LEVEL_INFO, "Caught signal %d", strsignal(signo));
+			break;
 
-        default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
-    }
-    g_exit_code = signo;
+		default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
+	}
+	g_exit_code = signo;
 }
 
 static std::string to_upper(const char* src) {
@@ -834,7 +834,7 @@ struct Date {
 #define split_date(str, min_len, max_len, out) \
 { \
 	const char* start = str; \
-	while(isdigit(*str)) str++;       \
+	while(isdigit(*str)) str++;	   \
 	if(*str != '-' && *str != '.' && *str != '\\' && *str != '/' && *str != '\0') { \
 		return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);  \
 	} \
@@ -2286,7 +2286,7 @@ static Text_Dim get_text_dimensions(stbtt_fontinfo* font, const int size, const 
 		int advance, lsb;
 		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
 		int x0, y0, x1, y1;
-      	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+	  	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
 		xpos += advance * scale;
 		if(str[index+1] != 0 && isutf(str[index+1])) {
 			int tmp = index;
@@ -2321,10 +2321,10 @@ static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int 
 		int advance, lsb;
 		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
 		int x0, y0, x1, y1;
-      	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+	  	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
 		bitmap.w = x1-x0;
 		bitmap.h = y1-y0;
-      	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
+	  	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
 
 		if(canvas->channels == 4) {
 			blit_A8_to_RGBA(&bitmap, GLYPH_WIDTH_MAX, color, canvas, (int)xpos + x0, y + baseline + y0);
@@ -2370,7 +2370,7 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 	if(is_error(downscaled)) return;
 
 	stbir_resize_uint8_srgb((const u8*)upscaled.value.data, upscaled.value.w, upscaled.value.h, 0,
-	                        (u8*)downscaled.value.data, downscaled.value.w, downscaled.value.h, 0, STBIR_1CHANNEL);
+					        (u8*)downscaled.value.data, downscaled.value.w, downscaled.value.h, 0, STBIR_1CHANNEL);
 
 	const int xpos = (BANNER_IMAGE_WIDTH / 2) - (downscaled.value.w / 2);
 	ypos -= (downscaled.value.h / 2);
@@ -2639,7 +2639,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 			if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
-			                        (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
+								    (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
 			blit_A8_to_RGBA(&scaled.value, scaled.value.w, {.c=0xFFFFFFFF}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(scaled.value.w/2), BANNER_DATETIME_YPOS);
 		}
 	}
@@ -3651,39 +3651,39 @@ int main(int argc, char* argv[]) {
 	}
 
 #ifdef DEBUG
-    // Careful not to pipe these somewhere a malicious user could find...
-	fprintf(stdout, "eventbot_host       = '%s'\n", g_config.eventbot_host);
-    fprintf(stdout, "mysql_host          = '%s'\n", g_config.mysql_host);
-    fprintf(stdout, "mysql_username      = '%s'\n", g_config.mysql_username);
-    fprintf(stdout, "mysql_password      = '%s'\n", g_config.mysql_password);
-    fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
-    fprintf(stdout, "logfile_path        = '%s'\n", g_config.logfile_path);
-    fprintf(stdout, "discord_token       = '%s'\n", g_config.discord_token);
-    fprintf(stdout, "xmage_server        = '%s'\n", g_config.xmage_server);
-    fprintf(stdout, "api_key             = '%s'\n", g_config.api_key);
-    fprintf(stdout, "imgur_client_secret = '%s'\n", g_config.imgur_client_secret);
+	// Careful not to pipe these somewhere a malicious user could find...
+	fprintf(stdout, "eventbot_host	   = '%s'\n", g_config.eventbot_host);
+	fprintf(stdout, "mysql_host          = '%s'\n", g_config.mysql_host);
+	fprintf(stdout, "mysql_username      = '%s'\n", g_config.mysql_username);
+	fprintf(stdout, "mysql_password      = '%s'\n", g_config.mysql_password);
+	fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
+	fprintf(stdout, "logfile_path        = '%s'\n", g_config.logfile_path);
+	fprintf(stdout, "discord_token       = '%s'\n", g_config.discord_token);
+	fprintf(stdout, "xmage_server        = '%s'\n", g_config.xmage_server);
+	fprintf(stdout, "api_key             = '%s'\n", g_config.api_key);
+	fprintf(stdout, "imgur_client_secret = '%s'\n", g_config.imgur_client_secret);
 #endif
 
 	// EventBot runs as a Linux systemd service, so we need to gracefully handle these signals.
-    (void)signal(SIGINT,  sig_handler);
-    (void)signal(SIGABRT, sig_handler);
-    (void)signal(SIGHUP,  sig_handler);
-    (void)signal(SIGTERM, sig_handler);
-    // NOTE: SIGKILL is uncatchable, for (presumably!) obvious reasons!
+	(void)signal(SIGINT,  sig_handler);
+	(void)signal(SIGABRT, sig_handler);
+	(void)signal(SIGHUP,  sig_handler);
+	(void)signal(SIGTERM, sig_handler);
+	// NOTE: SIGKILL is uncatchable, for (presumably!) obvious reasons!
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+	curl_global_init(CURL_GLOBAL_DEFAULT);
 	mysql_library_init(0, NULL, NULL);
 
-    http_server_init();
+	http_server_init();
 
 	srand(time(NULL));
 
 	// Set up logging to an external file.
 	log_init(g_config.logfile_path);
 
-    log(LOG_LEVEL_INFO, "====== EventBot starting ======");
-	log(LOG_LEVEL_INFO, "Build mode: %s",             BUILD_MODE);
-    log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
+	log(LOG_LEVEL_INFO, "====== EventBot starting ======");
+	log(LOG_LEVEL_INFO, "Build mode: %s",	         BUILD_MODE);
+	log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
 	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
 	log(LOG_LEVEL_INFO, "mongoose version: %s [%lu]", MG_VERSION, MG_MAX_RECV_SIZE);
@@ -3700,18 +3700,18 @@ int main(int argc, char* argv[]) {
 	dpp::cluster bot(g_config.discord_token, dpp::i_all_intents);
 
 	// Override the default DPP logger with ours.
-    bot.on_log([](const dpp::log_t& event) {
-        LOG_LEVEL level = g_log_level;
-        switch(event.severity) {
-            case dpp::ll_trace:    level = LOG_LEVEL_DEBUG;   break;
-            case dpp::ll_debug:    level = LOG_LEVEL_DEBUG;   break;
-            case dpp::ll_info:     level = LOG_LEVEL_INFO;    break;
-            case dpp::ll_warning:  level = LOG_LEVEL_WARNING; break;
-            case dpp::ll_error:    level = LOG_LEVEL_ERROR;   break;
-            case dpp::ll_critical: level = LOG_LEVEL_ERROR;   break;
-        }
-        log(level, "%s", event.message.c_str());
-    });
+	bot.on_log([](const dpp::log_t& event) {
+		LOG_LEVEL level = g_log_level;
+		switch(event.severity) {
+			case dpp::ll_trace:    level = LOG_LEVEL_DEBUG;   break;
+			case dpp::ll_debug:    level = LOG_LEVEL_DEBUG;   break;
+			case dpp::ll_info:     level = LOG_LEVEL_INFO;    break;
+			case dpp::ll_warning:  level = LOG_LEVEL_WARNING; break;
+			case dpp::ll_error:    level = LOG_LEVEL_ERROR;   break;
+			case dpp::ll_critical: level = LOG_LEVEL_ERROR;   break;
+		}
+		log(level, "%s", event.message.c_str());
+	});
 
 	// Called for slash command options that have the autocomplete flag set to true.
 	bot.on_autocomplete([&bot](const dpp::autocomplete_t& event) {
@@ -3756,9 +3756,9 @@ int main(int argc, char* argv[]) {
 	});
 
 	// Called when Discord has connected the bot to a guild.
-    bot.on_guild_create([&bot](const dpp::guild_create_t& event) {
+	bot.on_guild_create([&bot](const dpp::guild_create_t& event) {
 
-        log(LOG_LEVEL_INFO, "on_guild_create: Guild name:[%s] Guild ID:[%lu]", event.created->name.c_str(), static_cast<u64>(event.created->id));
+		log(LOG_LEVEL_INFO, "on_guild_create: Guild name:[%s] Guild ID:[%lu]", event.created->name.c_str(), static_cast<u64>(event.created->id));
 
 		// As this is a "private" bot we don't want unknown guilds adding the bot and using the commands.
 		// This won't prevent others joining the bot to their guild but it won't install any of the slash
@@ -3942,7 +3942,7 @@ int main(int argc, char* argv[]) {
 			g_commands_registered = true;
 		}
 
-    });
+	});
 
 	bot.on_slashcommand([&bot](const dpp::slashcommand_t& event) {
 		const auto command_name = event.command.get_command_name();
@@ -4023,9 +4023,9 @@ int main(int argc, char* argv[]) {
 
 			// Create the default zoned time for this region.
 			auto zoned_time = date::make_zoned(league->time_zone,
-			                                   date::local_days{date::year{date.year} / date.month / date.day} +
-											   std::chrono::hours(league->time.hour) +
-											   std::chrono::minutes(league->time.minute));
+								date::local_days{date::year{date.year} / date.month / date.day} +
+								std::chrono::hours(league->time.hour) +
+								 std::chrono::minutes(league->time.minute));
 
 			opts.datetime = date::format("%a %b %d @ %H:%M %Z", zoned_time).c_str();
 
@@ -4087,12 +4087,12 @@ int main(int argc, char* argv[]) {
 					auto art_id = std::get<dpp::snowflake>(event.get_parameter("art"));
 					auto itr = event.command.resolved.attachments.find(art_id);
 					auto art = itr->second;
-            		event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
-		            auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
+				event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
+				auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
 					if(is_error(download)) {
-		                event.edit_response(to_cstring(download.error));
-		                return;
-        		    }
+						event.edit_response(to_cstring(download.error));
+						return;
+					}
 					SCOPE_EXIT(free(download.value.data));
 
 					if(download.value.size > DOWNLOAD_BYTES_MAX) {
@@ -5392,7 +5392,7 @@ int main(int argc, char* argv[]) {
 	});
 
 
-    bot.start(true);
+	bot.start(true);
 
 	bot.start_timer([&bot](dpp::timer t) {
 		set_bot_presence(bot);
@@ -5453,16 +5453,16 @@ int main(int argc, char* argv[]) {
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
-    while(g_exit_code == 0) {
-        http_server_poll();
-    }
+	while(g_exit_code == 0) {
+		http_server_poll();
+	}
 
 	bot.shutdown();
 	mysql_library_end();
-    http_server_free();
-    curl_global_cleanup();
+	http_server_free();
+	curl_global_cleanup();
 
 	log(LOG_LEVEL_INFO, "Exiting");
 
-    return g_exit_code;
+	return g_exit_code;
 }

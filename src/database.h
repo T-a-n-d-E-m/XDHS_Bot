@@ -14,7 +14,7 @@ static const char* DATABASE_NAME                 = "XDHS";//_Debug
 
 template<typename Value_Type, typename Error_String_Type = std::string>
 struct Database_Result : Result<Value_Type, Error_String_Type> {
-    std::uint64_t count;
+	std::uint64_t count;
 
 	Database_Result(const Value_Type& value, std::uint64_t count)
 		: Result<Value_Type, Error_String_Type>(value)
