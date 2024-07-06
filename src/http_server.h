@@ -720,24 +720,6 @@ static Database_Result<Database_No_Value> database_upsert_badge_card(const uint6
     MYSQL_RETURN();
 }
 
-/* struct Mem_Buffer {
-	// TODO: Do the stb callback functions call once or multiple times?
-	//std::vector<char> bytes;
-	size_t size;
-	char* bytes;
-};
-
-void stb_write_callback(void* context, void* data, int size) {
-	Mem_Buffer* ctx = (Mem_Buffer*)context;
-	//ctx->bytes.insert(ctx->bytes.end(), (char*)data, (char*)data + size);
-	ctx->bytes = (char*) malloc(size);
-	if(bytes != NULL) {
-		ctx->size = size;
-		memcpy(ctx->bytes, data, size);
-	}
-}
-*/
-
 http_response pdf_to_png(const mg_str json) {
 	int width;
 	{
@@ -803,8 +785,6 @@ http_response pdf_to_png(const mg_str json) {
 	renderer.set_image_format(poppler::image::format_enum::format_rgb24);
     poppler::image img = renderer.render_page(page, dpi, dpi, 0, 0, width, height);
 
-	//Mem_Buffer ctx;
-	//stbi_write_png_to_func(stb_write_callback, &ctx, img.width(), img.height(), 3, img.data(), img.bytes_per_row());
 	int size;
 	unsigned char* png = stbi_write_png_to_mem((const unsigned char*)img.data(), img.bytes_per_row(), img.width(), img.height(), 3, &size);
 	if(png == NULL) {
