@@ -69,7 +69,7 @@ static Result<Heap_Buffer> download_file(const char* url) {
 	return {buffer};
 }
 
-// Returns URL of uploaded image in a zero terminated string on the heap.
+// Returns JSON response from Imgur on success.
 static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t len) {
 	static const char* IMGUR_API_URL = "https://api.imgur.com/3/image";
 
