@@ -993,14 +993,20 @@ static void *post_thread_function(void *param) {
 
 	mg_wakeup(p->mgr, p->conn_id, &response, sizeof(http_response));
 
-	log(LOG_LEVEL_DEBUG, "POST thread end");
-
 	return NULL;
 }
 
 static void http_server_func(mg_connection *con, int event, void *event_data) {
 	if (event == MG_EV_HTTP_MSG) {
 		mg_http_message *message = (mg_http_message *) event_data;
+
+		log(LOG_LEVEL_DEBUG, "%s: Method:%.*s URI:%.*s, Proto:%.*s Body:\"%.*s\"",
+				__FUNCTION__,
+				message->method.len, STR_OR_NULL(message->method.ptr),
+				message->uri.len, STR_OR_NULL(message->uri.ptr),
+				message->proto.len, STR_OR_NULL(message->proto.ptr),
+				message->body.len, STR_OR_NULL(message->body.ptr)
+		);
 
 		if(mg_match(message->method, mg_str("GET"), NULL)) {
 			// TODO: Serve from a thread too?
@@ -1032,7 +1038,6 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 
 					mg_http_reply(con, 500, NULL, "");
 				} else {
-					log(LOG_LEVEL_DEBUG, "POST thread start");
 					data->conn_id = con->id;
 					data->mgr     = con->mgr;
 					data->uri     = mg_strdup(message->uri);
@@ -1049,7 +1054,6 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 	} else
 	if (event == MG_EV_WAKEUP) {
 		// Back from the handler thread. Send the response.
-		log(LOG_LEVEL_DEBUG, "POST send data");
 		http_response* response = (http_response*) ((mg_str*)event_data)->ptr;
 		mg_http_reply(con, response->result, "", "%s\n", response->str);
 
