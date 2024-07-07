@@ -87,7 +87,10 @@ struct thread_data {
 
 struct http_response {
 	int result;
-	const char* str; // Must point to heap memory - freed in main thread.
+	const char* str; // Must point to heap memory. Freed in MG_EV_WAKEUP handler.
+
+	// TODO: It appears as if mg_wakeup sends the contents of this struct, but then
+	// later we call mg_http_reply with the same data to send it again?
 };
 
 
@@ -840,11 +843,6 @@ http_response parse_commands(const mg_str json) {
 		char* name;
 		bool team;
 		char* text;
-
-		/* ~Command() {
-			free(name);
-			free(text);
-		} */
 	};
 
 	std::vector<Command> commands;
@@ -951,7 +949,7 @@ static void *post_thread_function(void *param) {
 	SCOPE_EXIT(free((void*) p->body.ptr));
 	SCOPE_EXIT(free(p));
 
-#if 0
+#ifdef DEBUG
 	MG_DEBUG(("Content-Type: %s\n", STR_OR_NULL(p->content_type.ptr)));
 	MG_DEBUG(("API Key     : %s\n", STR_OR_NULL(p->api_key.ptr)));
 	MG_DEBUG(("URI         : %s\n", STR_OR_NULL(p->uri.ptr)));
@@ -993,13 +991,12 @@ static void *post_thread_function(void *param) {
 	return NULL;
 }
 
-static void http_server_func(mg_connection *con, int event, void *event_data, void *fn_data) {
-	(void)fn_data;
-
+static void http_server_func(mg_connection *con, int event, void *event_data) {
 	if (event == MG_EV_HTTP_MSG) {
 		mg_http_message *message = (mg_http_message *) event_data;
 
 		if(mg_match(message->method, mg_str("GET"), NULL)) {
+			// TODO: Server from a new thread?
 			mg_http_serve_opts opts;
 			memset(&opts, 0, sizeof(mg_http_serve_opts));
 			opts.root_dir = HTTP_SERVER_DOC_ROOT;
@@ -1009,8 +1006,8 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 		if(mg_match(message->method, mg_str("POST"), NULL)) {
 			thread_data *data = (thread_data*) calloc(1, sizeof(*data)); // Freed in worker thread
 			if(data != NULL) {
-				// Get the Content-Type and API_KEY from the HTTP headers.
 				for(int i = 0; i < MG_MAX_HTTP_HEADERS && message->headers[i].name.len > 0; ++i) {
+					// Get the Content-Type and API_KEY from the HTTP headers.
 					MG_DEBUG(("header[%d]->%.*s:%.*s", i, message->headers[i].name.len, message->headers[i].name.ptr, message->headers[i].value.len, message->headers[i].value.ptr));
 					if(mg_strcmp(message->headers[i].name, mg_str("Content-Type")) == 0) {
 						data->content_type = mg_strdup(message->headers[i].value);
@@ -1020,12 +1017,21 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 					}
 				}
 
-				data->conn_id = con->id;
-				data->mgr     = con->mgr;
-				data->uri     = mg_strdup(message->uri);
-				data->body    = mg_strdup(message->body);
+				// Early out bad requests.
+				if(data->content_type.ptr == NULL || data->api_key.ptr == NULL) {
+					if(data->content_type.ptr != NULL) free((void*)data->content_type.ptr);
+					if(data->api_key.ptr != NULL) free((void*)data->api_key.ptr);
+					free(data);
 
-				start_thread(post_thread_function, data);  // Start thread and pass data
+					mg_http_reply(con, 500, NULL, "");
+				} else {
+					data->conn_id = con->id;
+					data->mgr     = con->mgr;
+					data->uri     = mg_strdup(message->uri);
+					data->body    = mg_strdup(message->body);
+
+					start_thread(post_thread_function, data);
+				}
 			} else {
 				mg_http_reply(con, 500, NULL, "");
 			}
