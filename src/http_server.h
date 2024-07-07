@@ -9,6 +9,8 @@
 
 #include <vector>
 
+// TODO: Update to version 7.14? Seems to have a lot of arbitrary breaking
+// changes that would have little to no benefit here...
 #include "mongoose.h"
 #define closesocket(x) close(x)
 
@@ -848,6 +850,15 @@ http_response parse_commands(const mg_str json) {
 	std::vector<Command> commands;
 	commands.reserve(100);
 
+	auto cleanup = [&commands]() {
+		for(auto& c : commands) {
+			free(c.name);
+			free(c.text);
+		}
+	};
+
+	SCOPE_EXIT(cleanup());
+
 	int index = 0;
 	while(true) {
 		char key[32];
@@ -864,46 +875,40 @@ http_response parse_commands(const mg_str json) {
 		}
 		const mg_str row = {json.ptr + offset, (size_t) length};
 
-		Command cmd = {NULL, 0, NULL};
+		commands.push_back({NULL, 0, NULL});
 
-		cmd.name = mg_json_get_str(row, "$.name");
-		if(cmd.name == NULL) {
+		commands.back().name = mg_json_get_str(row, "$.name");
+		if(commands.back().name == NULL) {
 			return {400, mg_mprintf(R"({"result":"'name' key not found"})")};
 		}
-		//SCOPE_EXIT(free((void*)name));
 
-		cmd.text = mg_json_get_str(row, "$.text");
-		if(cmd.text == NULL) {
+		commands.back().text = mg_json_get_str(row, "$.text");
+		if(commands.back().text == NULL) {
 			return {400, mg_mprintf(R"({"result":"'text' key not found"})")};
 		}
-		//SCOPE_EXIT(free((void*)text));
 
-		if(mg_json_get_bool(row, "$.team", &cmd.team) == false) {
+		if(mg_json_get_bool(row, "$.team", &commands.back().team) == false) {
 			return {400, mg_mprintf(R"({"result":"'team' key not found"})")};
 		}
 
-		//log(LOG_LEVEL_DEBUG, "command %d: %s, %d, %s", index, cmd.name, cmd.team, cmd.text);
-
-		commands.push_back(cmd);
+		//log(LOG_LEVEL_DEBUG, "%s: command %d: %s", __FUNCTION__, index, commands.back().name);
 
 		index++;
 	}
 
+	// NOTE: This can hang the thread if MariaDB is stuck waiting for a lock.
+	// In the MariaDB terminal type `show full processlist` to see a list of connect clients
+	// and `kill [id]` the client that is stuck holding the lock.
 	if(is_error(database_clear_commands())) {
-		// FIXME: leaks cmd.name and cmd.text
-		return {500, mg_mprintf(R"({"result":"database_clear_commands() failed"})")};
+		return {500, mg_mprintf(R"({"result":"Internal server error: database_clear_commands() failed"})")};
 	}
 
 	for(auto& c : commands) {
 		if(is_error(database_insert_command(c.name, c.team, c.text))) {
-			// FIXME: leaks cmd.name and cmd.text
-			return {500, mg_mprintf(R"({"result":"database_insert_command() failed"})")};
+			return {500, mg_mprintf(R"({"result":"Internal server error: database_insert_command() failed"})")};
 		} else {
-			log(LOG_LEVEL_INFO, "Added command %s", c.name);
+			log(LOG_LEVEL_INFO, "%s: Added command: %s", __FUNCTION__, c.name);
 		}
-
-		free(c.name);
-		free(c.text);
 	}
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
@@ -949,7 +954,7 @@ static void *post_thread_function(void *param) {
 	SCOPE_EXIT(free((void*) p->body.ptr));
 	SCOPE_EXIT(free(p));
 
-#ifdef DEBUG
+#if 0
 	MG_DEBUG(("Content-Type: %s\n", STR_OR_NULL(p->content_type.ptr)));
 	MG_DEBUG(("API Key     : %s\n", STR_OR_NULL(p->api_key.ptr)));
 	MG_DEBUG(("URI         : %s\n", STR_OR_NULL(p->uri.ptr)));
@@ -959,10 +964,10 @@ static void *post_thread_function(void *param) {
 	http_response response;
 
 	if(p->content_type.ptr == NULL || mg_strcmp(p->content_type, mg_str("application/json")) != 0) {
-		response = {400, strdup("JSON payload required")};
+		response = {400, strdup(R"({"result":"JSON payload required"})")};
 	} else
 	if(p->api_key.ptr == NULL || mg_strcmp(p->api_key, mg_str(g_config.api_key)) != 0) {
-		response = {401, strdup("Invalid API key")};
+		response = {401, strdup(R"({"result":"Invalid API key"})")};
 	} else {
 		if(mg_match(p->uri, mg_str("/api/v1/upload_stats"), NULL)) {
 			response = parse_stats(p->body);
@@ -988,6 +993,8 @@ static void *post_thread_function(void *param) {
 
 	mg_wakeup(p->mgr, p->conn_id, &response, sizeof(http_response));
 
+	log(LOG_LEVEL_DEBUG, "POST thread end");
+
 	return NULL;
 }
 
@@ -996,7 +1003,7 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 		mg_http_message *message = (mg_http_message *) event_data;
 
 		if(mg_match(message->method, mg_str("GET"), NULL)) {
-			// TODO: Server from a new thread?
+			// TODO: Serve from a thread too?
 			mg_http_serve_opts opts;
 			memset(&opts, 0, sizeof(mg_http_serve_opts));
 			opts.root_dir = HTTP_SERVER_DOC_ROOT;
@@ -1025,6 +1032,7 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 
 					mg_http_reply(con, 500, NULL, "");
 				} else {
+					log(LOG_LEVEL_DEBUG, "POST thread start");
 					data->conn_id = con->id;
 					data->mgr     = con->mgr;
 					data->uri     = mg_strdup(message->uri);
@@ -1040,11 +1048,10 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 		}
 	} else
 	if (event == MG_EV_WAKEUP) {
+		// Back from the handler thread. Send the response.
+		log(LOG_LEVEL_DEBUG, "POST send data");
 		http_response* response = (http_response*) ((mg_str*)event_data)->ptr;
-		mg_http_reply(con,
-			response->result,
-			"",
-			"%s\n", response->str);
+		mg_http_reply(con, response->result, "", "%s\n", response->str);
 
 		free((void*)response->str);
 	}
@@ -1053,7 +1060,7 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 mg_mgr g_mgr;
 
 void http_server_init() {
-	mg_log_set(MG_LL_INFO);
+	mg_log_set(MG_LL_DEBUG);
 	mg_mgr_init(&g_mgr);
 	char listen[64];
 	snprintf(listen, 64, "%s:%d", HTTP_SERVER_BIND_ADDRESS, HTTP_SERVER_BIND_PORT);
