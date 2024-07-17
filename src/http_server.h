@@ -277,35 +277,35 @@ static Database_Result<Database_No_Value> database_upsert_win_rate_recent(const 
 
 
 void print_stats(const Stats* s) {
-	log(LOG_LEVEL_DEBUG, "member_id : %lu\n", s->member_id);
-	log(LOG_LEVEL_DEBUG, "devotion.name  : %s\n", s->devotion.name);
-	log(LOG_LEVEL_DEBUG, "devotion.value : %d\n", s->devotion.value);
-	log(LOG_LEVEL_DEBUG, "devotion.next  : %d\n", s->devotion.next);
+	log(LOG_LEVEL_DEBUG, "member_id : %lu", s->member_id);
+	log(LOG_LEVEL_DEBUG, "    devotion.name  : %s", s->devotion.name);
+	log(LOG_LEVEL_DEBUG, "    devotion.value : %d", s->devotion.value);
+	log(LOG_LEVEL_DEBUG, "    devotion.next  : %d", s->devotion.next);
 
-	log(LOG_LEVEL_DEBUG, "victory.name  : %s\n", s->victory.name);
-	log(LOG_LEVEL_DEBUG, "victory.value : %d\n", s->victory.value);
-	log(LOG_LEVEL_DEBUG, "victory.next  : %d\n", s->victory.next);
+	log(LOG_LEVEL_DEBUG, "    victory.name  : %s", s->victory.name);
+	log(LOG_LEVEL_DEBUG, "    victory.value : %d", s->victory.value);
+	log(LOG_LEVEL_DEBUG, "    victory.next  : %d", s->victory.next);
 
-	log(LOG_LEVEL_DEBUG, "trophies.name  : %s\n", s->trophies.name);
-	log(LOG_LEVEL_DEBUG, "trophies.value : %d\n", s->trophies.value);
-	log(LOG_LEVEL_DEBUG, "trophies.next  : %d\n", s->trophies.next);
+	log(LOG_LEVEL_DEBUG, "    trophies.name  : %s", s->trophies.name);
+	log(LOG_LEVEL_DEBUG, "    trophies.value : %d", s->trophies.value);
+	log(LOG_LEVEL_DEBUG, "    trophies.next  : %d", s->trophies.next);
 
-	log(LOG_LEVEL_DEBUG, "hero.name  : %s\n", s->hero.name);
-	log(LOG_LEVEL_DEBUG, "hero.value : %d\n", s->hero.value);
-	log(LOG_LEVEL_DEBUG, "hero.next  : %d\n", s->hero.next);
+	log(LOG_LEVEL_DEBUG, "    hero.name  : %s", s->hero.name);
+	log(LOG_LEVEL_DEBUG, "    hero.value : %d", s->hero.value);
+	log(LOG_LEVEL_DEBUG, "    hero.next  : %d", s->hero.next);
 
-	log(LOG_LEVEL_DEBUG, "shark.name  : %s\n", s->shark.name);
-	log(LOG_LEVEL_DEBUG, "shark.value : %d\n", s->shark.value);
-	log(LOG_LEVEL_DEBUG, "shark.next  : %d\n", s->shark.next);
-	log(LOG_LEVEL_DEBUG, "shark.shark : %d\n", s->shark.is_shark);
+	log(LOG_LEVEL_DEBUG, "    shark.name  : %s", s->shark.name);
+	log(LOG_LEVEL_DEBUG, "    shark.value : %d", s->shark.value);
+	log(LOG_LEVEL_DEBUG, "    shark.next  : %d", s->shark.next);
+	log(LOG_LEVEL_DEBUG, "    shark.shark : %d", s->shark.is_shark);
 
-	log(LOG_LEVEL_DEBUG, "win_rate_recent.chrono : %f\n", s->win_rate_recent.chrono);
-	log(LOG_LEVEL_DEBUG, "win_rate_recent.bonus : %f\n", s->win_rate_recent.bonus);
-	log(LOG_LEVEL_DEBUG, "win_rate_recent.overall : %f\n", s->win_rate_recent.overall);
+	log(LOG_LEVEL_DEBUG, "    win_rate_recent.chrono : %f", s->win_rate_recent.chrono);
+	log(LOG_LEVEL_DEBUG, "    win_rate_recent.bonus : %f", s->win_rate_recent.bonus);
+	log(LOG_LEVEL_DEBUG, "    win_rate_recent.overall : %f", s->win_rate_recent.overall);
 
-	log(LOG_LEVEL_DEBUG, "win_rate_all_time.chrono : %f\n", s->win_rate_all_time.chrono);
-	log(LOG_LEVEL_DEBUG, "win_rate_all_time.bonus : %f\n", s->win_rate_all_time.bonus);
-	log(LOG_LEVEL_DEBUG, "win_rate_all_time.overall : %f\n", s->win_rate_all_time.overall);
+	log(LOG_LEVEL_DEBUG, "    win_rate_all_time.chrono : %f", s->win_rate_all_time.chrono);
+	log(LOG_LEVEL_DEBUG, "    win_rate_all_time.bonus : %f", s->win_rate_all_time.bonus);
+	log(LOG_LEVEL_DEBUG, "    win_rate_all_time.overall : %f", s->win_rate_all_time.overall);
 }
 
 http_response parse_stats(const mg_str json) {
@@ -431,7 +431,6 @@ http_response parse_stats(const mg_str json) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.overall' key not found"})")};
 	}
 
-	//print_stats(&stats);
 
 	if(is_error(database_touch_stats(&stats))) {
 		return {500, mg_mprintf(R"({"result":"database_touch_stats failed"})")};
@@ -457,6 +456,8 @@ http_response parse_stats(const mg_str json) {
 	if(is_error(database_upsert_win_rate_all_time(&stats))) {
 		return {500, mg_mprintf(R"({"result":"database_upsert_win_rate_all_time failed"})")};
 	}
+
+	//print_stats(&stats);
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
