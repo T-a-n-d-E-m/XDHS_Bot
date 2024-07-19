@@ -134,11 +134,13 @@ static const time_t SECONDS_AFTER_DRAFT_TO_DELETE_POSTS     = (60*60*5);
 // How often often to spin up the thread that sends the pre-draft reminders, tentatives ping, etc.
 static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 
-// How long we allow for deck construction
+// How long we allow for deck construction.
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 
 // The directory where the RELEASE build is run from.
 static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
+
+static const char* CONFIG_FILE_NAME = "bot.ini";
 
 // The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
@@ -200,7 +202,7 @@ static void sig_handler(int signo) {
 		case SIGABRT: // Fall through
 		case SIGHUP:  // Fall through
 		case SIGTERM:
-			log(LOG_LEVEL_INFO, "Caught signal %d", strsignal(signo));
+			log(LOG_LEVEL_INFO, "Caught signal %s", strsignal(signo));
 			break;
 
 		default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
@@ -3636,7 +3638,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	// Load the bot.ini config file. This file has sensitive information and so isn't versioned.
-	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
+	if(!load_config_file(CONFIG_FILE_NAME, config_file_kv_pair_callback)) {
 		return EXIT_FAILURE;
 	}
 
@@ -5463,6 +5465,8 @@ int main(int argc, char* argv[]) {
 	curl_global_cleanup();
 
 	log(LOG_LEVEL_INFO, "Exiting");
+
+	log_close();
 
 	return g_exit_code;
 }
