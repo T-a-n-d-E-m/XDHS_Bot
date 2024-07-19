@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <math.h>
 
@@ -22,6 +23,11 @@ struct config {
 	char* imgur_client_secret;
 //#endif
 
+	// http_api_server
+	char* server_fqdn;
+	char* bind_address;
+	unsigned short bind_port;
+
 	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
 	// leak testing with Valgrind is easier if we free it ourselves.
 	~config() {
@@ -37,6 +43,9 @@ struct config {
 		if(eventbot_host != NULL)       free(eventbot_host);
 		if(api_key != NULL)             free(api_key);
 		if(imgur_client_secret != NULL) free(imgur_client_secret);
+
+		if(server_fqdn != NULL)         free(server_fqdn);
+		if(bind_address != NULL)        free(bind_address);
 //#endif
 	}
 } g_config;
@@ -55,7 +64,7 @@ static void config_file_kv_pair_callback(const char* key, const char* value) {
 		g_config.mysql_password = strndup(value, value_len);
 	} else
 	if(strcmp(key, "mysql_port") == 0) {
-		g_config.mysql_port = (unsigned short) atoi(value);
+		g_config.mysql_port = (unsigned short) strtoul(value, NULL, 0);
 	}
 //#if defined(BADGEBOT_BOT) || defined(EVENTBOT)
 	else
@@ -79,6 +88,15 @@ static void config_file_kv_pair_callback(const char* key, const char* value) {
 	} else
 	if(strcmp(key, "imgur_client_secret") == 0) {
 		g_config.imgur_client_secret = strndup(value, value_len);
+	} else
+	if(strcmp(key, "bind_address") == 0) {
+		g_config.bind_address = strndup(value, value_len);
+	} else
+	if(strcmp(key, "server_fqdn") == 0) {
+		g_config.server_fqdn = strndup(value, value_len);
+	} else
+	if(strcmp(key, "bind_port") == 0) {
+		g_config.bind_port = (unsigned short) strtoul(value, NULL, 0);
 	}
 //#endif // EVENTBOT
 }
