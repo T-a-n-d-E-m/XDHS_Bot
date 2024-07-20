@@ -798,7 +798,7 @@ http_response pdf_to_png(const mg_str json) {
 	}
 	SCOPE_EXIT(STBIW_FREE(png));
 
-	auto upload = upload_img_to_imgur((const char*)png, size);
+	auto upload = upload_img_to_imgur((const char*)png, size, g_config.imgur_client_secret);
 	if(is_error(upload)) {
 		return {500, mg_mprintf(R"({"result":"Error uploading to Imgur: %s"})", upload.errstr)};
 	}
