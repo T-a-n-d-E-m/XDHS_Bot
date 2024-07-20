@@ -10,7 +10,6 @@
 
 #include "result.h"
 #include "scope_exit.h"
-#include "config.h"
 #include "log.h"
 
 struct Heap_Buffer {
@@ -70,7 +69,7 @@ static Result<Heap_Buffer> download_file(const char* url) {
 }
 
 // Returns JSON response from Imgur on success.
-static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t len) {
+static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t len, const char* client_secret) {
 	static const char* IMGUR_API_URL = "https://api.imgur.com/3/image";
 
 	CURL* curl = curl_easy_init();
@@ -92,7 +91,7 @@ static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t l
 	curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");
 
 	char header_string[64];
-	snprintf(header_string, 64, "Authorization: Client-ID %s", g_config.imgur_client_secret);
+	snprintf(header_string, 64, "Authorization: Client-ID %s", client_secret);
 
 	curl_slist* headers = NULL;
 	headers = curl_slist_append(headers, header_string);
