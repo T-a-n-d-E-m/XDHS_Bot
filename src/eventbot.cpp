@@ -94,6 +94,35 @@
 #include "stb_truetype.h"
 #endif // #ifndef
 
+
+struct Config {
+	char* mysql_host;
+	char* mysql_username;
+	char* mysql_password;
+	unsigned short mysql_port;
+	char* logfile_path;
+	char* discord_token;
+	char* xmage_server;
+	char* eventbot_host;
+	char* api_key;
+	char* imgur_client_secret;
+
+	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
+	// leak testing with Valgrind is easier if we free it ourselves.
+	~Config() {
+		if(mysql_host != NULL)          free(mysql_host);
+		if(mysql_username != NULL)      free(mysql_username);
+		if(mysql_password != NULL)      free(mysql_password);
+		if(logfile_path != NULL)        free(logfile_path);
+		if(discord_token != NULL)       free(discord_token);
+		if(xmage_server != NULL)        free(xmage_server);
+		if(eventbot_host != NULL)       free(eventbot_host);
+		if(api_key != NULL)             free(api_key);
+		if(imgur_client_secret != NULL) free(imgur_client_secret);
+	}
+} g_config;
+#include "config.h"
+
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
 #include "constants.h"
 #include "http_server.h"
@@ -101,7 +130,6 @@
 #include "database.h"
 #include "result.h"
 #include "log.h"
-#include "config.h"
 #include "scope_exit.h"
 #include "utf8.h"
 
@@ -3603,6 +3631,19 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	}
 
 	return result;
+}
+
+static void config_file_kv_pair_callback(const char* key, const char* value, size_t value_len) {
+	CONFIG_KEY_STR(mysql_host) else
+	CONFIG_KEY_STR(mysql_username) else
+	CONFIG_KEY_STR(mysql_password) else
+	CONFIG_KEY_U16(mysql_port) else
+	CONFIG_KEY_STR(logfile_path) else
+	CONFIG_KEY_STR(discord_token) else
+	CONFIG_KEY_STR(xmage_server) else
+	CONFIG_KEY_STR(eventbot_host) else
+	CONFIG_KEY_STR(api_key) else
+	CONFIG_KEY_STR(imgur_client_secret)
 }
 
 int main(int argc, char* argv[]) {

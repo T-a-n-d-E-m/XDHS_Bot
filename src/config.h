@@ -7,104 +7,10 @@
 #include <errno.h>
 #include <math.h>
 
-struct config {
-	char* mysql_host;
-	char* mysql_username;
-	char* mysql_password;
-	unsigned short   mysql_port;
-//#if defined(BADGEBOT_BOT) || defined(EVENTBOT)
-	char* logfile_path;
-	char* discord_token;
-//#endif // BADGEBOT_BOT || EVENTBOT
-//#if defined(EVENTBOT)
-	char* xmage_server;
-	char* eventbot_host;
-	char* api_key;
-	char* imgur_client_secret;
-//#endif
+#define CONFIG_KEY_STR(name) if(strcmp(key, (#name)) == 0) { g_config.name = strndup(value, value_len); }
+#define CONFIG_KEY_U16(name) if(strcmp(key, (#name)) == 0) { g_config.name = (unsigned short) strtoul(value, NULL, 0); }
 
-	// http_api_server
-	char* server_fqdn;
-	char* bind_address;
-	unsigned short bind_port;
-
-	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
-	// leak testing with Valgrind is easier if we free it ourselves.
-	~config() {
-		if(mysql_host != NULL)          free(mysql_host);
-		if(mysql_username != NULL)      free(mysql_username);
-		if(mysql_password != NULL)      free(mysql_password);
-//#if defined(BADGEBOT_BOT) || defined(EVENTBOT)
-		if(logfile_path != NULL)        free(logfile_path);
-		if(discord_token != NULL)       free(discord_token);
-//#endif
-//#if defined(EVENTBOT)
-		if(xmage_server != NULL)        free(xmage_server);
-		if(eventbot_host != NULL)       free(eventbot_host);
-		if(api_key != NULL)             free(api_key);
-		if(imgur_client_secret != NULL) free(imgur_client_secret);
-
-		if(server_fqdn != NULL)         free(server_fqdn);
-		if(bind_address != NULL)        free(bind_address);
-//#endif
-	}
-} g_config;
-
-
-static void config_file_kv_pair_callback(const char* key, const char* value) {
-	const size_t value_len = strlen(value);
-
-	if(strcmp(key, "mysql_host") == 0) {
-		g_config.mysql_host = strndup(value, value_len);
-	} else
-	if(strcmp(key, "mysql_username") == 0) {
-		g_config.mysql_username = strndup(value, value_len);
-	} else
-	if(strcmp(key, "mysql_password") == 0) {
-		g_config.mysql_password = strndup(value, value_len);
-	} else
-	if(strcmp(key, "mysql_port") == 0) {
-		g_config.mysql_port = (unsigned short) strtoul(value, NULL, 0);
-	}
-//#if defined(BADGEBOT_BOT) || defined(EVENTBOT)
-	else
-	if(strcmp(key, "logfile_path") == 0) {
-		g_config.logfile_path = strndup(value, value_len);
-	} else
-	if(strcmp(key, "discord_token") == 0) {
-		g_config.discord_token = strndup(value, value_len);
-	}
-//#endif // BADGEBOT_BOT || EVENTBOT
-//#if defined(EVENTBOT)
-	else
-	if(strcmp(key, "xmage_server") == 0) {
-		g_config.xmage_server = strndup(value, value_len);
-	} else
-	if(strcmp(key, "eventbot_host") == 0) {
-		g_config.eventbot_host = strndup(value, value_len);
-	} else
-	if(strcmp(key, "api_key") == 0) {
-		g_config.api_key = strndup(value, value_len);
-	} else
-	if(strcmp(key, "imgur_client_secret") == 0) {
-		g_config.imgur_client_secret = strndup(value, value_len);
-	} else
-	if(strcmp(key, "bind_address") == 0) {
-		g_config.bind_address = strndup(value, value_len);
-	} else
-	if(strcmp(key, "server_fqdn") == 0) {
-		g_config.server_fqdn = strndup(value, value_len);
-	} else
-	if(strcmp(key, "bind_port") == 0) {
-		g_config.bind_port = (unsigned short) strtoul(value, NULL, 0);
-	}
-//#endif // EVENTBOT
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Generic works-for-everything code below
-
-typedef void (*config_key_value_callback)(const char*, const char*);
+typedef void (*config_key_value_callback)(const char*, const char*, size_t len);
 
 // Returns 1 on success, 0 otherwise.
 static int load_config_file(const char* path, config_key_value_callback callback) {
@@ -153,7 +59,7 @@ static int load_config_file(const char* path, config_key_value_callback callback
 			*(write_ptr) = '\0';
 		}
 
-		callback(key, value);
+		callback(key, value, strlen(value));
 	}
 
 	fclose(f);
