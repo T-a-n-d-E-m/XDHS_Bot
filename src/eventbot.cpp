@@ -3694,19 +3694,18 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-#ifdef DEBUG
 	// Careful not to pipe these somewhere a malicious user could find...
-	fprintf(stdout, "eventbot_host	   = '%s'\n", g_config.eventbot_host);
+	fprintf(stdout, "eventbot_host	     = '%s'\n", g_config.eventbot_host);
 	fprintf(stdout, "mysql_host          = '%s'\n", g_config.mysql_host);
 	fprintf(stdout, "mysql_username      = '%s'\n", g_config.mysql_username);
 	fprintf(stdout, "mysql_password      = '%s'\n", g_config.mysql_password);
+	fprintf(stdout, "mysql_database      = '%s'\n", g_config.mysql_database);
 	fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
 	fprintf(stdout, "logfile_path        = '%s'\n", g_config.logfile_path);
 	fprintf(stdout, "discord_token       = '%s'\n", g_config.discord_token);
 	fprintf(stdout, "xmage_server        = '%s'\n", g_config.xmage_server);
 	fprintf(stdout, "api_key             = '%s'\n", g_config.api_key);
 	fprintf(stdout, "imgur_client_secret = '%s'\n", g_config.imgur_client_secret);
-#endif
 
 	// EventBot runs as a Linux systemd service, so we need to gracefully handle these signals.
 	(void)signal(SIGINT,  sig_handler);
