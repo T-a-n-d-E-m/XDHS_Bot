@@ -31,6 +31,7 @@
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
 // Note: Only one minutemage will be asked to fill a seat.
 // FIXME: dpp::utility::read_file can throw... just use slurp
+// FIXME: dpp::message::add_file is deprecated
 
 // Nice functionality, but not needed before going live
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
@@ -2281,6 +2282,119 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
 }
 
+struct Stats {
+	u64 timestamp;
+	struct {
+		char name[32+1]; // FIXME: Magic numbers must match the database schema
+		int value;
+		int next;
+	} devotion;
+
+	struct {
+		char name[32+1];
+		int value;
+		int next;
+	} victory;
+
+	struct {
+		char name[32+1];
+		int value;
+		int next;
+	} trophies;
+
+	struct {
+		char name[32+1];
+		int value;
+		int next;
+	} shark;
+
+	struct {
+		char name[32+1];
+		int value;
+		int next;
+	} hero;
+
+	struct {
+		float chrono; // TODO: Still called 'league' in the database schema.
+		float bonus;
+		float overall;
+	} win_rate_recent;
+
+	struct {
+		float chrono; // TODO: Still called 'league' in the database schema.
+		float bonus;
+		float overall;
+	} win_rate_all_time;
+
+	struct {
+		u64 timestamp;
+		char url[URL_LENGTH_MAX + 1];
+	} badge_card;
+};
+
+static Database_Result<Stats> database_get_stats(const u64 member_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = R"(
+	SELECT
+		stats.timestamp, -- 0
+		devotion.name, devotion.value, devotion.next, -- 1, 2, 3
+		victory.name, victory.value, victory.next, -- 4, 5, 6
+		trophies.name, trophies.value, trophies.next, -- 7, 8, 9
+		shark.name, shark.value, shark.next, -- 10, 11, 12
+		hero.name, hero.value, hero.next, -- 13, 14, 15
+		ROUND(win_rate_recent.league,2), ROUND(win_rate_recent.bonus,2), ROUND(win_rate_recent.overall,2), -- 16, 17, 18
+		ROUND(win_rate_all_time.league,2), ROUND(win_rate_all_time.bonus,2), ROUND(win_rate_all_time.overall,2), -- 19, 20, 21
+		badges.url, badges.timestamp -- 22, 23
+	FROM stats
+	INNER JOIN devotion ON stats.id = devotion.id
+	INNER JOIN victory ON stats.id = victory.id
+	INNER JOIN trophies ON stats.id = trophies.id
+	INNER JOIN shark ON stats.id = shark.id
+	INNER JOIN hero ON stats.id = hero.id
+	INNER JOIN win_rate_recent ON stats.id = win_rate_recent.id
+	INNER JOIN win_rate_all_time ON stats.id = win_rate_all_time.id
+	INNER JOIN badges ON stats.id = badges.id
+	WHERE stats.id=?
+	)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Stats result;
+	memset(&result, 0, sizeof(result));
+
+	MYSQL_OUTPUT_INIT(24);
+	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONGLONG, &result.timestamp, sizeof(result.timestamp));
+	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING, result.devotion.name, 32+1); // FIXME: Magic number
+	MYSQL_OUTPUT( 2, MYSQL_TYPE_LONG, &result.devotion.value, sizeof(result.devotion.value));
+	MYSQL_OUTPUT( 3, MYSQL_TYPE_LONG, &result.devotion.next, sizeof(result.devotion.next));
+	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING, result.victory.name, 32+1);
+	MYSQL_OUTPUT( 5, MYSQL_TYPE_LONG, &result.victory.value, sizeof(result.victory.value));
+	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONG, &result.victory.next, sizeof(result.victory.next));
+	MYSQL_OUTPUT( 7, MYSQL_TYPE_STRING, result.trophies.name, 32+1);
+	MYSQL_OUTPUT( 8, MYSQL_TYPE_LONG, &result.trophies.value, sizeof(result.trophies.value));
+	MYSQL_OUTPUT( 9, MYSQL_TYPE_LONG, &result.trophies.next, sizeof(result.trophies.next));
+	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING, result.shark.name, 32+1);
+	MYSQL_OUTPUT(11, MYSQL_TYPE_LONG, &result.shark.value, sizeof(result.shark.value));
+	MYSQL_OUTPUT(12, MYSQL_TYPE_LONG, &result.shark.next, sizeof(result.shark.next));
+	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING, result.hero.name, 32+1);
+	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG, &result.hero.value, sizeof(result.hero.value));
+	MYSQL_OUTPUT(15, MYSQL_TYPE_LONG, &result.hero.next, sizeof(result.hero.next));
+	MYSQL_OUTPUT(16, MYSQL_TYPE_FLOAT, &result.win_rate_recent.chrono, sizeof(result.win_rate_recent.chrono));
+	MYSQL_OUTPUT(17, MYSQL_TYPE_FLOAT, &result.win_rate_recent.bonus, sizeof(result.win_rate_recent.bonus));
+	MYSQL_OUTPUT(18, MYSQL_TYPE_FLOAT, &result.win_rate_recent.overall, sizeof(result.win_rate_recent.overall));
+	MYSQL_OUTPUT(19, MYSQL_TYPE_FLOAT, &result.win_rate_all_time.chrono, sizeof(result.win_rate_all_time.chrono));
+	MYSQL_OUTPUT(20, MYSQL_TYPE_FLOAT, &result.win_rate_all_time.bonus, sizeof(result.win_rate_all_time.bonus));
+	MYSQL_OUTPUT(21, MYSQL_TYPE_FLOAT, &result.win_rate_all_time.overall, sizeof(result.win_rate_all_time.overall));
+	MYSQL_OUTPUT(22, MYSQL_TYPE_STRING, result.badge_card.url, URL_LENGTH_MAX + 1); // FIXME: Magic number
+	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result.badge_card.timestamp, sizeof(result.badge_card.timestamp));
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
+}
+
 
 static const int BANNER_IMAGE_WIDTH = 825;
 static const int BANNER_IMAGE_HEIGHT = 550;
@@ -3696,11 +3810,11 @@ int main(int argc, char* argv[]) {
 
 	// Careful not to pipe these somewhere a malicious user could find...
 	fprintf(stdout, "eventbot_host	     = '%s'\n", g_config.eventbot_host);
+	fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
 	fprintf(stdout, "mysql_host          = '%s'\n", g_config.mysql_host);
 	fprintf(stdout, "mysql_username      = '%s'\n", g_config.mysql_username);
 	fprintf(stdout, "mysql_password      = '%s'\n", g_config.mysql_password);
 	fprintf(stdout, "mysql_database      = '%s'\n", g_config.mysql_database);
-	fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
 	fprintf(stdout, "logfile_path        = '%s'\n", g_config.logfile_path);
 	fprintf(stdout, "discord_token       = '%s'\n", g_config.discord_token);
 	fprintf(stdout, "xmage_server        = '%s'\n", g_config.xmage_server);
@@ -3975,6 +4089,12 @@ int main(int argc, char* argv[]) {
 			}
 			{
 				dpp::slashcommand cmd("finish", "Post the post draft message.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
+			}
+
+			{
+				dpp::slashcommand cmd("stats", "Get your stats via private message.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
@@ -5299,6 +5419,82 @@ int main(int argc, char* argv[]) {
 			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with the /feedback command.\n", FEEDBACK_CHANNEL_ID);
 			text += fmt::format("* Check out <#{}> and sign up to some upcoming events!", CALENDAR_CHANNEL_ID);
 			event.reply(text);
+		} else
+		if(command_name == "stats") {
+			const auto guild_id = event.command.get_guild().id;
+			const dpp::user& issuing_user = event.command.get_issuing_user();
+
+			const std::string preferred_name = get_members_preferred_name(guild_id, issuing_user.id);
+
+			auto stats = database_get_stats(issuing_user.id);
+			if(has_value(stats)) {
+				if(stats.count == 1) {
+					event.reply(fmt::format("{}, your stats will be delivered via private message.", preferred_name));
+					dpp::embed embed;
+
+					embed.set_title(fmt::format("Hello, {}! Here are your stats:", preferred_name));
+
+					embed.add_field("Devotion Badge", stats.value.devotion.name, true);
+					embed.add_field("Devotion Points", fmt::format("{}", stats.value.devotion.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.devotion.next), true);
+
+					embed.add_field("Victory Badge", stats.value.victory.name, true);
+					embed.add_field("Victory Points", fmt::format("{}", stats.value.victory.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.victory.next), true);
+
+					embed.add_field("Trophy Badge", stats.value.trophies.name, true);
+					embed.add_field("Trophy Points", fmt::format("{}", stats.value.trophies.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.trophies.next), true);
+
+					embed.add_field("Shark Badge", stats.value.shark.name, true);
+					embed.add_field("Shark Kills", fmt::format("{}", stats.value.shark.value), true);
+					embed.add_field("Kills needed for next badge", fmt::format("{}", stats.value.shark.next), true);
+
+					embed.add_field("Draft Hero Badge", stats.value.hero.name, true);
+					embed.add_field("Hero Points", fmt::format("{}", stats.value.hero.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.hero.next), true);
+
+					{
+						std::string wins[3];
+						wins[0] = stats.value.win_rate_recent.chrono  > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_recent.chrono)  : "-";
+						wins[1] = stats.value.win_rate_recent.bonus   > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_recent.bonus)   : "-";
+						wins[2] = stats.value.win_rate_recent.overall > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_recent.overall) : "-";
+						embed.add_field("Chrono win rate (last 6 seasons)", wins[0], true);
+						embed.add_field("Bonus win rate (last 6 seasons)", wins[1], true);
+						embed.add_field("Overall win rate (last 6 seasons)", wins[2], true);
+					}
+					{
+						std::string wins[3];
+						wins[0] = stats.value.win_rate_all_time.chrono  > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_all_time.chrono)  : "-";
+						wins[1] = stats.value.win_rate_all_time.bonus   > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_all_time.bonus)   : "-";
+						wins[2] = stats.value.win_rate_all_time.overall > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_all_time.overall) : "-";
+						embed.add_field("Chrono win rate (all time)", wins[0], true);
+						embed.add_field("Bonus win rate (all time)", wins[1], true);
+						embed.add_field("Overall win rate (all time)", wins[2], true);
+					}
+
+					embed.set_timestamp(stats.value.timestamp);
+					embed.set_footer("Stats last updated", "https://i.imgur.com/NPtgFpC.png");
+
+					dpp::message message;
+					message.add_embed(embed);
+
+					if(strlen(stats.value.badge_card.url) > 0) {
+						dpp::embed badge_card;
+						badge_card.set_title("Your badge card:");
+						badge_card.set_image(stats.value.badge_card.url);
+						badge_card.set_timestamp(stats.value.badge_card.timestamp);
+						badge_card.set_footer("Badge card last updated", "https://i.imgur.com/NPtgFpC.png");
+						message.add_embed(badge_card);
+					}
+
+					bot.direct_message_create(issuing_user.id, message);
+				} else {
+					event.reply(fmt::format("No stats found for {}. You must complete at least one XDHS draft first."));
+				}
+			} else {
+				event.reply(fmt::format("Sorry {}, there was an error retrieving your stats. This is not your fault! Please wait a few minutes and try again.", preferred_name));
+			}
 		}
 	});
 
