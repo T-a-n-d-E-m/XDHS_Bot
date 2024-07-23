@@ -2395,6 +2395,61 @@ static Database_Result<Stats> database_get_stats(const u64 member_id) {
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
+// NOTE: Discord has a limit of 100 characters for auto complete options.
+static const size_t COMMAND_NAME_LENGTH_MAX = 32; // TODO: Validate/enforce this in the spreadsheet. FIXME: This does not match the db schema max
+static const size_t COMMAND_SUMMARY_LENGTH_MAX = 64;
+
+struct Command_Summary {
+	char name[COMMAND_NAME_LENGTH_MAX + 1];
+	char summary[COMMAND_SUMMARY_LENGTH_MAX + 1]; // FIXME: Magic number
+};
+
+static const Database_Result<std::vector<Command_Summary>> database_get_commands_for_help_autocomplete(const u64 guild_id, std::string& prefix) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	prefix += "%";
+	const char* query = "SELECT name, summary FROM commands WHERE hidden=0 AND name LIKE ? ORDER BY name LIMIT 25";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING, prefix.c_str(), prefix.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Command_Summary result;
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, result.name, COMMAND_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Command_Summary> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+struct Command {
+	bool host; // TODO: Still called "team" in the db schema
+	char content[DISCORD_MESSAGE_CHARACTER_LIMIT + 1]; // TODO: Enforce this in the spreadsheet.
+};
+
+static const Database_Result<Command> database_get_help_message(const u64 guild_id, const std::string& name) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT team, content FROM commands WHERE name=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING, name.c_str(), name.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Command result;
+
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.host, sizeof(result.host));
+	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
+}
 
 static const int BANNER_IMAGE_WIDTH = 825;
 static const int BANNER_IMAGE_HEIGHT = 550;
@@ -3902,6 +3957,22 @@ int main(int argc, char* argv[]) {
 						}
 						bot.interaction_response_create(event.command.id, event.command.token, response);
 					}
+				} else
+				if(opt.name == "message") {
+					if(event.name == "help") {
+						std::string prefix = std::get<std::string>(opt.value);
+						auto commands = database_get_commands_for_help_autocomplete(guild_id, prefix);
+						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
+						for(auto& command : commands.value) {
+							if(strlen(command.summary) > 0) {
+								auto choice = fmt::format("{} - {}", command.name, command.summary);
+								response.add_autocomplete_choice(dpp::command_option_choice(choice, command.name));
+							} else {
+								response.add_autocomplete_choice(dpp::command_option_choice(command.name, command.name));
+							}
+						}
+						bot.interaction_response_create(event.command.id, event.command.token, response);
+					}
 				} else {
 					log(LOG_LEVEL_ERROR, "Unhandled autocomplete for %s", opt.name);
 				}
@@ -4092,10 +4163,15 @@ int main(int argc, char* argv[]) {
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
-
 			{
 				dpp::slashcommand cmd("stats", "Get your stats via private message.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
+				dpp::slashcommand cmd("help", "Post a pre-written help message.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				cmd.add_option(dpp::command_option(dpp::co_string, "message", "The pre-written help message to post.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
 
@@ -5495,6 +5571,44 @@ int main(int argc, char* argv[]) {
 			} else {
 				event.reply(fmt::format("Sorry {}, there was an error retrieving your stats. This is not your fault! Please wait a few minutes and try again.", preferred_name));
 			}
+		} else
+		if(command_name == "help") {
+			const auto guild_id = event.command.get_guild().id;
+			std::string message = std::get<std::string>(event.get_parameter("message"));
+			auto result = database_get_help_message(guild_id, message);
+			if(has_value(result)) {
+				std::string content;
+				dpp::message msg;
+
+				if(result.value.host == true) {
+					// Check the user has the HOST role.
+					const dpp::user& issuing_user = event.command.get_issuing_user();
+					dpp::guild_member member = dpp::find_guild_member(guild_id, issuing_user.id);
+					std::vector<dpp::snowflake> roles = member.get_roles();
+					bool is_host = false;
+					for(auto role : roles) {
+						if(role == XDHS_HOST_ROLE_ID) {
+							is_host = true;
+							break;
+						}
+					}
+
+					if(is_host == true) {
+						msg.set_content(result.value.content);
+					} else {
+						msg.set_content("The Host role is required to post this help message.");
+						msg.set_flags(dpp::m_ephemeral);
+					}
+				} else {
+					msg.set_content(result.value.content);
+				}
+
+				event.reply(msg);
+			} else {
+				// TODO: Log database error and return message
+			}
+		} else {
+			log(LOG_LEVEL_ERROR, "No handler for '{}' command.", command_name);
 		}
 	});
 
