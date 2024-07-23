@@ -3965,6 +3965,7 @@ int main(int argc, char* argv[]) {
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& command : commands.value) {
 							if(strlen(command.summary) > 0) {
+								// NOTE: ARGH! Discord trims whitespace on auto complete options so we can't align this list nicely. ;(
 								auto choice = fmt::format("{} - {}", command.name, command.summary);
 								response.add_autocomplete_choice(dpp::command_option_choice(choice, command.name));
 							} else {
