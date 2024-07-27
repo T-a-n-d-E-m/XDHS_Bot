@@ -264,10 +264,10 @@ static std::string random_string(const int len) {
 static const size_t DOWNLOAD_BYTES_MAX = (3 * 1024 * 1024);
 
 // Send a message to a channel. Mostly used for posting what the bot is currently doing.
-static void send_message(dpp::cluster& bot, const u64 channel_id, const std::string& text) {
+static void send_message(dpp::cluster& bot, const u64 guild_id, const u64 channel_id, const std::string& text) {
 	dpp::message message;
 	message.set_type(dpp::message_type::mt_default);
-	message.set_guild_id(GUILD_ID);
+	message.set_guild_id(guild_id);
 	message.set_channel_id(channel_id);
 	message.set_allowed_mentions(false, false, false, false, {}, {});
 	message.set_content(text);
@@ -433,6 +433,8 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"OTJ", "Outlaws of Thunder Junction",                 1, false},
 	{"MH3", "Modern Horizons 3",                           1, false},
 	{"BLB", "Bloomburrow",                                 1, false},
+	{"DSK", "Duskmourn: House of Horror",                  0, false}, // TODO: Needs art
+	{"FDN", "Foundations",                                 0, false}, // TODO: Needs art
 
 	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
@@ -1846,16 +1848,17 @@ struct Member {
 	const char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 };
 
-static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const char* draft_code, std::string& prefix) {
+static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const char* draft_code, std::string& prefix, int limit) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	prefix += "%";
-	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT 25";
+	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code,     strlen(draft_code));
 	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT(3, MYSQL_TYPE_LONGLONG, &limit,         sizeof(limit));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Member result = {0};
@@ -1870,19 +1873,20 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix) {
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
 	const DRAFT_STATUS status = DRAFT_STATUS_CREATED;
 
-	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status,        sizeof(status));
 	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT(3, MYSQL_TYPE_LONGLONG, &limit,		    sizeof(limit));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -1896,16 +1900,17 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_edit_draft_autocomplete(const u64 guild_id, std::string& prefix) {
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_edit_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &limit,         sizeof(limit));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -1919,21 +1924,22 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_delete_draft_autocomplete(const u64 guild_id, std::string& prefix) {
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_delete_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status>=? AND status<? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status>=? AND status<? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
 	const DRAFT_STATUS status1 = DRAFT_STATUS_CREATED;
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
-	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_INIT(5);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status1,       sizeof(status1));
 	MYSQL_INPUT(2, MYSQL_TYPE_LONG,     &status2,       sizeof(status2));
 	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT(4, MYSQL_TYPE_LONGLONG, &limit,         sizeof(limit));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
@@ -2285,31 +2291,31 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 struct Stats {
 	u64 timestamp;
 	struct {
-		char name[32+1]; // FIXME: Magic numbers must match the database schema
+		char name[DEVOTION_BADGE_NAME_LENGTH_MAX + 1];
 		int value;
 		int next;
 	} devotion;
 
 	struct {
-		char name[32+1];
+		char name[VICTORY_BADGE_NAME_LENGTH_MAX + 1];
 		int value;
 		int next;
 	} victory;
 
 	struct {
-		char name[32+1];
+		char name[TROPHIES_BADGE_NAME_LENGTH_MAX + 1];
 		int value;
 		int next;
 	} trophies;
 
 	struct {
-		char name[32+1];
+		char name[SHARK_BADGE_NAME_LENGTH_MAX + 1];
 		int value;
 		int next;
 	} shark;
 
 	struct {
-		char name[32+1];
+		char name[HERO_BADGE_NAME_LENGTH_MAX + 1];
 		int value;
 		int next;
 	} hero;
@@ -2406,13 +2412,12 @@ struct Command_Summary {
 
 static const Database_Result<std::vector<Command_Summary>> database_get_help_messages_for_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
 	(void)guild_id;
-	if(limit > 25) limit = 25;
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const std::string search = "%" + prefix + "%";
 	//prefix += "%";
 	// NOTE: Discord allows a max of 25 auto complete options, but we only want 24 here to
 	// leave room for the 'all commands' option.
-	const char* query = "SELECT name, LOWER(summary) FROM commands WHERE hidden=0 AND summary LIKE LOWER(?) ORDER BY name LIMIT ?";
+	const char* query = "SELECT name, summary FROM commands WHERE hidden=0 AND LOWER(summary) LIKE LOWER(?) ORDER BY name LIMIT ?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
@@ -2439,7 +2444,7 @@ struct Command {
 static const Database_Result<Command> database_get_help_message(const u64 guild_id, const std::string& name) {
 	(void)guild_id;
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
-	const char* query = "SELECT team, content FROM commands WHERE name=?";
+	const char* query = "SELECT team, content FROM commands WHERE summary=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(1);
@@ -3602,7 +3607,7 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 		text += "### :four: After all pods have completed round 3:\n";
 		text += fmt::format("	**/finish** - Post the post-draft reminder message to <#{}> draft.\n", draft.value->reminder_channel_id);
 
-		send_message(bot, draft.value->hosting_channel_id, text);
+		send_message(bot, GUILD_ID, draft.value->hosting_channel_id, text);
 	}
 }
 
@@ -3650,9 +3655,25 @@ static void set_bot_presence(dpp::cluster& bot) {
 // Output the required MySQL tables for this bot. These tables could be created programmatically but I prefer to limit table creation/deletion to root.
 static void output_sql() {
 	fprintf(stdout, "-- Use ./eventbot -sql to create this file.\n\n");
-	fprintf(stdout, "CREATE DATABASE IF NOT EXISTS XDHS; USE XDHS\n\n");
+	fprintf(stdout, "CREATE DATABASE IF NOT EXISTS %s; USE %s;\n\n", g_config.mysql_database, g_config.mysql_database);
 
-	// NOTE: BadgeBot tables not shown here.
+	fprintf(stdout, "\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS stats(id BIGINT PRIMARY KEY NOT NULL UNIQUE, timestamp BIGINT DEFAULT 0);\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS devotion (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", DEVOTION_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS victory (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", VICTORY_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS trophies (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", TROPHIES_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS shark (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0, is_shark BOOLEAN NOT NULL DEFAULT 0);\n", SHARK_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS hero (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", HERO_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS win_rate_recent (id BIGINT PRIMARY KEY NOT NULL UNIQUE, league FLOAT NOT NULL DEFAULT 0, bonus FLOAT NOT NULL DEFAULT 0, overall FLOAT NOT NULL DEFAULT 0);\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS win_rate_all_time (id BIGINT PRIMARY KEY NOT NULL UNIQUE, league FLOAT NOT NULL DEFAULT 0, bonus FLOAT NOT NULL DEFAULT 0, overall FLOAT NOT NULL DEFAULT 0);\n");
+
+	fprintf(stdout, "\n");
+
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS xmage_version (version VARCHAR(64) NOT NULL UNIQUE, timestamp BIGINT NOT NULL UNIQUE);\n");
+	// TODO: Delete name when BadgeBot is turned off
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS commands (name VARCHAR(64) NOT NULL UNIQUE PRIMARY KEY, team BOOLEAN NOT NULL DEFAULT 0, hidden BOOLEAN NOT NULL DEFAULT 0, content VARCHAR(%lu) NOT NULL, summary VARCHAR(%d) NOT NULL);\n", DISCORD_MESSAGE_CHARACTER_LIMIT, DISCORD_AUTOCOMPLETE_STRING_LENGTH_MAX);
+
+	fprintf(stdout, "\n");
 
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS draft_events(\n");
 	// Draft details
@@ -3765,7 +3786,6 @@ static void output_sql() {
 	fprintf(stdout, "\n\n");
 #endif
 
-
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS noshows(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
@@ -3781,6 +3801,10 @@ static void output_sql() {
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
+	fprintf(stdout, "CREATE USER '%s'@localhost IDENTIFIED BY '%s'\n", g_config.mysql_username, g_config.mysql_password);
+	fprintf(stdout, "GRANT DELETE, INSERT, SELECT, UPDATE ON %s.* TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
+	fprintf(stdout, "GRANT DROP ON %s.commands TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
+	fprintf(stdout, "FLUSH PRIVILEGES;\n");
 }
 
 static std::vector<std::string> get_pack_images(const char* format) {
@@ -3828,20 +3852,25 @@ static std::vector<std::string> get_pack_images(const char* format) {
 }
 
 static void config_file_kv_pair_callback(const char* key, const char* value, size_t value_len) {
-	CONFIG_KEY_STR(mysql_host) else
+	CONFIG_KEY_STR(mysql_host)     else
 	CONFIG_KEY_STR(mysql_username) else
 	CONFIG_KEY_STR(mysql_password) else
 	CONFIG_KEY_STR(mysql_database) else
-	CONFIG_KEY_U16(mysql_port) else
-	CONFIG_KEY_STR(logfile_path) else
-	CONFIG_KEY_STR(discord_token) else
-	CONFIG_KEY_STR(xmage_server) else
-	CONFIG_KEY_STR(eventbot_host) else
-	CONFIG_KEY_STR(api_key) else
+	CONFIG_KEY_U16(mysql_port)     else
+	CONFIG_KEY_STR(logfile_path)   else
+	CONFIG_KEY_STR(discord_token)  else
+	CONFIG_KEY_STR(xmage_server)   else
+	CONFIG_KEY_STR(eventbot_host)  else
+	CONFIG_KEY_STR(api_key)        else
 	CONFIG_KEY_STR(imgur_client_secret)
 }
 
 int main(int argc, char* argv[]) {
+	// Load the config file. This file has sensitive information so isn't in version control.
+	if(!load_config_file(CONFIG_FILE_NAME, config_file_kv_pair_callback)) {
+		return EXIT_FAILURE;
+	}
+
 	if(argc > 1) {
 		if(strcmp(argv[1], "-sql") == 0) {
 			// Dump SQL schema to stdout and exit.
@@ -3873,12 +3902,7 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	// Load the bot.ini config file. This file has sensitive information and so isn't versioned.
-	if(!load_config_file(CONFIG_FILE_NAME, config_file_kv_pair_callback)) {
-		return EXIT_FAILURE;
-	}
-
-	// Check we're running on the correct server.
+	// Check we're running on the deploy server and not the build server.
 	{
 		static const size_t HOSTNAME_MAX = 253 + 1; // 253 is the maximum number of ASCII characters allowed for a hostname.
 		char hostname[HOSTNAME_MAX];
@@ -3956,7 +3980,7 @@ int main(int argc, char* argv[]) {
 					if(event.name == "post_draft") {
 						// Gets a list of all drafts that haven't been posted.
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						auto draft_codes = database_get_draft_codes_for_post_draft_autocomplete(guild_id, prefix);
+						auto draft_codes = database_get_draft_codes_for_post_draft_autocomplete(guild_id, prefix, DISCORD_AUTOCOMPLETE_ENTRIES_MAX);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
@@ -3966,7 +3990,7 @@ int main(int argc, char* argv[]) {
 					if(event.name == "edit_draft" || "view_draft") {
 						// Gets a list of drafts that have been created, but not necessarily posted yet.
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						auto draft_codes = database_get_draft_codes_for_edit_draft_autocomplete(guild_id, prefix);
+						auto draft_codes = database_get_draft_codes_for_edit_draft_autocomplete(guild_id, prefix, DISCORD_AUTOCOMPLETE_ENTRIES_MAX);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
@@ -3975,7 +3999,7 @@ int main(int argc, char* argv[]) {
 					} else
 					if(event.name == "delete_draft") {
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						auto draft_codes = database_get_draft_codes_for_delete_draft_autocomplete(guild_id, prefix);
+						auto draft_codes = database_get_draft_codes_for_delete_draft_autocomplete(guild_id, prefix, DISCORD_AUTOCOMPLETE_ENTRIES_MAX);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
@@ -3987,17 +4011,17 @@ int main(int argc, char* argv[]) {
 					if(event.name == "help") {
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						std::string prefix = std::get<std::string>(opt.value);
-						int limit = 25;
+						int limit = DISCORD_AUTOCOMPLETE_ENTRIES_MAX;
 						if(prefix.length() == 0) {
 							response.add_autocomplete_choice(dpp::command_option_choice("All Commands - Print a list of all commands", "all_commands"));
-							limit = 24;
+							--limit;
 						}
 						auto commands = database_get_help_messages_for_autocomplete(guild_id, prefix, limit);
 						for(auto& command : commands.value) {
 							if(strlen(command.summary) > 0) {
 								// NOTE: ARGH! Discord trims whitespace on auto complete options so we can't align this list nicely. ;(
-								auto choice = fmt::format("{} - {}", command.name, command.summary);
-								response.add_autocomplete_choice(dpp::command_option_choice(choice, command.name));
+								//auto choice = fmt::format("{} - {}", command.name, command.summary);
+								response.add_autocomplete_choice(dpp::command_option_choice(command.summary, command.summary));
 							} else {
 								response.add_autocomplete_choice(dpp::command_option_choice(command.name, command.name));
 							}
@@ -5610,13 +5634,14 @@ int main(int argc, char* argv[]) {
 				auto result = database_get_all_help_messages(guild_id);
 				if(has_value(result)) {
 					std::string content;
-					content.reserve(2000); // FIXME: Magic number
-					content += "```";
+					content.reserve(DISCORD_MESSAGE_CHARACTER_LIMIT);
+					//content += "```";
 					dpp::message msg;
 					for(auto& help_message : result.value) {
-						content += fmt::format("{:<{}} - {}\n", help_message.name, 32, help_message.summary);
+						//content += fmt::format("{:<{}} - {}\n", help_message.name, 32, help_message.summary);
+						content += fmt::format("{}\n", help_message.summary);
 					}
-					content += "```";
+					//content += "```";
 					msg.set_content(content);
 					msg.set_flags(dpp::m_ephemeral);
 					event.reply(msg);
@@ -5753,7 +5778,7 @@ int main(int argc, char* argv[]) {
 		if(new_sign_up_status == SIGNUP_STATUS_MINUTEMAGE) {
 			time_t draft_start = unpack_and_make_timestamp(draft.value->time, draft.value->time_zone);
 			if(now >= draft_start) {
-				send_message(bot, draft.value->hosting_channel_id, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
+				send_message(bot, GUILD_ID, draft.value->hosting_channel_id, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
 			}
 		}
 	});
@@ -5783,7 +5808,7 @@ int main(int argc, char* argv[]) {
 			log(LOG_LEVEL_ERROR, "database_delete_member_from_all_sign_ups(%lu, %lu) failed", guild_id, member_id);
 		}
 
-		send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Member '{}' (ID:{}) has left the server.", event.removed.username, event.removed.id));
+		send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("Member '{}' (ID:{}) has left the server.", event.removed.username, event.removed.id));
 	});
 
 	// Called when the bot has successfully connected to Discord.
@@ -5816,21 +5841,21 @@ int main(int argc, char* argv[]) {
 
 		// Send the pre-draft reminder message if it hasn't already been sent.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft_start - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
 		}
 
 		// Ping the tentatives if they haven't already been pinged.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_TENTATIVES_PINGED)) && (draft_start - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending tentative reminder message, if needed.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending tentative reminder message, if needed.", draft_code.value.c_str()));
 			// Redraw the sign up posts so the Tentative button shows as locked.
 			ping_tentatives(bot, GUILD_ID, draft_code.value.c_str());
 		}
 
 		// Lock the draft.
 		if((draft.value->status < DRAFT_STATUS_LOCKED) && now >= draft_start) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Locking sign ups and pinging for a minutemage, if needed.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID,BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Locking sign ups and pinging for a minutemage, if needed.", draft_code.value.c_str()));
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_LOCKED);
 
 			// Ping minutemages if there is an odd number of confirmed sign ups.
@@ -5841,7 +5866,7 @@ int main(int argc, char* argv[]) {
 
 		// Delete the draft after a few hours.
 		if((draft.value->status < DRAFT_STATUS_COMPLETE) && now - draft_start > SECONDS_AFTER_DRAFT_TO_DELETE_POSTS) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Deleting completed draft.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Deleting completed draft.", draft_code.value.c_str()));
 			delete_draft_posts(bot, GUILD_ID, draft_code.value);
 			// TODO: Test this is actually working!
 			delete_temp_roles(bot, GUILD_ID, draft_code.value);
