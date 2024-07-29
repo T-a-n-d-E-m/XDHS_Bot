@@ -4012,10 +4012,12 @@ int main(int argc, char* argv[]) {
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						std::string prefix = std::get<std::string>(opt.value);
 						int limit = DISCORD_AUTOCOMPLETE_ENTRIES_MAX;
+#if 0
 						if(prefix.length() == 0) {
 							response.add_autocomplete_choice(dpp::command_option_choice("All Commands - Print a list of all commands", "all_commands"));
 							--limit;
 						}
+#endif
 						auto commands = database_get_help_messages_for_autocomplete(guild_id, prefix, limit);
 						for(auto& command : commands.value) {
 							if(strlen(command.summary) > 0) {
