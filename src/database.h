@@ -26,7 +26,7 @@ struct Database_Result : Result<Value_Type, Error_String_Type> {
 };
 
 #define MAKE_DATABASE_VALUE_RESULT(result, cnt) {.error=(ERROR_NONE), .value={result}, .count=(cnt)}
-#define MAKE_DATABASE_ERROR_RESULT(code, cnt, ...) {.error=(code), .errstr={fmt::format(to_cstring(code) __VA_OPT__(,) __VA_ARGS__)}, .count=(cnt)}
+#define MAKE_DATABASE_ERROR_RESULT(code, cnt, ...) {.error=(code), .errstr={fmt::format(global_error_to_string(code) __VA_OPT__(,) __VA_ARGS__)}, .count=(cnt)}
 
 // For database_ functions that return no data. We could use template specialization here but this is simpler.
 struct Database_No_Value {};

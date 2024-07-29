@@ -4270,7 +4270,7 @@ int main(int argc, char* argv[]) {
 						message.add_file("banner.png", dpp::utility::read_file(banner.value));
 						bot.message_create(message);
 					} else {
-						event.reply(to_cstring(banner.error));
+						event.reply(std::string{global_error_to_string(banner.error)});
 					}
 					opts.images.clear();
 				}
@@ -4285,7 +4285,7 @@ int main(int argc, char* argv[]) {
 			auto draft_code_str = std::get<std::string>(event.get_parameter("draft_code"));
 			const auto draft_code = parse_draft_code(draft_code_str.c_str());
 			if(is_error(draft_code)) {
-				event.reply(to_cstring(draft_code.error));
+				event.reply(std::string{global_error_to_string(draft_code.error)});
 				return;
 			}
 
@@ -4308,7 +4308,7 @@ int main(int argc, char* argv[]) {
 			{
 				const auto result = parse_date_string(date_string.c_str());
 				if(is_error(result)) {
-					event.reply(to_cstring(result.error));
+					event.reply(std::string{global_error_to_string(result.error)});
 					return;
 				}
 				date = result.value;
@@ -4383,7 +4383,7 @@ int main(int argc, char* argv[]) {
 				event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
 				auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
 					if(is_error(download)) {
-						event.edit_response(to_cstring(download.error));
+						event.edit_response(std::string{global_error_to_string(download.error)});
 						return;
 					}
 					SCOPE_EXIT(free(download.value.data));
@@ -4426,7 +4426,7 @@ int main(int argc, char* argv[]) {
 			auto start = std::chrono::high_resolution_clock::now();
 			const auto result = render_banner(&opts);
 			if(is_error(result)) {
-				event.edit_response(to_cstring(result.error));
+				event.edit_response(std::string{global_error_to_string(result.error)});
 				return;
 			}
 			auto end = std::chrono::high_resolution_clock::now();
