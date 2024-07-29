@@ -2663,10 +2663,12 @@ static constexpr const std::string_view to_string(const DRAFT_TYPE dt) {
 	return {""};
 }
 
+#if 0
 struct Draft_Type {
 	DRAFT_TYPE value;
 	const char* name;
 };
+#endif
 
 
 struct Icon {
@@ -3181,7 +3183,7 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 			}
 		}
 
-		embed.add_field(fmt::format(g_draft_sign_up_columns[i].header, count), names, true);
+		embed.add_field(fmt::format(fmt::runtime(g_draft_sign_up_columns[i].header), count), names, true);
 	}
 
 	// Attach banner if it hasn't already been attached, or if the file on disk is newer.
@@ -5629,7 +5631,7 @@ int main(int argc, char* argv[]) {
 
 					bot.direct_message_create(issuing_user.id, message);
 				} else {
-					event.reply(fmt::format("No stats found for {}. You must complete at least one XDHS draft first."));
+					event.reply(fmt::format("No stats found for {}. You must complete at least one XDHS draft first.", preferred_name));
 				}
 			} else {
 				event.reply(fmt::format("Sorry {}, there was an error retrieving your stats. This is not your fault! Please wait a few minutes and try again.", preferred_name));
