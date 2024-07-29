@@ -239,8 +239,8 @@ static void sig_handler(int signo) {
 	g_exit_code = signo;
 }
 
-static std::string to_upper(const char* src) {
-	const size_t len = strlen(src);
+static std::string to_upper(const std::string_view src) {
+	const size_t len = src.length();
 	std::string result;
 	result.reserve(len);
 	for(size_t i = 0; i < len; ++i) {
@@ -673,17 +673,17 @@ enum LEAGUE_ID {
 	LEAGUE_ID_EURO_BONUS,
 };
 
-static const char* to_cstring(const LEAGUE_ID id) {
+static constexpr const std::string_view to_string(const LEAGUE_ID id) {
 	switch(id) {
-		case LEAGUE_ID_AMERICAS_CHRONO: return "Americas Chrono";
-		case LEAGUE_ID_EURO_CHRONO:     return "Euro Chrono";
-		case LEAGUE_ID_ASIA_CHRONO:     return "Asia Chrono";
-		case LEAGUE_ID_PACIFIC_CHRONO:  return "Pacific Chrono";
-		case LEAGUE_ID_AMERICAS_BONUS:  return "Americas Bonus";
-		case LEAGUE_ID_EURO_BONUS:      return "Euro Bonus";
+		case LEAGUE_ID_AMERICAS_CHRONO: return {"Americas Chrono"};
+		case LEAGUE_ID_EURO_CHRONO:     return {"Euro Chrono"};
+		case LEAGUE_ID_ASIA_CHRONO:     return {"Asia Chrono"};
+		case LEAGUE_ID_PACIFIC_CHRONO:  return {"Pacific Chrono"};
+		case LEAGUE_ID_AMERICAS_BONUS:  return {"Americas Bonus"};
+		case LEAGUE_ID_EURO_BONUS:      return {"Euro Bonus"};
 	}
 
-	return NULL;
+	return {""};
 }
 
 struct Start_Time {
@@ -1016,25 +1016,26 @@ enum DRAFT_STATUS {
 	DRAFT_STATUS_END                = 128,
 };
 
-static const char* to_cstring(DRAFT_STATUS status) {
+static constexpr const std::string_view to_string(const DRAFT_STATUS status) {
 	switch(status) {
-		case DRAFT_STATUS_INVALID:           return "DRAFT_STATUS_INVALID";
+		case DRAFT_STATUS_INVALID:           return {"DRAFT_STATUS_INVALID"};
 
-		case DRAFT_STATUS_CREATED:           return "DRAFT_STATUS_CREATED";
-		case DRAFT_STATUS_POSTED:            return "DRAFT_STATUS_POSTED";
-		case DRAFT_STATUS_REMINDER_SENT:     return "DRAFT_STATUS_REMINDER_SENT";
-		case DRAFT_STATUS_TENTATIVES_PINGED: return "DRAFT_STATUS_TENTATIVES_PINGED";
-		case DRAFT_STATUS_LOCKED:            return "DRAFT_STATUS_LOCKED";
-		case DRAFT_STATUS_FIRED:             return "DRAFT_STATUS_FIRED";
-		case DRAFT_STATUS_COMPLETE:          return "DRAFT_STATUS_COMPLETE";
-		default:
-			break;
+		case DRAFT_STATUS_CREATED:           return {"DRAFT_STATUS_CREATED"};
+		case DRAFT_STATUS_POSTED:            return {"DRAFT_STATUS_POSTED"};
+		case DRAFT_STATUS_REMINDER_SENT:     return {"DRAFT_STATUS_REMINDER_SENT"};
+		case DRAFT_STATUS_TENTATIVES_PINGED: return {"DRAFT_STATUS_TENTATIVES_PINGED"};
+		case DRAFT_STATUS_LOCKED:            return {"DRAFT_STATUS_LOCKED"};
+		case DRAFT_STATUS_FIRED:             return {"DRAFT_STATUS_FIRED"};
+		case DRAFT_STATUS_COMPLETE:          return {"DRAFT_STATUS_COMPLETE"};
+
+		case DRAFT_STATUS_END:               return {"DRAFT_STATUS_END"};
 	}
-	return NULL;
+	return {""};
 }
 
 static std::string draft_status_to_string(int status) {
 	std::string result;
+	result.reserve(64);
 
 	bool first = true;
 	for(int i = (int)DRAFT_STATUS_CREATED; i < (int)DRAFT_STATUS_END; i *= 2) {
@@ -1044,12 +1045,11 @@ static std::string draft_status_to_string(int status) {
 			} else {
 				first = false;
 			}
-			result += to_cstring((DRAFT_STATUS)i) + strlen("DRAFT_STATUS_");
+			result += std::string{to_string((DRAFT_STATUS)i)};
 		}
 	}
 
 	return result;
-
 }
 
 // All data needed for a #-pre-register post is available in this structure.
@@ -1104,7 +1104,7 @@ enum POD_ALLOCATION_REASON {
 	POD_ALLOCATION_RANDOM // Flexible players are randomly assigned to whatever empty seats are left
 };
 
-static const char* emoji_for_reason(POD_ALLOCATION_REASON r) {
+static const char* emoji_for_reason(const POD_ALLOCATION_REASON r) {
 	switch(r) {
 		case POD_ALLOCATION_REASON_UNALLOCATED: return ":grey_question:"; // Should never happen
 		case POD_ALLOCATION_REASON_SINGLE_POD:  return ":one:";
@@ -1372,7 +1372,7 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 }
 
 // TODO: Rename database_get_draft?
-static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string& draft_code) {
+static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 
 	const char* query = R"(
@@ -1409,7 +1409,7 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 
 	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	auto result = std::make_shared<Draft_Event>();
@@ -1538,18 +1538,23 @@ enum SIGNUP_STATUS : int {
 };
 
 
-static const char* to_cstring(SIGNUP_STATUS s) {
+static constexpr const std::string_view to_string(const SIGNUP_STATUS s) {
 	switch(s) {
-		case SIGNUP_STATUS_NONE:        return "none";
-		case SIGNUP_STATUS_COMPETITIVE: return "competitive";
-		case SIGNUP_STATUS_CASUAL:      return "casual";
-		case SIGNUP_STATUS_FLEXIBLE:    return "flexible";
-		case SIGNUP_STATUS_TENTATIVE:   return "tentative";
-		case SIGNUP_STATUS_MINUTEMAGE:  return "minutemage";
-		case SIGNUP_STATUS_DECLINE:     return "decline";
-		case SIGNUP_STATUS_REMOVED:     return "removed";
-		default:                        return NULL;
+		case SIGNUP_STATUS_NONE:        return {"none"};
+		case SIGNUP_STATUS_COMPETITIVE: return {"competitive"};
+		case SIGNUP_STATUS_CASUAL:      return {"casual"};
+		case SIGNUP_STATUS_FLEXIBLE:    return {"flexible"};
+		case SIGNUP_STATUS_TENTATIVE:   return {"tentative"};
+		case SIGNUP_STATUS_MINUTEMAGE:  return {"minutemage"};
+		case SIGNUP_STATUS_DECLINE:     return {"decline"};
+		case SIGNUP_STATUS_REMOVED:     return {"removed"};
+
+		case SIGNUP_STATUS_INVALID:     return {"invalid"};
+
+		case SIGNUP_STATUS_PLAYING:     return {"playing"};
+		case SIGNUP_STATUS_NOT_PLAYING: return {"not playing"};
 	}
+	return {""};
 }
 
 
@@ -1563,7 +1568,7 @@ struct Draft_Signup_Status {
 	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 };
 
-static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(const u64 guild_id, const std::string& draft_code, const u64 member_id) {
+static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(const u64 guild_id, const std::string_view draft_code, const u64 member_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "SELECT status, time, preferred_name FROM draft_signups WHERE guild_id=? AND member_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
@@ -1571,7 +1576,7 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,         sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(),  draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE()
 
 	// Defaults for "not currently signed up"
@@ -1590,7 +1595,7 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 guild_id, const std::string& draft_code, const u64 member_id, const std::string& preferred_name, const time_t timestamp, const SIGNUP_STATUS status) {
+static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 guild_id, const std::string_view draft_code, const u64 member_id, const std::string& preferred_name, const time_t timestamp, const SIGNUP_STATUS status) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "INSERT INTO draft_signups (guild_id, member_id, preferred_name, draft_code, time, status) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE preferred_name=?, time=?, status=?";
 	MYSQL_STATEMENT();
@@ -1599,7 +1604,7 @@ static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,             sizeof(member_id));
 	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   preferred_name.c_str(), preferred_name.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   draft_code.c_str(),     draft_code.length());
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   draft_code.data(),      draft_code.length());
 	MYSQL_INPUT(4, MYSQL_TYPE_LONGLONG, &timestamp,             sizeof(timestamp));
 	MYSQL_INPUT(5, MYSQL_TYPE_TINY,     &status,                sizeof(status));
 	MYSQL_INPUT(6, MYSQL_TYPE_STRING,   preferred_name.c_str(), preferred_name.length());
@@ -1612,14 +1617,14 @@ static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 
 
 // Get a list of all sign ups for a draft, sorted by time
 // TODO: This gets passed around a bunch of threads so likely should be a shared_ptr
-static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draft_sign_ups(const u64 guild_id, const std::string& draft_code) {
+static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draft_sign_ups(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "SELECT member_id, preferred_name, time, status FROM draft_signups WHERE guild_id=? AND draft_code=? ORDER BY time";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(),  draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Signup_Status result;
@@ -1662,7 +1667,7 @@ struct Draft_Sign_Up {
 };
 
 // TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
-static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
+static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string_view draft_code, const char* league, int season) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = R"(
 		SELECT
@@ -1689,10 +1694,10 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING,   league,            strlen(league));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &season,           sizeof(season));
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
@@ -1752,7 +1757,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 
 #if 0
 // TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
-static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
+static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups(const u64 guild_id, const std::string_view draft_code, const char* league, int season) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = R"(
 		SELECT
@@ -1784,7 +1789,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups
 	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
 	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
 	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
@@ -1848,17 +1853,17 @@ struct Member {
 	const char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 };
 
-static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const char* draft_code, std::string& prefix, int limit) {
+static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const std::string_view draft_code, std::string& prefix, int limit) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	prefix += "%";
 	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT ?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code,     strlen(draft_code));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_LONGLONG, &limit,         sizeof(limit));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(),    prefix.length());
+	MYSQL_INPUT(3, MYSQL_TYPE_LONGLONG, &limit,            sizeof(limit));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Member result = {0};
@@ -1953,43 +1958,43 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_set_details_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
+static Database_Result<Database_No_Value> database_set_details_message_id(const u64 guild_id, const std::string_view draft_code, const u64 message_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET details_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id, sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id,       sizeof(message_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_set_signups_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
+static Database_Result<Database_No_Value> database_set_signups_message_id(const u64 guild_id, const std::string_view draft_code, const u64 message_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET signups_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id, sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id,       sizeof(message_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_set_reminder_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
+static Database_Result<Database_No_Value> database_set_reminder_message_id(const u64 guild_id, const std::string_view draft_code, const u64 message_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET reminder_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id, sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id,       sizeof(message_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2018,41 +2023,41 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
+static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET details_id=0, signups_id=0 WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string& draft_code, const DRAFT_STATUS status) {
+static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string_view draft_code, const DRAFT_STATUS status) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET status=status|? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status,            sizeof(status));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status,           sizeof(status));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_purge_draft_event(const u64 guild_id, const std::string& draft_code) {
+static Database_Result<Database_No_Value> database_purge_draft_event(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "DELETE FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2065,14 +2070,14 @@ struct Draft_Post_IDs {
 };
 
 // TODO: Don't need this? No function calls this that doesn't call database_get_event
-static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
+static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Post_IDs result;
@@ -2086,28 +2091,28 @@ static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 gui
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
 }
 
-static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild_id, const char* draft_code, const u64 role_id) {
+static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild_id, const std::string_view draft_code, const u64 role_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_roles (guild_id, draft_code, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,   sizeof(role_id));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,          sizeof(role_id));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild_id, const char* draft_code) {
+static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT role_id FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code, strlen(draft_code));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
@@ -2121,29 +2126,29 @@ static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guild_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guild_id, const std::string draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "DELETE FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code, strlen(draft_code));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
 #if 0
-static Database_Result<Database_No_Value> database_add_temp_thread(const u64 guild_id, const u64 thread_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_add_temp_thread(const u64 guild_id, const u64 thread_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_threads (guild_id, draft_code, thread_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &thread_id,   sizeof(thread_id));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &thread_id,        sizeof(thread_id));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2151,14 +2156,14 @@ static Database_Result<Database_No_Value> database_add_temp_thread(const u64 gui
 #endif
 
 #if 0
-static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 guild_id, const char* draft_code) {
+static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT thread_id FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code, strlen(draft_code));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
@@ -2175,14 +2180,14 @@ static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 gui
 
 
 #if 0
-static Database_Result<Database_No_Value> database_del_temp_threads(const u64 guild_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_del_temp_threads(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char *query = "DELETE FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2207,30 +2212,30 @@ static Database_Result<Database_No_Value> database_add_temp_member_role(const u6
 }
 #endif
 
-static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const char* draft_code) {
+static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,        sizeof(member_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const char* draft_code, const char* note) {
+static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const std::string_view draft_code, const std::string_view note) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   note,       (note == NULL ? 0 : strlen(note)));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,        sizeof(member_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   note.data(),       note.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2249,15 +2254,15 @@ static Database_Result<Database_No_Value> database_delete_member_from_all_sign_u
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_update_banner_timestamp(const u64 guild_id, const char* draft_code, const time_t timestamp) {
+static Database_Result<Database_No_Value> database_update_banner_timestamp(const u64 guild_id, const std::string_view draft_code, const time_t timestamp) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET banner_timestamp=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &timestamp,  sizeof(timestamp));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &timestamp,        sizeof(timestamp));
+	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
+	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2441,14 +2446,14 @@ struct Command {
 	char content[DISCORD_MESSAGE_CHARACTER_LIMIT + 1]; // TODO: Enforce this in the spreadsheet.
 };
 
-static const Database_Result<Command> database_get_help_message(const u64 guild_id, const std::string& name) {
+static const Database_Result<Command> database_get_help_message(const u64 guild_id, const std::string_view name) {
 	(void)guild_id;
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "SELECT team, content FROM commands WHERE summary=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(1);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, name.c_str(), name.length());
+	MYSQL_INPUT(0, MYSQL_TYPE_STRING, name.data(), name.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Command result;
@@ -2635,27 +2640,27 @@ enum DRAFT_TYPE {
 	DRAFT_TYPE_COUNT
 };
 
-static const char* to_cstring(const DRAFT_TYPE dt) {
+static constexpr const std::string_view to_string(const DRAFT_TYPE dt) {
 	switch(dt) {
-		case DRAFT_TYPE_DEVOTION_GIANT:  return "Devotion - Giant";
-		case DRAFT_TYPE_DEVOTION_SPHINX: return "Devotion - Sphinx";
-		case DRAFT_TYPE_DEVOTION_DEMON:  return "Devotion - Demon";
-		case DRAFT_TYPE_DEVOTION_DRAGON: return "Devotion - Dragon";
-		case DRAFT_TYPE_DEVOTION_TITAN:  return "Devotion - Titan";
-		case DRAFT_TYPE_DEVOTION_GOD:    return "Devotion - God";
+		case DRAFT_TYPE_NOT_APPLICABLE: return {""};
 
-		case DRAFT_TYPE_COMMUNITY_CHOICE: return "Community Choice";
+		case DRAFT_TYPE_DEVOTION_GIANT:  return {"Devotion - Giant"};
+		case DRAFT_TYPE_DEVOTION_SPHINX: return {"Devotion - Sphinx"};
+		case DRAFT_TYPE_DEVOTION_DEMON:  return {"Devotion - Demon"};
+		case DRAFT_TYPE_DEVOTION_DRAGON: return {"Devotion - Dragon"};
+		case DRAFT_TYPE_DEVOTION_TITAN:  return {"Devotion - Titan"};
+		case DRAFT_TYPE_DEVOTION_GOD:    return {"Devotion - God"};
 
-		case DRAFT_TYPE_HERO_20: return "Hero - 20";
-		case DRAFT_TYPE_HERO_40: return "Hero - 40";
-		case DRAFT_TYPE_HERO_60: return "Hero - 60";
+		case DRAFT_TYPE_COMMUNITY_CHOICE: return {"Community Choice"};
 
-		case DRAFT_TYPE_NOT_APPLICABLE: // Fall through
-		default:
-			break;
+		case DRAFT_TYPE_HERO_20: return {"Hero - 20"};
+		case DRAFT_TYPE_HERO_40: return {"Hero - 40"};
+		case DRAFT_TYPE_HERO_60: return {"Hero - 60"};
+
+		default: break;
 	}
 
-	return NULL;
+	return {""};
 }
 
 struct Draft_Type {
@@ -4088,7 +4093,7 @@ int main(int argc, char* argv[]) {
 				// Optional
 				auto draft_type_opt = dpp::command_option(dpp::co_integer, "draft_type", "Deovtion, hero, or community choice draft.", false);
 				for(int i = (int)DRAFT_TYPE_DEVOTION_GIANT; i < (int)DRAFT_TYPE_COUNT; ++i) {
-					draft_type_opt.add_choice(dpp::command_option_choice(to_cstring((DRAFT_TYPE)i), (std::int64_t)i));
+					draft_type_opt.add_choice(dpp::command_option_choice(std::string{to_string((DRAFT_TYPE)i)}, (std::int64_t)i));
 				}
 				cmd.add_option(draft_type_opt);
 
@@ -4349,7 +4354,7 @@ int main(int argc, char* argv[]) {
 				} break;
 			}
 
-			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league->id)), draft_code_str, format);
+			opts.title = fmt::format("{} / {}: {}", to_upper(to_string(league->id)), draft_code_str, format);
 
 			// Optional options
 			{
@@ -4452,7 +4457,8 @@ int main(int argc, char* argv[]) {
 
 			const XDHS_League* league = draft_code.value.league;
 
-			strcpy(draft_event.league_name, to_cstring(league->id));
+			const std::string_view league_name = to_string(league->id);
+			memcpy(draft_event.league_name, league_name.data(), league_name.length());
 
 			auto format = std::get<std::string>(event.get_parameter("format"));
 			if(format.length() > FORMAT_STRING_LEN_MAX) {
@@ -5018,7 +5024,7 @@ int main(int argc, char* argv[]) {
 				redraw_signup(bot, guild_id, draft.value->reminder_id, draft.value->reminder_channel_id, draft.value);
 			}
 
-			event.reply(fmt::format("{} added to {} {} pod.", preferred_name, g_current_draft_code, to_cstring(pod)));
+			event.reply(fmt::format("{} added to {} {} pod.", preferred_name, g_current_draft_code, to_string(pod)));
 		} else
 		if(command_name == "remove_player") {
 			const auto guild_id = event.command.get_guild().id;
@@ -5535,7 +5541,7 @@ int main(int argc, char* argv[]) {
 				note = std::get<std::string>(opt);
 			}
 
-			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code.c_str(), note.c_str());
+			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code, note);
 			if(!is_error(result)) {
 				const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
 				event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
