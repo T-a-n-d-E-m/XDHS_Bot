@@ -560,10 +560,12 @@ struct Set_List {
 static Set_List get_set_list_from_string(const char* format) {
 	size_t len = strlen(format);
 	char* str = (char*)alloca(len+1);
-	memcpy(str, format, len+1);
+	// FIXME: Don't use memcpy, just do the copy in the toupper loop
+	//memcpy(str, format, len+1);
 	for(size_t i = 0; i < len; ++i) {
-		str[i] = toupper(str[i]);
+		str[i] = toupper(format[i]);
 	}
+	str[len] = 0;
 	char* start = str;
 	char* end = start;
 	bool done = false;
