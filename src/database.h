@@ -3,7 +3,7 @@
 
 #include "log.h"
 #include "result.h"
-#include "scope_exit.h"
+#include "defer.h"
 
 #include <cinttypes>
 
@@ -26,7 +26,13 @@ struct Database_Result : Result<Value_Type, Error_String_Type> {
 };
 
 #define MAKE_DATABASE_VALUE_RESULT(result, cnt) {.error=(ERROR_NONE), .value={result}, .count=(cnt)}
-#define MAKE_DATABASE_ERROR_RESULT(code, cnt, ...) {.error=(code), .errstr={fmt::format(global_error_to_string(code) __VA_OPT__(,) __VA_ARGS__)}, .count=(cnt)}
+
+//#define MAKE_DATABASE_ERROR_RESULT(code, cnt, ...) {.error=(code), .errstr={fmt::format(global_error_to_string(code) __VA_OPT__(,) __VA_ARGS__)}, .count=(cnt)}
+#define RETURN_DATABASE_ERROR_RESULT(code, cnt, ...)                                                                      \
+{                                                                                                                         \
+	const std::string error_string = fmt::format(fmt::runtime(global_error_to_string((code))) __VA_OPT__(,) __VA_ARGS__); \
+	return {(code), error_string, (cnt)};                                                                                 \
+}
 
 // For database_ functions that return no data. We could use template specialization here but this is simpler.
 struct Database_No_Value {};
@@ -35,9 +41,9 @@ struct Database_No_Value {};
 	MYSQL* mysql = mysql_init(NULL);                                                \
 	if(mysql == NULL) {                                                             \
 		log(LOG_LEVEL_ERROR, "mysql_init(NULL) failed");                            \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_INIT_FAILED, 0);              \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_INIT_FAILED, 0);                   \
 	}                                                                               \
-	SCOPE_EXIT(mysql_close(mysql));                                                 \
+	defer { mysql_close(mysql); };                                                  \
 	MYSQL* connection = mysql_real_connect(mysql,                                   \
 		host,                                                                       \
 		username,                                                                   \
@@ -47,7 +53,7 @@ struct Database_No_Value {};
 		NULL, 0);                                                                   \
 	if(connection == NULL) {                                                        \
 		log(LOG_LEVEL_ERROR, "mysql_real_connect() failed");                        \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_REAL_CONNECT_FAILED, 0, mysql_error(mysql)); \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_REAL_CONNECT_FAILED, 0, mysql_error(mysql)); \
 	}
 
 // Prepare a MySQL statement using the provided query.
@@ -55,12 +61,12 @@ struct Database_No_Value {};
 	MYSQL_STMT* stmt = mysql_stmt_init(connection);                                                    \
 	if(stmt == NULL) {                                                                                 \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_init(connection) failed: %s", mysql_stmt_error(stmt));        \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_INIT_FAILED, 0, mysql_stmt_error(stmt));    \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_INIT_FAILED, 0, mysql_stmt_error(stmt));         \
 	}                                                                                                  \
-	SCOPE_EXIT(mysql_stmt_close(stmt));                                                                \
+	defer { mysql_stmt_close(stmt); };                                                                 \
 	if(mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_prepare() failed: %s", mysql_stmt_error(stmt));               \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_PREPARE_FAILED, 0, mysql_stmt_error(stmt)); \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_PREPARE_FAILED, 0, mysql_stmt_error(stmt));      \
 	}
 
 /*
@@ -142,18 +148,18 @@ struct Database_No_Value {};
 #define MYSQL_INPUT_BIND_AND_EXECUTE()                                                                     \
 	if(mysql_stmt_bind_param(stmt, input) != 0) {                                                          \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_param() failed: %s", mysql_stmt_error(stmt));                \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_BIND_PARAM_FAILED, 0, mysql_stmt_error(stmt));       \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_BIND_PARAM_FAILED, 0, mysql_stmt_error(stmt));       \
 	}                                                                                                      \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
 	}
 
 // A query with no input values.
 #define MYSQL_EXECUTE()                                                                                    \
 	if(mysql_stmt_execute(stmt) != 0) {                                                                    \
 		log(LOG_LEVEL_ERROR, "%s: mysql_stmt_execute() failed: %s", __FUNCTION__, mysql_stmt_error(stmt)); \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
 	}
 
 /*
@@ -248,11 +254,11 @@ struct Database_No_Value {};
 #define MYSQL_OUTPUT_BIND_AND_STORE()                                                                       \
     if(mysql_stmt_bind_result(stmt, output) != 0) {                                                         \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_bind_result() failed: %s", mysql_stmt_error(stmt));                \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_BIND_RESULT_FAILED, 0, mysql_stmt_error(stmt));  \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_BIND_RESULT_FAILED, 0, mysql_stmt_error(stmt));  \
     }                                                                                                       \
     if(mysql_stmt_store_result(stmt) != 0) {                                                                \
 		log(LOG_LEVEL_ERROR, "mysql_stmt_store_result: %s", mysql_stmt_error(stmt));                        \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_STORE_RESULT_FAILED, 0, mysql_stmt_error(stmt)); \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_STORE_RESULT_FAILED, 0, mysql_stmt_error(stmt)); \
     }
 
 // Return for queries that don't return any rows
@@ -266,14 +272,14 @@ struct Database_No_Value {};
 		int status = mysql_stmt_fetch(stmt);                                                                     \
 		if(status == 1) {                                                                                        \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
-			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
+			RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
 		}                                                                                                        \
 		if(status == MYSQL_NO_DATA) break;                                                                       \
 		++row_count;                                                                                             \
 	}                                                                                                            \
 	if(row_count > 1) {                                                                                          \
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 0 or 1 was expected.", row_count);            \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_DATABASE_TOO_MANY_RESULTS, row_count, row_count);                \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_DATABASE_TOO_MANY_RESULTS, row_count, row_count);                \
 	}                                                                                                            \
 	return {{result}, row_count};
 
@@ -284,14 +290,14 @@ struct Database_No_Value {};
 		int status = mysql_stmt_fetch(stmt);                                                                     \
 		if(status == 1) {                                                                                        \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
-			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
+			RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
 		}                                                                                                        \
 		if(status == MYSQL_NO_DATA) break;                                                                       \
 		++row_count;                                                                                             \
 	}                                                                                                            \
 	if(row_count != 1) {                                                                                         \
 		log(LOG_LEVEL_ERROR, "Database query returned %lu rows but 1 was expected.", row_count);                 \
-		return MAKE_DATABASE_ERROR_RESULT(ERROR_DATABASE_UNEXPECTED_ROW_COUNT, row_count, row_count);            \
+		RETURN_DATABASE_ERROR_RESULT(ERROR_DATABASE_UNEXPECTED_ROW_COUNT, row_count, row_count);            \
 	}                                                                                                            \
 	return {{result}, 1};
 
@@ -302,7 +308,7 @@ struct Database_No_Value {};
 		int status = mysql_stmt_fetch(stmt);                                                                     \
 		if(status == 1) {                                                                                        \
 			log(LOG_LEVEL_ERROR, "mysql_stmt_fetch() failed: %s", mysql_stmt_error(stmt));                       \
-			return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
+			RETURN_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_FETCH_FAILED, row_count, mysql_stmt_error(stmt)); \
 		}                                                                                                        \
 		if(status == MYSQL_NO_DATA) break;                                                                       \
 		results.push_back(result);                                                                               \

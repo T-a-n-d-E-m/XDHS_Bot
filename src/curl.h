@@ -9,7 +9,7 @@
 #include <curl/curl.h>
 
 #include "result.h"
-#include "scope_exit.h"
+#include "defer.h"
 #include "log.h"
 
 struct Heap_Buffer {
@@ -42,9 +42,9 @@ static size_t curl_write_memory_callback(void* data, size_t size, size_t nmemb, 
 static Result<Heap_Buffer> download_file(const char* url) {
 	CURL* curl = curl_easy_init();
 	if(curl == NULL) {
-		return MAKE_ERROR_RESULT(ERROR_CURL_INIT);
+		RETURN_ERROR_RESULT(ERROR_CURL_INIT);
 	}
-	SCOPE_EXIT(curl_easy_cleanup(curl));
+	defer{ curl_easy_cleanup(curl); };
 
 	// Disable checking SSL certs
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -62,7 +62,7 @@ static Result<Heap_Buffer> download_file(const char* url) {
 
 	CURLcode result = curl_easy_perform(curl);
 	if(result != CURLE_OK) {
-		return MAKE_ERROR_RESULT(ERROR_DOWNLOAD_FAILED, url, curl_easy_strerror(result));
+		RETURN_ERROR_RESULT(ERROR_DOWNLOAD_FAILED, url, curl_easy_strerror(result));
 	}
 
 	return {buffer};
@@ -74,9 +74,9 @@ static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t l
 
 	CURL* curl = curl_easy_init();
 	if(curl == NULL) {
-		return MAKE_ERROR_RESULT(ERROR_CURL_INIT);
+		RETURN_ERROR_RESULT(ERROR_CURL_INIT);
 	}
-	SCOPE_EXIT(curl_easy_cleanup(curl));
+	defer { curl_easy_cleanup(curl); };
 
 	// Disable checking SSL certs
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -100,7 +100,7 @@ static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t l
 	curl_mime* mime;
 	curl_mimepart* part;
 	mime = curl_mime_init(curl);
-	SCOPE_EXIT(curl_mime_free(mime));
+	defer { curl_mime_free(mime); };
 
 	part = curl_mime_addpart(mime);
 	curl_mime_name(part, "image");
@@ -125,14 +125,14 @@ static Result<Heap_Buffer> upload_img_to_imgur(const char* bytes, const size_t l
 	curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 	CURLcode result = curl_easy_perform(curl);
 	if(result != CURLE_OK) {
-		return MAKE_ERROR_RESULT(ERROR_UPLOAD_FAILED, curl_easy_strerror(result));
+		RETURN_ERROR_RESULT(ERROR_UPLOAD_FAILED, curl_easy_strerror(result));
 	}
 
 	long http_code;
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 	if(http_code != 200) {
 		std::string errmsg((char*)buffer.data, buffer.size);
-		return MAKE_ERROR_RESULT(ERROR_UPLOAD_TO_IMGUR_FAILED, errmsg.c_str());
+		RETURN_ERROR_RESULT(ERROR_UPLOAD_TO_IMGUR_FAILED, errmsg.c_str());
 	}
 
 	return {buffer};

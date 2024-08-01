@@ -52,7 +52,7 @@ static Result<Image> make_image(int width, int height, int channels, uint32_t co
 
 	result.data = malloc(width * height * channels);
 	if(result.data == NULL) {
-		return MAKE_ERROR_RESULT(ERROR_OUT_OF_MEMORY);
+		RETURN_ERROR_RESULT(ERROR_OUT_OF_MEMORY);
 	}
 
 	result.channels = channels;
@@ -82,7 +82,7 @@ static Result<Image> load_image(const char* file, int channels) {
 	Image result;
 	result.data = stbi_load(file, &result.w, &result.h, &result.channels, channels);
 	if(result.data == NULL) {
-		return MAKE_ERROR_RESULT(ERROR_LOAD_ART_FAILED, file, stbi_failure_reason());
+		RETURN_ERROR_RESULT(ERROR_LOAD_ART_FAILED, file, stbi_failure_reason());
 	}
 	return {result};
 }

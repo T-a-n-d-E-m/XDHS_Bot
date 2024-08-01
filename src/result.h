@@ -186,7 +186,13 @@ static inline bool is_error(const Result<T>& result) {
 	return result.error != ERROR_NONE;
 }
 
-#define MAKE_ERROR_RESULT(code, ...) {.error=code, .errstr={fmt::format(fmt::runtime(global_error_to_string(code)) __VA_OPT__(,) __VA_ARGS__)}}
+//#define MAKE_ERROR_RESULT(code, ...) {.error=code, .errstr={fmt::format(fmt::runtime(global_error_to_string(code)) __VA_OPT__(,) __VA_ARGS__)}}
+
+#define RETURN_ERROR_RESULT(code, ...)                                                                                    \
+{                                                                                                                         \
+	const std::string error_string = fmt::format(fmt::runtime(global_error_to_string((code))) __VA_OPT__(,) __VA_ARGS__); \
+	return {code, error_string};                                                                                          \
+}
 
 
 #endif // RESULT_HPP_INCLUDED
