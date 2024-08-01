@@ -61,6 +61,7 @@
 
 // User libraries
 #include <dpp/dpp.h>
+#define FMT_HEADER_ONLY
 #include <fmt/format.h>
 
 // Local libraries
@@ -133,7 +134,7 @@ struct Config {
 #include "database.h"
 #include "result.h"
 #include "log.h"
-#include "scope_exit.h"
+#include "defer.h"
 #include "utf8.h"
 
 // Some useful shorthands for common types.
@@ -766,9 +767,9 @@ struct Draft_Code {
 
 
 static Result<Draft_Code> parse_draft_code(const char* draft_code) {
-	if(draft_code == NULL) return MAKE_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(draft_code == NULL) RETURN_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
 	const size_t len = strlen(draft_code);
-	if(len > DRAFT_CODE_LENGTH_MAX) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(len > DRAFT_CODE_LENGTH_MAX) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	char str[DRAFT_CODE_LENGTH_MAX+1]; // Mutable copy
 	memcpy(str, draft_code, len);
 
@@ -779,19 +780,19 @@ static Result<Draft_Code> parse_draft_code(const char* draft_code) {
 
 	// Season
 	while(isdigit(*end)) end++;
-	if(*end != '.') return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(*end != '.') RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
-	if(strlen(start) > 3) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) == 0) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 3) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	out.season = strtol(start, NULL, 10);
 	start = ++end;
 
 	// Week
 	while(isdigit(*end)) end++;
-	if(*end != '-') return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(*end != '-') RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
-	if(strlen(start) > 2) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) == 0) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 2) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	out.week = strtol(start, NULL, 10);
 	end++;
 
@@ -805,7 +806,7 @@ static Result<Draft_Code> parse_draft_code(const char* draft_code) {
 		}
 	}
 
-	return MAKE_ERROR_RESULT(ERROR_LEAGUE_NOT_FOUND);
+	RETURN_ERROR_RESULT(ERROR_LEAGUE_NOT_FOUND);
 }
 
 static inline int pack_time(int year, int month, int day, int hour, int minute) {
@@ -869,15 +870,15 @@ struct Date {
 	const char* start = str; \
 	while(isdigit(*str)) str++;	   \
 	if(*str != '-' && *str != '.' && *str != '\\' && *str != '/' && *str != '\0') { \
-		return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);  \
+		RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);  \
 	} \
 	*str++ = 0; \
-	if(strlen(start) < min_len || strlen(start) > max_len) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING); \
+	if(strlen(start) < min_len || strlen(start) > max_len) RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING); \
 	out = strtol(start, NULL, 10); \
 }
 static const Result<Date> parse_date_string(const char* date_string) {
-	if(strlen(date_string) < strlen("YY-M-D")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
-	if(strlen(date_string) > strlen("YYYY-MM-DD")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) < strlen("YY-M-D")) RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) > strlen("YYYY-MM-DD")) RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
 
 	// Make a mutable copy of the date string, including terminator.
 	char str[strlen("YYYY-MM-DD")+1];
@@ -902,24 +903,24 @@ static const Result<Date> parse_date_string(const char* date_string) {
 	// TODO: Check the date is in the future
 
 	if(result.year < current_year) {
-		return MAKE_ERROR_RESULT(ERROR_DATE_IS_IN_PAST);
+		RETURN_ERROR_RESULT(ERROR_DATE_IS_IN_PAST);
 	}
 
 	if(result.month < 1 || result.month > 12) {
-		return MAKE_ERROR_RESULT(ERROR_INVALID_MONTH);
+		RETURN_ERROR_RESULT(ERROR_INVALID_MONTH);
 	} else
 	if(result.month == 1 || result.month == 3 || result.month == 5 || result.month == 7 || result.month == 8 || result.month == 10 || result.month == 12) {
-		if(result.day > 31) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_31);
+		if(result.day > 31) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_31);
 	} else
 	if (result.month == 4 || result.month == 6 || result.month == 9 || result.month == 11) {
-		if(result.day > 30) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_30);
+		if(result.day > 30) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_30);
 	} else {
 		// Febuary
 		if(((result.year % 4 == 0) && (result.year % 100 != 0)) || (result.year % 400 == 0)) {
 			// Leap year
-			if(result.day > 29) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_29);
+			if(result.day > 29) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_29);
 		} else {
-			if(result.day > 28) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_28);
+			if(result.day > 28) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_28);
 		}
 	}
 
@@ -928,9 +929,9 @@ static const Result<Date> parse_date_string(const char* date_string) {
 
 // Do some rudimentary validation on the start time string sent with create_draft command and parse the provided values. Returns true and fills the 'out' variable if no problem was found, false otherwise.
 static const Result<Start_Time> parse_start_time_string(const char* start_time_string) {
-	if(start_time_string == NULL) return MAKE_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
-	if(strlen(start_time_string) < strlen("H:M")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
-	if(strlen(start_time_string) > strlen("HH:MM")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+	if(start_time_string == NULL) RETURN_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(strlen(start_time_string) < strlen("H:M")) RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+	if(strlen(start_time_string) > strlen("HH:MM")) RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 
 	// Make a copy of the date string, including terminator.
 	char str[strlen("HH:MM")+1];
@@ -945,11 +946,11 @@ static const Result<Start_Time> parse_start_time_string(const char* start_time_s
 		str_ptr++;
 	}
 	if(*str_ptr != ':' && *str_ptr != '-' && *str_ptr != ',' && *str_ptr != '.') {
-		return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+		RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	*str_ptr++ = 0;
 	result.hour = (int) strtol(hour, NULL, 10);
-	if(result.hour < 0 || result.hour > 23) return MAKE_ERROR_RESULT(ERROR_INVALID_HOUR);
+	if(result.hour < 0 || result.hour > 23) RETURN_ERROR_RESULT(ERROR_INVALID_HOUR);
 
 	// Parse the minutes
 	const char* minute = str_ptr;
@@ -957,10 +958,10 @@ static const Result<Start_Time> parse_start_time_string(const char* start_time_s
 		str_ptr++;
 	}
 	if(*str_ptr != '\0') {
-		return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+		RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	result.minute = (int) strtol(minute, NULL, 10);
-	if(result.minute < 1 && result.minute > 59) return MAKE_ERROR_RESULT(ERROR_INVALID_MINUTE);
+	if(result.minute < 1 && result.minute > 59) RETURN_ERROR_RESULT(ERROR_INVALID_MINUTE);
 
 	return {result};
 }
@@ -2587,7 +2588,7 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 	// FIXME: There are no bounds checks done here
 
 	Result<Image> upscaled = make_image(dim.w, dim.h, 1, 0x00000000);
-	SCOPE_EXIT(free(upscaled.value.data));
+	defer { free(upscaled.value.data); };
 	if(is_error(upscaled)) return;// MAKE_ERROR_RESULT(upscaled.error);
 	render_text_to_image(font, str, upscaled_font_size, &upscaled.value, 0, 0, {.c=shadow_color});
 
@@ -2600,7 +2601,7 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 		int height = ceil(((f32)dim.h * ratio));
 		downscaled = make_image(max_width, height, 1, 0x00000000);
 	}
-	SCOPE_EXIT(free(downscaled.value.data));
+	defer { free(downscaled.value.data); };
 	if(is_error(downscaled)) return;
 
 	stbir_resize_uint8_srgb((const u8*)upscaled.value.data, upscaled.value.w, upscaled.value.h, 0,
@@ -2704,7 +2705,7 @@ static u8* file_slurp(const char* path, size_t* size) {
 	u8* file_contents = NULL;
 	FILE* f = fopen(path, "rb");
 	if(f != NULL) {
-		SCOPE_EXIT(fclose(f));
+		defer { fclose(f); };
 		struct stat s;
 		int result = stat(path, &s);
 		if(result != -1) {
@@ -2744,7 +2745,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		int result = stbtt_InitFont(&g_banner_font, buffer, stbtt_GetFontOffsetForIndex(buffer, 0));
 		if(result == 0) {
 			free(buffer);
-			return MAKE_ERROR_RESULT(ERROR_LOAD_FONT_FAILED);
+			RETURN_ERROR_RESULT(ERROR_LOAD_FONT_FAILED);
 		}
 		g_banner_font_loaded = true;
 	}
@@ -2770,21 +2771,21 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	static const int BANNER_PACK_DIVIDER_YPOS = 108; // Starting row to draw the divider between packs
 
 	Result<Image> banner = make_image(BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
-	SCOPE_EXIT(free(banner.value.data));
+	defer { free(banner.value.data); };
 	if(is_error(banner)) {
-		return MAKE_ERROR_RESULT(banner.error);
+		RETURN_ERROR_RESULT(banner.error);
 	}
 
 	// blit the background image(s)
 	if(opts->images.size() == 1) {
 		// A single piece of key art is to be used.
 		Result<Image> scaled = make_image(KEY_ART_WIDTH, KEY_ART_HEIGHT, 3, 0x00000000);
-		SCOPE_EXIT(free(scaled.value.data));
-		if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
+		defer { free(scaled.value.data); };
+		if(is_error(scaled)) RETURN_ERROR_RESULT(scaled.error);
 
 		Result<Image> img = load_image(opts->images[0].c_str(), 3);
-		SCOPE_EXIT(stbi_image_free(img.value.data));
-		if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
+		defer { stbi_image_free(img.value.data); };
+		if(is_error(img)) RETURN_ERROR_RESULT(img.error);
 
 		stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 				(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
@@ -2793,13 +2794,13 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	if(opts->images.size() == 3) {
 		// Three pack images given.
 		Result<Image> scaled = make_image(PACK_IMAGE_WIDTH, PACK_IMAGE_HEIGHT, 3, 0x00000000);
-		SCOPE_EXIT(free(scaled.value.data));
-		if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
+		defer { free(scaled.value.data); };
+		if(is_error(scaled)) RETURN_ERROR_RESULT(scaled.error);
 
 		for(size_t f = 0; f < opts->images.size(); ++f) {
 			Result<Image> img = load_image(opts->images[f].c_str(), 3);
-			SCOPE_EXIT(stbi_image_free(img.value.data));
-			if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
+			defer { stbi_image_free(img.value.data); };
+			if(is_error(img)) RETURN_ERROR_RESULT(img.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 					(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
@@ -2809,21 +2810,21 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		// Draw a thin line to separate each pack.
 		// FIXME: Replace this with a draw_rect function to avoid unnecessary heap allocations for each line.
 		Result<Image> line = make_image(3, BANNER_IMAGE_HEIGHT-BANNER_PACK_DIVIDER_YPOS, 4, 0xFF000000);
-		SCOPE_EXIT(free(line.value.data));
-		if(is_error(line)) return MAKE_ERROR_RESULT(line.error);
+		defer { free(line.value.data); };
+		if(is_error(line)) RETURN_ERROR_RESULT(line.error);
 
 		for(int i = 1; i < 3; ++i) {
 			blit_RGBA_to_RGBA(&line.value, &banner.value, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);
 		}
 	} else {
-		return MAKE_ERROR_RESULT(ERROR_INVALID_PACK_COUNT, opts->images.size());
+		RETURN_ERROR_RESULT(ERROR_INVALID_PACK_COUNT, opts->images.size());
 	}
 
 	// Blit the gradient. TODO: This could be done in code instead of using an image...
 	{
 		Result<Image> grad = load_image(BANNER_GRADIENT_FILE, 1);
-		SCOPE_EXIT(stbi_image_free(grad.value.data));
-		if(is_error(grad)) return MAKE_ERROR_RESULT(grad.error);
+		defer { stbi_image_free(grad.value.data); };
+		if(is_error(grad)) RETURN_ERROR_RESULT(grad.error);
 
 		blit_A8_to_RGBA(&grad.value, grad.value.w, {.c=0xFF000000}, &banner.value, 0, 0);
 	}
@@ -2833,22 +2834,22 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		{
 			// Top
 			Result<Image> frame = load_image(BANNER_FRAME_TOP_FILE, 1);
-			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
+			defer { stbi_image_free(frame.value.data); };
+			if(is_error(frame)) RETURN_ERROR_RESULT(frame.error);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 57);
 		}
 		{
 			// Bottom
 			Result<Image> frame = load_image(BANNER_FRAME_BOTTOM_FILE, 1);
-			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
+			defer { stbi_image_free(frame.value.data); };
+			if(is_error(frame)) RETURN_ERROR_RESULT(frame.error);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 530);
 		}
 		{
 			// Left & right
 			Result<Image> frame = load_image(BANNER_FRAME_SIDE_FILE, 1);
-			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
+			defer { stbi_image_free(frame.value.data); };
+			if(is_error(frame)) RETURN_ERROR_RESULT(frame.error);
 
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 108);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 807, 108);
@@ -2859,8 +2860,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	{
 		Text_Dim dim = get_text_dimensions(&g_banner_font, BANNER_DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
 		Result<Image> img = make_image(dim.w, dim.h, 1, 0x00000000);
-		SCOPE_EXIT(free(img.value.data));
-		if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
+		defer { free(img.value.data); };
+		if(is_error(img)) RETURN_ERROR_RESULT(img.error);
 
 		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), BANNER_DATETIME_FONT_SIZE, &img.value, 0, 0, {.c=0xFFFFFFFF});
 		if(img.value.w < (BANNER_IMAGE_WIDTH - 10)) {
@@ -2871,8 +2872,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 			int height = ceil(((f32)dim.h * ratio));
 
 			Result<Image> scaled = make_image((BANNER_IMAGE_WIDTH-10), height, 1, 0x00000000);
-			SCOPE_EXIT(free(scaled.value.data));
-			if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
+			defer { free(scaled.value.data); };
+			if(is_error(scaled)) RETURN_ERROR_RESULT(scaled.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 								    (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
@@ -2886,8 +2887,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	if(opts->subtitle.length() > 0) {
 		// Blit the subtitle box
 		Result<Image> sub = load_image(BANNER_SUBTITLE_FILE, 1);
-		SCOPE_EXIT(stbi_image_free(sub.value.data));
-		if(is_error(sub)) return MAKE_ERROR_RESULT(sub.error);
+		defer { stbi_image_free(sub.value.data); };
+		if(is_error(sub)) RETURN_ERROR_RESULT(sub.error);
 
 		blit_A8_to_RGBA_no_alpha(&sub.value, sub.value.w, {.c=opts->league_color}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(sub.value.w/2), BANNER_SUBTITLE_FRAME_YPOS);
 
@@ -2895,8 +2896,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		const Icon* icon = get_icon(opts->draft_type);
 		if(icon != NULL) {
 			Result<Image> icon_image = load_image(icon->file, 4);
-			SCOPE_EXIT(stbi_image_free(icon_image.value.data));
-			if(is_error(icon_image)) return MAKE_ERROR_RESULT(icon_image.error);
+			defer { stbi_image_free(icon_image.value.data); };
+			if(is_error(icon_image)) RETURN_ERROR_RESULT(icon_image.error);
 
 			blit_RGBA_to_RGBA(&icon_image.value, &banner.value, icon->x, icon->y);
 		}
@@ -2911,7 +2912,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	image_max_alpha(&banner.value);
 	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
 	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
-		return MAKE_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
+		//RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
+		RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 	}
 
 	return {file_path};
@@ -4393,7 +4395,7 @@ int main(int argc, char* argv[]) {
 						event.edit_response(std::string{global_error_to_string(download.error)});
 						return;
 					}
-					SCOPE_EXIT(free(download.value.data));
+					defer { free(download.value.data); };
 
 					if(download.value.size > DOWNLOAD_BYTES_MAX) {
 						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
@@ -4403,7 +4405,7 @@ int main(int argc, char* argv[]) {
 					std::string temp_file = fmt::format("/tmp/EventBot_Art_{}", random_string(16));
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
-						SCOPE_EXIT(fclose(file));
+						defer { fclose(file); };
 						event.edit_response(":hourglass_flowing_sand: Saving image");
 						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 						if(wrote == download.value.size) {
@@ -4508,7 +4510,7 @@ int main(int argc, char* argv[]) {
 
 				// Attachments are treated as 'ephemeral' by Discord and can be deleted after a period of time. To avoid this ever happening we download the attachment and save it to storage and later attach it to the draft sign up post.
 				Result<Heap_Buffer> download = download_file(banner.url.c_str());
-				SCOPE_EXIT(free(download.value.data));
+				defer { free(download.value.data); };
 				if(is_error(download)) {
 					event.reply(dpp::message(download.errstr).set_flags(dpp::m_ephemeral));
 					return;
@@ -4522,7 +4524,7 @@ int main(int argc, char* argv[]) {
 				std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_DOC_ROOT, draft_code_str);
 				FILE* file = fopen(filename.c_str(), "wb");
 				if(file) {
-					SCOPE_EXIT(fclose(file));
+					defer { fclose(file); };
 					size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 					if(wrote == download.value.size) {
 						strcpy(draft_event.banner_file, filename.c_str());
@@ -4821,7 +4823,7 @@ int main(int argc, char* argv[]) {
 					auto banner = itr->second;
 
 					auto download = download_file(banner.url.c_str());
-					SCOPE_EXIT(free(download.value.data));
+					defer { free(download.value.data); };
 					if(is_error(download)) {
 						event.reply(dpp::message(download.errstr).set_flags(dpp::m_ephemeral));
 						return;
@@ -4835,7 +4837,7 @@ int main(int argc, char* argv[]) {
 					std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_DOC_ROOT, draft_code);
 					FILE* file = fopen(filename.c_str(), "wb");
 					if(file) {
-						SCOPE_EXIT(fclose(file));
+						defer { fclose(file); };
 						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 						if(wrote == download.value.size) {
 							strcpy(draft_event.value->banner_file, filename.c_str());
