@@ -1,6 +1,7 @@
 bot.ini
 eventbot
 eventbot.log
+schema.sql
 *.swp
 
 # Prerequisites

@@ -74,6 +74,68 @@ struct Database_No_Value {};
 	input[(index)].buffer = (void*) (pointer);  \
 	input[(index)].buffer_length = (size);
 
+// Create and prepare the input array used to bind variables to the query string.
+#define MYSQL_INPUT_INIT_2(count)    \
+	MYSQL_BIND input[(count)];       \
+	memset(input, 0, sizeof(input)); \
+	size_t input_index = 0;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_STR(pointer, size)                  \
+	input[input_index].buffer_type = MYSQL_TYPE_STRING; \
+	input[input_index].buffer = (void*) (pointer);      \
+	input[input_index].buffer_length = (size);          \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_BIN(pointer, size)                \
+	input[input_index].buffer_type = MYSQL_TYPE_BLOB; \
+	input[input_index].buffer = (void*) (pointer);    \
+	input[input_index].buffer_length = (size);        \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_I8(pointer)                        \
+	input[input_index].buffer_type = MYSQL_TYPE_TINY;  \
+	input[input_index].buffer = (void*) (pointer);     \
+	input[input_index].buffer_length = sizeof(int8_t); \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_I16(pointer)                        \
+	input[input_index].buffer_type = MYSQL_TYPE_SHORT;  \
+	input[input_index].buffer = (void*) (pointer);      \
+	input[input_index].buffer_length = sizeof(int16_t); \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_I32(pointer)                        \
+	input[input_index].buffer_type = MYSQL_TYPE_LONG;   \
+	input[input_index].buffer = (void*) (pointer);      \
+	input[input_index].buffer_length = sizeof(int32_t); \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_I64(pointer)                          \
+	input[input_index].buffer_type = MYSQL_TYPE_LONGLONG; \
+	input[input_index].buffer = (void*) (pointer);        \
+	input[input_index].buffer_length = sizeof(int64_t);   \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_F32(pointer)                       \
+	input[input_index].buffer_type = MYSQL_TYPE_FLOAT; \
+	input[input_index].buffer = (void*) (pointer);     \
+	input[input_index].buffer_length = sizeof(float);  \
+	input_index++;
+
+// Add an item to the input array. One of these is needed for each input variable.
+#define MYSQL_INPUT_F64(pointer)                        \
+	input[input_index].buffer_type = MYSQL_TYPE_DOUBLE; \
+	input[input_index].buffer = (void*) (pointer);      \
+	input[input_index].buffer_length = sizeof(double);  \
+	input_index++;
+
 // Once all input variables have been declared, bind them to the query and execute the statement.
 #define MYSQL_INPUT_BIND_AND_EXECUTE()                                                                     \
 	if(mysql_stmt_bind_param(stmt, input) != 0) {                                                          \
@@ -108,6 +170,75 @@ struct Database_No_Value {};
 	output[(index)].is_null = &is_null[(index)]; \
 	output[(index)].length = &length[(index)];   \
 	output[(index)].error = &is_error[(index)];
+
+// Prepare an array to hold the output from a query.
+#define MYSQL_OUTPUT_INIT_2(count)     \
+	MYSQL_BIND output[(count)];        \
+	memset(output, 0, sizeof(output)); \
+	unsigned long length[(count)];     \
+	my_bool is_null[(count)];          \
+	my_bool is_error[(count)];         \
+	size_t output_index = 0;
+
+// Set up an item in the output array.
+#define MYSQL_OUTPUT_STR(pointer, size)                    \
+	output[output_index].buffer_type = MYSQL_TYPE_STRING;  \
+	output[output_index].buffer = (void*) (pointer);       \
+	output[output_index].buffer_length = (size);           \
+	output[output_index].is_null = &is_null[output_index]; \
+	output[output_index].length = &length[output_index];   \
+	output[output_index].error = &is_error[output_index];  \
+	output_index++;
+
+// Set up an item in the output array.
+#define MYSQL_OUTPUT_I8(pointer)                           \
+	output[output_index].buffer_type = MYSQL_TYPE_TINY;    \
+	output[output_index].buffer = (void*) (pointer);       \
+	output[output_index].buffer_length = sizeof(int8_t);   \
+	output[output_index].is_null = &is_null[output_index]; \
+	output[output_index].length = &length[output_index];   \
+	output[output_index].error = &is_error[output_index];  \
+	output_index++;
+
+// Set up an item in the output array.
+#define MYSQL_OUTPUT_I16(pointer)                          \
+	output[output_index].buffer_type = MYSQL_TYPE_SHORT;   \
+	output[output_index].buffer = (void*) (pointer);       \
+	output[output_index].buffer_length = sizeof(int16_t);  \
+	output[output_index].is_null = &is_null[output_index]; \
+	output[output_index].length = &length[output_index];   \
+	output[output_index].error = &is_error[output_index];  \
+	output_index++;
+
+// Set up an item in the output array.
+#define MYSQL_OUTPUT_I32(pointer)                          \
+	output[output_index].buffer_type = MYSQL_TYPE_LONG;    \
+	output[output_index].buffer = (void*) (pointer);       \
+	output[output_index].buffer_length = sizeof(int32_t);  \
+	output[output_index].is_null = &is_null[output_index]; \
+	output[output_index].length = &length[output_index];   \
+	output[output_index].error = &is_error[output_index];  \
+	output_index++;
+
+// Set up an item in the output array.
+#define MYSQL_OUTPUT_I64(pointer)                          \
+	output[output_index].buffer_type = MYSQL_TYPE_LONGLONG;    \
+	output[output_index].buffer = (void*) (pointer);       \
+	output[output_index].buffer_length = sizeof(int64_t);  \
+	output[output_index].is_null = &is_null[output_index]; \
+	output[output_index].length = &length[output_index];   \
+	output[output_index].error = &is_error[output_index];  \
+	output_index++;
+
+// Set up an item in the output array.
+#define MYSQL_OUTPUT_F32(pointer)                          \
+	output[output_index].buffer_type = MYSQL_TYPE_FLOAT;    \
+	output[output_index].buffer = (void*) (pointer);       \
+	output[output_index].buffer_length = sizeof(float);  \
+	output[output_index].is_null = &is_null[output_index]; \
+	output[output_index].length = &length[output_index];   \
+	output[output_index].error = &is_error[output_index];  \
+	output_index++;
 
 // Bind the output array to the statement.
 #define MYSQL_OUTPUT_BIND_AND_STORE()                                                                       \

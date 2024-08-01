@@ -560,8 +560,6 @@ struct Set_List {
 static Set_List get_set_list_from_string(const char* format) {
 	size_t len = strlen(format);
 	char* str = (char*)alloca(len+1);
-	// FIXME: Don't use memcpy, just do the copy in the toupper loop
-	//memcpy(str, format, len+1);
 	for(size_t i = 0; i < len; ++i) {
 		str[i] = toupper(format[i]);
 	}
@@ -1297,29 +1295,28 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(21);
-	MYSQL_INPUT( 0, MYSQL_TYPE_LONGLONG, &guild_id,                 sizeof(guild_id));
-	MYSQL_INPUT( 1, MYSQL_TYPE_STRING,   event->pings,              strlen(event->pings));
-	MYSQL_INPUT( 2, MYSQL_TYPE_STRING,   event->draft_code,         strlen(event->draft_code));
-	MYSQL_INPUT( 3, MYSQL_TYPE_STRING,   event->league_name,        strlen(event->league_name));
-	MYSQL_INPUT( 4, MYSQL_TYPE_STRING,   event->format,             strlen(event->format));
-	MYSQL_INPUT( 5, MYSQL_TYPE_STRING,   event->time_zone,          strlen(event->time_zone));
-	MYSQL_INPUT( 6, MYSQL_TYPE_LONG,     &event->time,              sizeof(event->time));
-	MYSQL_INPUT( 7, MYSQL_TYPE_FLOAT,    &event->duration,          sizeof(event->duration));
-	MYSQL_INPUT( 8, MYSQL_TYPE_STRING,   &event->blurbs[0][0],      strlen(&event->blurbs[0][0]));
-	MYSQL_INPUT( 9, MYSQL_TYPE_STRING,   &event->blurbs[1][0],      strlen(&event->blurbs[1][0]));
-	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   &event->blurbs[2][0],      strlen(&event->blurbs[2][0]));
-	MYSQL_INPUT(11, MYSQL_TYPE_STRING,   event->draft_guide_url,    strlen(event->draft_guide_url));
-	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->card_list_url,      strlen(event->card_list_url));
-	MYSQL_INPUT(13, MYSQL_TYPE_STRING,   event->set_list,           strlen(event->set_list));
-	MYSQL_INPUT(14, MYSQL_TYPE_LONG,     &event->color,             sizeof(event->color));
-	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,       strlen(event->xmage_server));
-	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
-	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_file,        strlen(event->banner_file));
-	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->signup_channel_id, sizeof(event->signup_channel_id));
-	MYSQL_INPUT(19, MYSQL_TYPE_LONGLONG, &event->reminder_channel_id, sizeof(event->reminder_channel_id));
-	MYSQL_INPUT(20, MYSQL_TYPE_LONGLONG, &event->hosting_channel_id, sizeof(event->hosting_channel_id));
-
+	MYSQL_INPUT_INIT_2(21);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(event->pings,              strlen(event->pings));
+	MYSQL_INPUT_STR(event->draft_code,         strlen(event->draft_code));
+	MYSQL_INPUT_STR(event->league_name,        strlen(event->league_name));
+	MYSQL_INPUT_STR(event->format,             strlen(event->format));
+	MYSQL_INPUT_STR(event->time_zone,          strlen(event->time_zone));
+	MYSQL_INPUT_I32(&event->time);
+	MYSQL_INPUT_F32(&event->duration);
+	MYSQL_INPUT_STR(&event->blurbs[0][0],      strlen(&event->blurbs[0][0]));
+	MYSQL_INPUT_STR(&event->blurbs[1][0],      strlen(&event->blurbs[1][0]));
+	MYSQL_INPUT_STR(&event->blurbs[2][0],      strlen(&event->blurbs[2][0]));
+	MYSQL_INPUT_STR(event->draft_guide_url,    strlen(event->draft_guide_url));
+	MYSQL_INPUT_STR(event->card_list_url,      strlen(event->card_list_url));
+	MYSQL_INPUT_STR(event->set_list,           strlen(event->set_list));
+	MYSQL_INPUT_I32(&event->color);
+	MYSQL_INPUT_STR(event->xmage_server,       strlen(event->xmage_server));
+	MYSQL_INPUT_I8(&event->draftmancer_draft);
+	MYSQL_INPUT_STR(event->banner_file,        strlen(event->banner_file));
+	MYSQL_INPUT_I64(&event->signup_channel_id);
+	MYSQL_INPUT_I64(&event->reminder_channel_id);
+	MYSQL_INPUT_I64(&event->hosting_channel_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1349,25 +1346,25 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(18);
-	MYSQL_INPUT( 0, MYSQL_TYPE_STRING,   event->format,          strlen(event->format));
-	MYSQL_INPUT( 1, MYSQL_TYPE_LONG,     &event->time,           sizeof(event->time));
-	MYSQL_INPUT( 2, MYSQL_TYPE_FLOAT,    &event->duration,       sizeof(event->duration));
-	MYSQL_INPUT( 3, MYSQL_TYPE_STRING,   &event->blurbs[0][0],   strlen(&event->blurbs[0][0]));
-	MYSQL_INPUT( 4, MYSQL_TYPE_STRING,   &event->blurbs[1][0],   strlen(&event->blurbs[1][0]));
-	MYSQL_INPUT( 5, MYSQL_TYPE_STRING,   &event->blurbs[2][0],   strlen(&event->blurbs[2][0]));
-	MYSQL_INPUT( 6, MYSQL_TYPE_STRING,   event->draft_guide_url, strlen(event->draft_guide_url));
-	MYSQL_INPUT( 7, MYSQL_TYPE_STRING,   event->card_list_url,   strlen(event->card_list_url));
-	MYSQL_INPUT( 8, MYSQL_TYPE_STRING,   event->set_list,        strlen(event->set_list));
-	MYSQL_INPUT( 9, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
-	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
-	MYSQL_INPUT(11, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
-	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_file,     strlen(event->banner_file));
-	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->signup_channel_id, sizeof(event->signup_channel_id));
-	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &event->reminder_channel_id, sizeof(event->reminder_channel_id));
-	MYSQL_INPUT(15, MYSQL_TYPE_LONGLONG, &event->hosting_channel_id, sizeof(event->hosting_channel_id));
-	MYSQL_INPUT(16, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
-	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
+	MYSQL_INPUT_INIT_2(18);
+	MYSQL_INPUT_STR(event->format,          strlen(event->format));
+	MYSQL_INPUT_I32(&event->time);
+	MYSQL_INPUT_F32(&event->duration);
+	MYSQL_INPUT_STR(&event->blurbs[0][0],   strlen(&event->blurbs[0][0]));
+	MYSQL_INPUT_STR(&event->blurbs[1][0],   strlen(&event->blurbs[1][0]));
+	MYSQL_INPUT_STR(&event->blurbs[2][0],   strlen(&event->blurbs[2][0]));
+	MYSQL_INPUT_STR(event->draft_guide_url, strlen(event->draft_guide_url));
+	MYSQL_INPUT_STR(event->card_list_url,   strlen(event->card_list_url));
+	MYSQL_INPUT_STR(event->set_list,        strlen(event->set_list));
+	MYSQL_INPUT_I32(&event->color);
+	MYSQL_INPUT_STR(event->xmage_server,    strlen(event->xmage_server));
+	MYSQL_INPUT_I8(&event->draftmancer_draft);
+	MYSQL_INPUT_STR(event->banner_file,     strlen(event->banner_file));
+	MYSQL_INPUT_I64(&event->signup_channel_id);
+	MYSQL_INPUT_I64(&event->reminder_channel_id);
+	MYSQL_INPUT_I64(&event->hosting_channel_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(event->draft_code,      strlen(event->draft_code));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1376,7 +1373,6 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 // TODO: Rename database_get_draft?
 static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string_view draft_code) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
-
 	const char* query = R"(
 		SELECT
 			status,              -- 0
@@ -1409,39 +1405,39 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	auto result = std::make_shared<Draft_Event>();
 
-	MYSQL_OUTPUT_INIT(25);
-	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result->status,         sizeof(result->status));
-	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result->pings,           PING_STRING_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 3, MYSQL_TYPE_STRING,   result->league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING,   result->format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 5, MYSQL_TYPE_STRING,   result->time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONG,     &result->time,           sizeof(result->time));
-	MYSQL_OUTPUT( 7, MYSQL_TYPE_FLOAT,    &result->duration,       sizeof(result->duration));
-	MYSQL_OUTPUT( 8, MYSQL_TYPE_STRING,   &result->blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 9, MYSQL_TYPE_STRING,   &result->blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING,   &result->blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(11, MYSQL_TYPE_STRING,   result->draft_guide_url, URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(12, MYSQL_TYPE_STRING,   result->card_list_url,   URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING,   result->set_list,        SET_LIST_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color));
-	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->draftmancer_draft, sizeof(result->draftmancer_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_file,     BANNER_FILENAME_MAX + 1);
-	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result->banner_timestamp, sizeof(result->banner_timestamp));
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->signup_channel_id,     sizeof(result->signup_channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->reminder_channel_id,     sizeof(result->reminder_channel_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->hosting_channel_id,     sizeof(result->hosting_channel_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
-	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
+	MYSQL_OUTPUT_INIT_2(25);
+	MYSQL_OUTPUT_I32(&result->status);
+	MYSQL_OUTPUT_STR(result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->pings,           PING_STRING_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result->time);
+	MYSQL_OUTPUT_F32(&result->duration);
+	MYSQL_OUTPUT_STR(&result->blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result->blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result->blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->draft_guide_url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->card_list_url,   URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->set_list,        SET_LIST_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result->color);
+	MYSQL_OUTPUT_STR(result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result->draftmancer_draft);
+	MYSQL_OUTPUT_STR(result->banner_file,     BANNER_FILENAME_MAX + 1);
+	MYSQL_OUTPUT_I64(&result->banner_timestamp);
+	MYSQL_OUTPUT_I64(&result->signup_channel_id);
+	MYSQL_OUTPUT_I64(&result->reminder_channel_id);
+	MYSQL_OUTPUT_I64(&result->hosting_channel_id);
+	MYSQL_OUTPUT_I64(&result->details_id);
+	MYSQL_OUTPUT_I64(&result->signups_id);
+	MYSQL_OUTPUT_I64(&result->reminder_id);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -1449,7 +1445,6 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 
 static const Database_Result<std::vector<Draft_Event>> database_get_all_events(const u64 guild_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
-
 	const char* query = R"(
 		SELECT
 			status,              -- 0
@@ -1482,39 +1477,38 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 	)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(1);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	MYSQL_INPUT_INIT_2(1);
+	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-	//auto results = std::vector<Draft_Event>();
 	Draft_Event result;
 
-	MYSQL_OUTPUT_INIT(25);
-	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result.status,         sizeof(result.status));
-	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result.draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result.pings,           PING_STRING_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 3, MYSQL_TYPE_STRING,   result.league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING,   result.format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 5, MYSQL_TYPE_STRING,   result.time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONG,     &result.time,           sizeof(result.time));
-	MYSQL_OUTPUT( 7, MYSQL_TYPE_FLOAT,    &result.duration,       sizeof(result.duration));
-	MYSQL_OUTPUT( 8, MYSQL_TYPE_STRING,   &result.blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 9, MYSQL_TYPE_STRING,   &result.blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING,   &result.blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(11, MYSQL_TYPE_STRING,   result.draft_guide_url, URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(12, MYSQL_TYPE_STRING,   result.card_list_url,   URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING,   result.set_list,        SET_LIST_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result.color,          sizeof(result.color));
-	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result.xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result.draftmancer_draft, sizeof(result.draftmancer_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result.banner_file,     BANNER_FILENAME_MAX + 1);
-	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result.banner_timestamp, sizeof(result.banner_timestamp));
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result.signup_channel_id, sizeof(result.signup_channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result.reminder_channel_id, sizeof(result.reminder_channel_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result.hosting_channel_id, sizeof(result.hosting_channel_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result.details_id,     sizeof(result.details_id));
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result.signups_id,     sizeof(result.signups_id));
-	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result.reminder_id,    sizeof(result.reminder_id));
+	MYSQL_OUTPUT_INIT_2(25);
+	MYSQL_OUTPUT_I32(&result.status);
+	MYSQL_OUTPUT_STR(result.draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.pings,           PING_STRING_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.time);
+	MYSQL_OUTPUT_F32(&result.duration);
+	MYSQL_OUTPUT_STR(&result.blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result.blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result.blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.draft_guide_url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.card_list_url,   URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.set_list,        SET_LIST_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.color);
+	MYSQL_OUTPUT_STR(result.xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.draftmancer_draft);
+	MYSQL_OUTPUT_STR(result.banner_file,     BANNER_FILENAME_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.banner_timestamp);
+	MYSQL_OUTPUT_I64(&result.signup_channel_id);
+	MYSQL_OUTPUT_I64(&result.reminder_channel_id);
+	MYSQL_OUTPUT_I64(&result.hosting_channel_id);
+	MYSQL_OUTPUT_I64(&result.details_id);
+	MYSQL_OUTPUT_I64(&result.signups_id);
+	MYSQL_OUTPUT_I64(&result.reminder_id);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Draft_Event> results;
@@ -1575,10 +1569,10 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	const char* query = "SELECT status, time, preferred_name FROM draft_signups WHERE guild_id=? AND member_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,         sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(),  draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE()
 
 	// Defaults for "not currently signed up"
@@ -1588,10 +1582,10 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	result.status            = SIGNUP_STATUS_NONE;
 	result.preferred_name[0] = '\0';
 
-	MYSQL_OUTPUT_INIT(3);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONG,     &result.status,         sizeof(result.status));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.timestamp,      sizeof(result.timestamp));
-	MYSQL_OUTPUT(2, MYSQL_TYPE_STRING,   &result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(3);
+	MYSQL_OUTPUT_I32(&result.status);
+	MYSQL_OUTPUT_I64(&result.timestamp);
+	MYSQL_OUTPUT_STR(&result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -1602,16 +1596,16 @@ static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 
 	const char* query = "INSERT INTO draft_signups (guild_id, member_id, preferred_name, draft_code, time, status) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE preferred_name=?, time=?, status=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(9);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,             sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   preferred_name.c_str(), preferred_name.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   draft_code.data(),      draft_code.length());
-	MYSQL_INPUT(4, MYSQL_TYPE_LONGLONG, &timestamp,             sizeof(timestamp));
-	MYSQL_INPUT(5, MYSQL_TYPE_TINY,     &status,                sizeof(status));
-	MYSQL_INPUT(6, MYSQL_TYPE_STRING,   preferred_name.c_str(), preferred_name.length());
-	MYSQL_INPUT(7, MYSQL_TYPE_LONGLONG, &timestamp,             sizeof(timestamp));
-	MYSQL_INPUT(8, MYSQL_TYPE_TINY,     &status,                sizeof(status));
+	MYSQL_INPUT_INIT_2(9);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(preferred_name.c_str(), preferred_name.length());
+	MYSQL_INPUT_STR(draft_code.data(),      draft_code.length());
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_I8(&status);
+	MYSQL_INPUT_STR(preferred_name.c_str(), preferred_name.length());
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_I8(&status);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1624,18 +1618,18 @@ static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draf
 	const char* query = "SELECT member_id, preferred_name, time, status FROM draft_signups WHERE guild_id=? AND draft_code=? ORDER BY time";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(),  draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Signup_Status result;
 
-	MYSQL_OUTPUT_INIT(4);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id,     sizeof(result.member_id));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING,   result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(2, MYSQL_TYPE_LONGLONG, &result.timestamp,     sizeof(result.timestamp));
-	MYSQL_OUTPUT(3, MYSQL_TYPE_LONG,     &result.status,        sizeof(result.status));
+	MYSQL_OUTPUT_INIT_2(4);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.timestamp);
+	MYSQL_OUTPUT_I32(&result.status);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Draft_Signup_Status> results;
@@ -1695,11 +1689,11 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 		;)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING,   league,            strlen(league));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &season,           sizeof(season));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_STR(league, strlen(league));
+	MYSQL_INPUT_I32(&season);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
@@ -1787,11 +1781,11 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups
 		;)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_STR(league, strlen(league));
+	MYSQL_INPUT_I32(&season);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
@@ -1861,18 +1855,18 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(),    prefix.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_LONGLONG, &limit,            sizeof(limit));
+	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_STR(prefix.c_str(),    prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Member result = {0};
 
-	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, &result.preferred_name[0], DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(&result.preferred_name[0], DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Member> results;
@@ -1882,24 +1876,23 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 
 static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
-
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
 	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
 	const DRAFT_STATUS status = DRAFT_STATUS_CREATED;
 
-	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status,        sizeof(status));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_LONGLONG, &limit,		    sizeof(limit));
+	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I32(&status);
+	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<std::string> results;
@@ -1914,16 +1907,16 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &limit,         sizeof(limit));
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<std::string> results;
@@ -1941,18 +1934,18 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	const DRAFT_STATUS status1 = DRAFT_STATUS_CREATED;
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
-	MYSQL_INPUT_INIT(5);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status1,       sizeof(status1));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONG,     &status2,       sizeof(status2));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
-	MYSQL_INPUT(4, MYSQL_TYPE_LONGLONG, &limit,         sizeof(limit));
+	MYSQL_INPUT_INIT_2(5);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I32(&status1);
+	MYSQL_INPUT_I32(&status2);
+	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<std::string> results;
@@ -1965,10 +1958,10 @@ static Database_Result<Database_No_Value> database_set_details_message_id(const 
 	static const char* query = "UPDATE draft_events SET details_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id,       sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&message_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1979,10 +1972,10 @@ static Database_Result<Database_No_Value> database_set_signups_message_id(const 
 	static const char* query = "UPDATE draft_events SET signups_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id,       sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&message_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1993,10 +1986,10 @@ static Database_Result<Database_No_Value> database_set_reminder_message_id(const
 	static const char* query = "UPDATE draft_events SET reminder_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id,       sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&message_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2010,16 +2003,16 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 	const DRAFT_STATUS status1 = DRAFT_STATUS_POSTED;
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
-	MYSQL_INPUT_INIT(3)
-	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status1,   sizeof(status1));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status2,   sizeof(status2));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
+	MYSQL_INPUT_INIT_2(3)
+	MYSQL_INPUT_I32(&status1);
+	MYSQL_INPUT_I32(&status2);
+	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX);
+	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -2030,9 +2023,9 @@ static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u6
 	static const char* query = "UPDATE draft_events SET details_id=0, signups_id=0 WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2043,10 +2036,10 @@ static Database_Result<Database_No_Value> database_set_draft_status(const u64 gu
 	static const char* query = "UPDATE draft_events SET status=status|? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status,           sizeof(status));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I32(&status);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2057,9 +2050,9 @@ static Database_Result<Database_No_Value> database_purge_draft_event(const u64 g
 	static const char* query = "DELETE FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2077,17 +2070,17 @@ static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 gui
 	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Post_IDs result;
 
-	MYSQL_OUTPUT_INIT(3);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.channel, sizeof(result.channel));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.details, sizeof(result.details));
-	MYSQL_OUTPUT(2, MYSQL_TYPE_LONGLONG, &result.signups, sizeof(result.signups));
+	MYSQL_OUTPUT_INIT_2(3);
+	MYSQL_OUTPUT_I64(&result.channel);
+	MYSQL_OUTPUT_I64(&result.details);
+	MYSQL_OUTPUT_I64(&result.signups);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
@@ -2098,10 +2091,10 @@ static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild
 	static const char* query = "REPLACE INTO temp_roles (guild_id, draft_code, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,          sizeof(role_id));
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_I64(&role_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2112,15 +2105,15 @@ static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild
 	static const char* query = "SELECT role_id FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
 
-	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result, sizeof(result));
+	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_I64(&result);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<u64> results;
@@ -2133,9 +2126,9 @@ static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guil
 	static const char* query = "DELETE FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2147,10 +2140,10 @@ static Database_Result<Database_No_Value> database_add_temp_thread(const u64 gui
 	static const char* query = "REPLACE INTO temp_threads (guild_id, draft_code, thread_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &thread_id,        sizeof(thread_id));
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_I64(&thread_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2163,15 +2156,15 @@ static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 gui
 	static const char* query = "SELECT thread_id FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
 
-	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result, sizeof(result));
+	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_I64(&result);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<u64> results;
@@ -2187,9 +2180,9 @@ static Database_Result<Database_No_Value> database_del_temp_threads(const u64 gu
 	static const char *query = "DELETE FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2204,10 +2197,10 @@ static Database_Result<Database_No_Value> database_add_temp_member_role(const u6
 	static const char* query = "REPLACE INTO temp_members (guild_id, member_id, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,   sizeof(role_id));
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_I64(&role_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2219,10 +2212,10 @@ static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,        sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2233,11 +2226,11 @@ static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_i
 	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,        sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   note.data(),       note.length());
+	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_STR(note.data(),       note.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2248,9 +2241,9 @@ static Database_Result<Database_No_Value> database_delete_member_from_all_sign_u
 	static const char* query = "DELETE FROM draft_signups WHERE guild_id=? AND member_id=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2261,10 +2254,10 @@ static Database_Result<Database_No_Value> database_update_banner_timestamp(const
 	static const char* query = "UPDATE draft_events SET banner_timestamp=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &timestamp,        sizeof(timestamp));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,         sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.data(), draft_code.length());
+	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2287,9 +2280,9 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 
 	XMage_Version result;
 
-	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING,   &result.version[0], XMAGE_VERSION_STRING_MAX);
-	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.timestamp,  sizeof(result.timestamp));
+	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_STR(&result.version[0], XMAGE_VERSION_STRING_MAX);
+	MYSQL_OUTPUT_I32(&result.timestamp);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
@@ -2371,38 +2364,38 @@ static Database_Result<Stats> database_get_stats(const u64 member_id) {
 	)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(1);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
+	MYSQL_INPUT_INIT_2(1);
+	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Stats result;
 	memset(&result, 0, sizeof(result));
 
-	MYSQL_OUTPUT_INIT(24);
-	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONGLONG, &result.timestamp, sizeof(result.timestamp));
-	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING, result.devotion.name, 32+1); // FIXME: Magic number
-	MYSQL_OUTPUT( 2, MYSQL_TYPE_LONG, &result.devotion.value, sizeof(result.devotion.value));
-	MYSQL_OUTPUT( 3, MYSQL_TYPE_LONG, &result.devotion.next, sizeof(result.devotion.next));
-	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING, result.victory.name, 32+1);
-	MYSQL_OUTPUT( 5, MYSQL_TYPE_LONG, &result.victory.value, sizeof(result.victory.value));
-	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONG, &result.victory.next, sizeof(result.victory.next));
-	MYSQL_OUTPUT( 7, MYSQL_TYPE_STRING, result.trophies.name, 32+1);
-	MYSQL_OUTPUT( 8, MYSQL_TYPE_LONG, &result.trophies.value, sizeof(result.trophies.value));
-	MYSQL_OUTPUT( 9, MYSQL_TYPE_LONG, &result.trophies.next, sizeof(result.trophies.next));
-	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING, result.shark.name, 32+1);
-	MYSQL_OUTPUT(11, MYSQL_TYPE_LONG, &result.shark.value, sizeof(result.shark.value));
-	MYSQL_OUTPUT(12, MYSQL_TYPE_LONG, &result.shark.next, sizeof(result.shark.next));
-	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING, result.hero.name, 32+1);
-	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG, &result.hero.value, sizeof(result.hero.value));
-	MYSQL_OUTPUT(15, MYSQL_TYPE_LONG, &result.hero.next, sizeof(result.hero.next));
-	MYSQL_OUTPUT(16, MYSQL_TYPE_FLOAT, &result.win_rate_recent.chrono, sizeof(result.win_rate_recent.chrono));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_FLOAT, &result.win_rate_recent.bonus, sizeof(result.win_rate_recent.bonus));
-	MYSQL_OUTPUT(18, MYSQL_TYPE_FLOAT, &result.win_rate_recent.overall, sizeof(result.win_rate_recent.overall));
-	MYSQL_OUTPUT(19, MYSQL_TYPE_FLOAT, &result.win_rate_all_time.chrono, sizeof(result.win_rate_all_time.chrono));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_FLOAT, &result.win_rate_all_time.bonus, sizeof(result.win_rate_all_time.bonus));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_FLOAT, &result.win_rate_all_time.overall, sizeof(result.win_rate_all_time.overall));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_STRING, result.badge_card.url, URL_LENGTH_MAX + 1); // FIXME: Magic number
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result.badge_card.timestamp, sizeof(result.badge_card.timestamp));
+	MYSQL_OUTPUT_INIT_2(24);
+	MYSQL_OUTPUT_I64(&result.timestamp);
+	MYSQL_OUTPUT_STR(result.devotion.name, DEVOTION_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.devotion.value);
+	MYSQL_OUTPUT_I32(&result.devotion.next);
+	MYSQL_OUTPUT_STR(result.victory.name, VICTORY_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.victory.value);
+	MYSQL_OUTPUT_I32(&result.victory.next);
+	MYSQL_OUTPUT_STR(result.trophies.name, TROPHIES_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.trophies.value);
+	MYSQL_OUTPUT_I32(&result.trophies.next);
+	MYSQL_OUTPUT_STR(result.shark.name, SHARK_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.shark.value);
+	MYSQL_OUTPUT_I32(&result.shark.next);
+	MYSQL_OUTPUT_STR(result.hero.name, HERO_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.hero.value);
+	MYSQL_OUTPUT_I32(&result.hero.next);
+	MYSQL_OUTPUT_F32(&result.win_rate_recent.chrono);
+	MYSQL_OUTPUT_F32(&result.win_rate_recent.bonus);
+	MYSQL_OUTPUT_F32(&result.win_rate_recent.overall);
+	MYSQL_OUTPUT_F32(&result.win_rate_all_time.chrono);
+	MYSQL_OUTPUT_F32(&result.win_rate_all_time.bonus);
+	MYSQL_OUTPUT_F32(&result.win_rate_all_time.overall);
+	MYSQL_OUTPUT_STR(result.badge_card.url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.badge_card.timestamp);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
@@ -2427,15 +2420,15 @@ static const Database_Result<std::vector<Command_Summary>> database_get_help_mes
 	const char* query = "SELECT name, summary FROM commands WHERE hidden=0 AND LOWER(summary) LIKE LOWER(?) ORDER BY name LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, search.c_str(), search.length());
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &limit, sizeof(limit));
+	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_STR(search.c_str(), search.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Command_Summary result;
-	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, result.name, COMMAND_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_STR(result.name, COMMAND_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Command_Summary> results;
@@ -2454,15 +2447,15 @@ static const Database_Result<Command> database_get_help_message(const u64 guild_
 	const char* query = "SELECT team, content FROM commands WHERE summary=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(1);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, name.data(), name.length());
+	MYSQL_INPUT_INIT_2(1);
+	MYSQL_INPUT_STR(name.data(), name.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Command result;
 
-	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.host, sizeof(result.host));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_I64(&result.host);
+	MYSQL_OUTPUT_STR(result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
@@ -2478,9 +2471,9 @@ static const Database_Result<std::vector<Command_Summary>> database_get_all_help
 
 	Command_Summary result;
 
-	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, result.name, COMMAND_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_STR(result.name, COMMAND_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Command_Summary> results;
