@@ -63,6 +63,7 @@ struct Database_No_Value {};
 		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_PREPARE_FAILED, 0, mysql_stmt_error(stmt)); \
 	}
 
+/*
 // Create and prepare the input array used to bind variables to the query string.
 #define MYSQL_INPUT_INIT(count)      \
 	MYSQL_BIND input[(count)];       \
@@ -73,9 +74,10 @@ struct Database_No_Value {};
 	input[(index)].buffer_type = (type);        \
 	input[(index)].buffer = (void*) (pointer);  \
 	input[(index)].buffer_length = (size);
+*/
 
 // Create and prepare the input array used to bind variables to the query string.
-#define MYSQL_INPUT_INIT_2(count)    \
+#define MYSQL_INPUT_INIT(count)    \
 	MYSQL_BIND input[(count)];       \
 	memset(input, 0, sizeof(input)); \
 	size_t input_index = 0;
@@ -154,6 +156,7 @@ struct Database_No_Value {};
 		return MAKE_DATABASE_ERROR_RESULT(ERROR_MYSQL_STMT_EXECUTE_FAILED, 0, mysql_stmt_error(stmt));     \
 	}
 
+/*
 // Prepare an array to hold the output from a query.
 #define MYSQL_OUTPUT_INIT(count)       \
 	MYSQL_BIND output[(count)];        \
@@ -170,9 +173,10 @@ struct Database_No_Value {};
 	output[(index)].is_null = &is_null[(index)]; \
 	output[(index)].length = &length[(index)];   \
 	output[(index)].error = &is_error[(index)];
+*/
 
 // Prepare an array to hold the output from a query.
-#define MYSQL_OUTPUT_INIT_2(count)     \
+#define MYSQL_OUTPUT_INIT(count)     \
 	MYSQL_BIND output[(count)];        \
 	memset(output, 0, sizeof(output)); \
 	unsigned long length[(count)];     \

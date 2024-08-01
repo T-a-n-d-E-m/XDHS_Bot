@@ -1295,7 +1295,7 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(21);
+	MYSQL_INPUT_INIT(21);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(event->pings,              strlen(event->pings));
 	MYSQL_INPUT_STR(event->draft_code,         strlen(event->draft_code));
@@ -1346,7 +1346,7 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 		)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(18);
+	MYSQL_INPUT_INIT(18);
 	MYSQL_INPUT_STR(event->format,          strlen(event->format));
 	MYSQL_INPUT_I32(&event->time);
 	MYSQL_INPUT_F32(&event->duration);
@@ -1405,14 +1405,14 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	auto result = std::make_shared<Draft_Event>();
 
-	MYSQL_OUTPUT_INIT_2(25);
+	MYSQL_OUTPUT_INIT(25);
 	MYSQL_OUTPUT_I32(&result->status);
 	MYSQL_OUTPUT_STR(result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_STR(result->pings,           PING_STRING_LENGTH_MAX + 1);
@@ -1477,13 +1477,13 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 	)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(1);
+	MYSQL_INPUT_INIT(1);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Event result;
 
-	MYSQL_OUTPUT_INIT_2(25);
+	MYSQL_OUTPUT_INIT(25);
 	MYSQL_OUTPUT_I32(&result.status);
 	MYSQL_OUTPUT_STR(result.draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_STR(result.pings,           PING_STRING_LENGTH_MAX + 1);
@@ -1569,7 +1569,7 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	const char* query = "SELECT status, time, preferred_name FROM draft_signups WHERE guild_id=? AND member_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -1582,7 +1582,7 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	result.status            = SIGNUP_STATUS_NONE;
 	result.preferred_name[0] = '\0';
 
-	MYSQL_OUTPUT_INIT_2(3);
+	MYSQL_OUTPUT_INIT(3);
 	MYSQL_OUTPUT_I32(&result.status);
 	MYSQL_OUTPUT_I64(&result.timestamp);
 	MYSQL_OUTPUT_STR(&result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
@@ -1596,7 +1596,7 @@ static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 
 	const char* query = "INSERT INTO draft_signups (guild_id, member_id, preferred_name, draft_code, time, status) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE preferred_name=?, time=?, status=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(9);
+	MYSQL_INPUT_INIT(9);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_STR(preferred_name.c_str(), preferred_name.length());
@@ -1618,14 +1618,14 @@ static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draf
 	const char* query = "SELECT member_id, preferred_name, time, status FROM draft_signups WHERE guild_id=? AND draft_code=? ORDER BY time";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Signup_Status result;
 
-	MYSQL_OUTPUT_INIT_2(4);
+	MYSQL_OUTPUT_INIT(4);
 	MYSQL_OUTPUT_I64(&result.member_id);
 	MYSQL_OUTPUT_STR(result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_I64(&result.timestamp);
@@ -1689,7 +1689,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 		;)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT_STR(league, strlen(league));
 	MYSQL_INPUT_I32(&season);
 	MYSQL_INPUT_I64(&guild_id);
@@ -1698,16 +1698,18 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 
 	Draft_Sign_Up result;
 
+#if 0
 	MYSQL_BIND output[9];
 	memset(output, 0, sizeof(output));
 	unsigned long length[9];
 	my_bool is_error[9];
 	my_bool is_null[9]; // NOTE: Not all are used here
-
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(2, MYSQL_TYPE_LONG, &result.status, sizeof(result.status));
-	MYSQL_OUTPUT(3, MYSQL_TYPE_LONGLONG, &result.time, sizeof(result.time));
+#endif
+	MYSQL_OUTPUT_INIT(9);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.status);
+	MYSQL_OUTPUT_I64(&result.time);
 
 	output[4].buffer_type = MYSQL_TYPE_LONG;
 	output[4].buffer = (void*) &result.rank;
@@ -1781,7 +1783,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups
 		;)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT_STR(league, strlen(league));
 	MYSQL_INPUT_I32(&season);
 	MYSQL_INPUT_I64(&guild_id);
@@ -1855,7 +1857,7 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_STR(prefix.c_str(),    prefix.length());
@@ -1864,7 +1866,7 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 
 	Member result = {0};
 
-	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_INIT(2);
 	MYSQL_OUTPUT_I64(&result.member_id);
 	MYSQL_OUTPUT_STR(&result.preferred_name[0], DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
@@ -1882,7 +1884,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 
 	const DRAFT_STATUS status = DRAFT_STATUS_CREATED;
 
-	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I32(&status);
 	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
@@ -1891,7 +1893,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_INIT(1);
 	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
@@ -1907,7 +1909,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
 	MYSQL_INPUT_I32(&limit);
@@ -1915,7 +1917,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_INIT(1);
 	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
@@ -1934,7 +1936,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	const DRAFT_STATUS status1 = DRAFT_STATUS_CREATED;
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
-	MYSQL_INPUT_INIT_2(5);
+	MYSQL_INPUT_INIT(5);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I32(&status1);
 	MYSQL_INPUT_I32(&status2);
@@ -1944,7 +1946,7 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_INIT(1);
 	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
@@ -1958,7 +1960,7 @@ static Database_Result<Database_No_Value> database_set_details_message_id(const 
 	static const char* query = "UPDATE draft_events SET details_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&message_id);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -1972,7 +1974,7 @@ static Database_Result<Database_No_Value> database_set_signups_message_id(const 
 	static const char* query = "UPDATE draft_events SET signups_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&message_id);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -1986,7 +1988,7 @@ static Database_Result<Database_No_Value> database_set_reminder_message_id(const
 	static const char* query = "UPDATE draft_events SET reminder_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&message_id);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -2003,7 +2005,7 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 	const DRAFT_STATUS status1 = DRAFT_STATUS_POSTED;
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
-	MYSQL_INPUT_INIT_2(3)
+	MYSQL_INPUT_INIT(3)
 	MYSQL_INPUT_I32(&status1);
 	MYSQL_INPUT_I32(&status2);
 	MYSQL_INPUT_I64(&guild_id);
@@ -2011,7 +2013,7 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
-	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_INIT(1);
 	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
@@ -2023,7 +2025,7 @@ static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u6
 	static const char* query = "UPDATE draft_events SET details_id=0, signups_id=0 WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
@@ -2036,7 +2038,7 @@ static Database_Result<Database_No_Value> database_set_draft_status(const u64 gu
 	static const char* query = "UPDATE draft_events SET status=status|? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I32(&status);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -2050,7 +2052,7 @@ static Database_Result<Database_No_Value> database_purge_draft_event(const u64 g
 	static const char* query = "DELETE FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
@@ -2070,14 +2072,14 @@ static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 gui
 	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Post_IDs result;
 
-	MYSQL_OUTPUT_INIT_2(3);
+	MYSQL_OUTPUT_INIT(3);
 	MYSQL_OUTPUT_I64(&result.channel);
 	MYSQL_OUTPUT_I64(&result.details);
 	MYSQL_OUTPUT_I64(&result.signups);
@@ -2091,7 +2093,7 @@ static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild
 	static const char* query = "REPLACE INTO temp_roles (guild_id, draft_code, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_I64(&role_id);
@@ -2105,14 +2107,14 @@ static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild
 	static const char* query = "SELECT role_id FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
 
-	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_INIT(1);
 	MYSQL_OUTPUT_I64(&result);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
@@ -2126,7 +2128,7 @@ static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guil
 	static const char* query = "DELETE FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
@@ -2140,7 +2142,7 @@ static Database_Result<Database_No_Value> database_add_temp_thread(const u64 gui
 	static const char* query = "REPLACE INTO temp_threads (guild_id, draft_code, thread_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_I64(&thread_id);
@@ -2156,14 +2158,14 @@ static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 gui
 	static const char* query = "SELECT thread_id FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
 
-	MYSQL_OUTPUT_INIT_2(1);
+	MYSQL_OUTPUT_INIT(1);
 	MYSQL_OUTPUT_I64(&result);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
@@ -2180,7 +2182,7 @@ static Database_Result<Database_No_Value> database_del_temp_threads(const u64 gu
 	static const char *query = "DELETE FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
@@ -2197,7 +2199,7 @@ static Database_Result<Database_No_Value> database_add_temp_member_role(const u6
 	static const char* query = "REPLACE INTO temp_members (guild_id, member_id, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_I64(&role_id);
@@ -2212,7 +2214,7 @@ static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -2226,7 +2228,7 @@ static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_i
 	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(4);
+	MYSQL_INPUT_INIT(4);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -2241,7 +2243,7 @@ static Database_Result<Database_No_Value> database_delete_member_from_all_sign_u
 	static const char* query = "DELETE FROM draft_signups WHERE guild_id=? AND member_id=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
@@ -2254,7 +2256,7 @@ static Database_Result<Database_No_Value> database_update_banner_timestamp(const
 	static const char* query = "UPDATE draft_events SET banner_timestamp=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(3);
+	MYSQL_INPUT_INIT(3);
 	MYSQL_INPUT_I64(&timestamp);
 	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
@@ -2280,7 +2282,7 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 
 	XMage_Version result;
 
-	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_INIT(2);
 	MYSQL_OUTPUT_STR(&result.version[0], XMAGE_VERSION_STRING_MAX);
 	MYSQL_OUTPUT_I32(&result.timestamp);
 	MYSQL_OUTPUT_BIND_AND_STORE();
@@ -2364,14 +2366,14 @@ static Database_Result<Stats> database_get_stats(const u64 member_id) {
 	)";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(1);
+	MYSQL_INPUT_INIT(1);
 	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Stats result;
 	memset(&result, 0, sizeof(result));
 
-	MYSQL_OUTPUT_INIT_2(24);
+	MYSQL_OUTPUT_INIT(24);
 	MYSQL_OUTPUT_I64(&result.timestamp);
 	MYSQL_OUTPUT_STR(result.devotion.name, DEVOTION_BADGE_NAME_LENGTH_MAX+1);
 	MYSQL_OUTPUT_I32(&result.devotion.value);
@@ -2420,13 +2422,13 @@ static const Database_Result<std::vector<Command_Summary>> database_get_help_mes
 	const char* query = "SELECT name, summary FROM commands WHERE hidden=0 AND LOWER(summary) LIKE LOWER(?) ORDER BY name LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(2);
+	MYSQL_INPUT_INIT(2);
 	MYSQL_INPUT_STR(search.c_str(), search.length());
 	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Command_Summary result;
-	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_INIT(2);
 	MYSQL_OUTPUT_STR(result.name, COMMAND_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_STR(result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
@@ -2447,13 +2449,13 @@ static const Database_Result<Command> database_get_help_message(const u64 guild_
 	const char* query = "SELECT team, content FROM commands WHERE summary=?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT_2(1);
+	MYSQL_INPUT_INIT(1);
 	MYSQL_INPUT_STR(name.data(), name.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Command result;
 
-	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_INIT(2);
 	MYSQL_OUTPUT_I64(&result.host);
 	MYSQL_OUTPUT_STR(result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
@@ -2471,7 +2473,7 @@ static const Database_Result<std::vector<Command_Summary>> database_get_all_help
 
 	Command_Summary result;
 
-	MYSQL_OUTPUT_INIT_2(2);
+	MYSQL_OUTPUT_INIT(2);
 	MYSQL_OUTPUT_STR(result.name, COMMAND_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_STR(result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
