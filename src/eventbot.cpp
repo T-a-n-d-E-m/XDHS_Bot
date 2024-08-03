@@ -4134,7 +4134,7 @@ int main(int argc, char* argv[]) {
 		// We only want to re-create the slash commands when the bot is first started, not when Discord reconnects a guild, so check if we've already created the slash commands on this execution.
 		if(g_commands_registered == false) {
 			// Create slash commands
-#ifdef DEBUG
+#if CPU_BURNER
 			{
 				dpp::slashcommand cmd("cpu_burner", "Create banner art for every set that has >= 3 images.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4318,7 +4318,7 @@ int main(int argc, char* argv[]) {
 		const auto command_name = event.command.get_command_name();
 		const auto guild_id = event.command.get_guild().id;
 
-#ifdef DEBUG
+#ifdef CPU_BURNER
 		if(command_name == "cpu_burner") {
 			event.reply("Here we go!");
 
