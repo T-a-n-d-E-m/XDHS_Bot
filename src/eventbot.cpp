@@ -37,6 +37,7 @@
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
+// TODO: The /timer command should edit the original message once the timer expires to indicate that time is up and decks must be submitted ASAP.
 
 // Code/performance improvements
 // TODO: Thread pools for database connections
@@ -980,6 +981,9 @@ static const size_t DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX = 128;
 
 // The maximum allowed byte length for each 'blurb' paragraph in the draft details post.
 static const size_t DRAFT_BLURB_LENGTH_MAX = 512;
+
+// The maximum allowed byte length for a note added to a dropper record.
+static const size_t DROPPER_NOTE_LENGTH_MAX = 100;
 
 // Maximum length of the filename for a downloaded banner file.
 static const size_t BANNER_FILENAME_MAX = 64;
@@ -2224,7 +2228,7 @@ static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const std::string_view draft_code, const std::string_view note) {
+static Database_Result<Database_No_Value> database_add_drop(const u64 guild_id, const u64 member_id, const std::string_view draft_code, const std::string_view note) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
@@ -2237,6 +2241,59 @@ static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_i
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
+}
+
+struct Dropper {
+	u64 member_id;
+	char draft_code[DRAFT_CODE_LENGTH_MAX + 1];
+	char note[DISCORD_MESSAGE_CHARACTER_LIMIT + 1]; // FIXME: This only needs to be 100ish chars?
+};
+
+static Database_Result<std::vector<Dropper>> database_get_droppers(const u64 guild_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT member_id, draft_code, note FROM droppers WHERE guild_id=? ORDER BY member_id";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Dropper result;
+	MYSQL_OUTPUT_INIT(3);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(result.draft_code, DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.note, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Dropper> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+struct Specific_Dropper {
+	char draft_code[DRAFT_CODE_LENGTH_MAX + 1];
+	char note[DISCORD_MESSAGE_CHARACTER_LIMIT + 1];
+};
+
+static Database_Result<std::vector<Specific_Dropper>> database_get_specific_dropper(const u64 guild_id, const u64 member_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT draft_code, note note FROM droppers WHERE guild_id=? AND member_id=? ORDER BY draft_code";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Specific_Dropper result;
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_STR(result.draft_code, DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.note, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Specific_Dropper> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
 static Database_Result<Database_No_Value> database_delete_member_from_all_sign_ups(const u64 guild_id, const u64 member_id) {
@@ -3607,7 +3664,7 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 
 		text += "### :three: The follow commands can be used during the draft:\n";
 		text += "	**/timer**   - After a Draftmancer draft, use this command to post a 10 minute countdown timer to remind players to finish constructing their decks in a timely manner.\n";
-		text += "	**/dropper** - Increment the drop counter for a player. This needs to be done before the draft is completed.\n";
+		text += "	**/dropper** - Increment the drop count for a player. This needs to be done before the draft is completed.\n";
 		text += "\n";
 
 		text += "### :four: After all pods have completed round 3:\n";
@@ -3781,7 +3838,6 @@ static void output_sql() {
 	fprintf(stdout, "\n\n");
 #endif
 
-
 #if 0
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS temp_members(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n"); // TODO: Not needed?
@@ -3795,7 +3851,8 @@ static void output_sql() {
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS noshows(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
-	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "CONSTRAINT UC_Noshow UNIQUE(guild_id, member_id, draft_code)\n");
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
@@ -3803,7 +3860,8 @@ static void output_sql() {
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
-	fprintf(stdout, "note VARCHAR(%lu)\n", DISCORD_MESSAGE_CHARACTER_LIMIT);
+	fprintf(stdout, "note VARCHAR(%lu),\n", DROPPER_NOTE_LENGTH_MAX);
+	fprintf(stdout, "CONSTRAINT UC_Dropper UNIQUE(guild_id, member_id, draft_code)\n");
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
@@ -4217,8 +4275,21 @@ int main(int argc, char* argv[]) {
 			{
 				dpp::slashcommand cmd("dropper", "Add a player to the droppers list.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
-				cmd.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the droppers list.", true));
-				cmd.add_option(dpp::command_option(dpp::co_string, "note", "Attach a note to the drop record.", false));
+
+				{
+					auto opt = dpp::command_option(dpp::co_sub_command, "add", "Add a dropper to the drop list with an optional note.");
+					opt.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the drop list.", true));
+					opt.add_option(dpp::command_option(dpp::co_string, "note", fmt::format("Attach a note to the drop record. Max. {} characters.", DROPPER_NOTE_LENGTH_MAX), false));
+
+					cmd.add_option(opt);
+				}
+				{
+					auto opt = dpp::command_option(dpp::co_sub_command, "list", "List all droppers or drops for a specific member");
+					opt.add_option(dpp::command_option(dpp::co_user, "member", "Only list the drops for this member.", false));
+
+					cmd.add_option(opt);
+				}
+
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
@@ -5534,20 +5605,80 @@ int main(int argc, char* argv[]) {
 		} else
 		if(command_name == "dropper") {
 			const auto guild_id = event.command.get_guild().id;
-			const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
 
-			std::string note;
-			auto opt = event.get_parameter("note");
-			if(std::holds_alternative<std::string>(opt)) {
-				note = std::get<std::string>(opt);
-			}
+			const dpp::command_interaction cmd_data = event.command.get_command_interaction();
+			auto subcommand = cmd_data.options[0];
 
-			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code, note);
-			if(!is_error(result)) {
-				const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
-				event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
-			} else {
-				event.reply(result.errstr);
+			if(subcommand.name == "add") {
+				const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
+
+				std::string note;
+				{
+					auto opt = event.get_parameter("note");
+					if(std::holds_alternative<std::string>(opt)) {
+						note = std::get<std::string>(opt);
+					}
+				}
+
+				auto result = database_add_drop(guild_id, member_id, g_current_draft_code, note);
+				if(!is_error(result)) {
+					const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
+					event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
+				} else {
+					event.reply(result.errstr);
+				}
+			} else
+			if(subcommand.name == "list") {
+				if(std::holds_alternative<dpp::snowflake>(event.get_parameter("member"))) {
+					// Requesting only a specific member.
+					const dpp::snowflake member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
+					auto result = database_get_specific_dropper(guild_id, member_id);
+					if(!is_error(result)) {
+						if(result.value.size() > 0) {
+							std::string content;
+							content.reserve(DISCORD_MESSAGE_CHARACTER_LIMIT);
+							content += fmt::format("{} drop{} for {}:\n",
+								result.value.size(),
+								result.value.size() > 1 ? "s" : "",
+								get_members_preferred_name(guild_id, member_id)
+							);
+							content += "```";
+							for(auto& dropper: result.value) {
+								content += fmt::format("{:>{}} {} {}\n",
+									dropper.draft_code, DRAFT_CODE_LENGTH_MAX,
+									strlen(dropper.note) > 0 ? "-" : "",
+									dropper.note
+								);
+							}
+							content += "```";
+							event.reply(content);
+						} else {
+							event.reply(fmt::format("{} has no drops.", get_members_preferred_name(guild_id, member_id)));
+						}
+					} else {
+						event.reply(result.errstr);
+					}
+				} else {
+					// List all droppers
+					auto result = database_get_droppers(guild_id);
+					if(!is_error(result)) {
+						std::string content;
+						content.reserve(DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+						content += "```";
+						for(auto& dropper : result.value) {
+							content += fmt::format("{:<{}} {:>{}} {} {}\n",
+								get_members_preferred_name(guild_id, dropper.member_id), DISCORD_NAME_LENGTH_MAX,
+								dropper.draft_code, DRAFT_CODE_LENGTH_MAX,
+								strlen(dropper.note) > 0 ? "-" : "",
+								dropper.note
+							);
+						}
+						content += "```";
+						event.reply(content);
+					} else {
+						event.reply(result.errstr);
+					}
+				}
 			}
 		} else
 		if(command_name == "finish") {
