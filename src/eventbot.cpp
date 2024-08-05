@@ -4279,6 +4279,7 @@ int main(int argc, char* argv[]) {
 				{
 					auto opt = dpp::command_option(dpp::co_sub_command, "add", "Add a dropper to the drop list with an optional note.");
 					opt.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the drop list.", true));
+					opt.add_option(dpp::command_option(dpp::co_string, "draft code", "The draft the member dropped from.", true));
 					opt.add_option(dpp::command_option(dpp::co_string, "note", fmt::format("Attach a note to the drop record. Max. {} characters.", DROPPER_NOTE_LENGTH_MAX), false));
 
 					cmd.add_option(opt);
@@ -5611,6 +5612,7 @@ int main(int argc, char* argv[]) {
 
 			if(subcommand.name == "add") {
 				const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
+				const auto draft_code = std::get<std::string>(event.get_parameter("draft code"));
 
 				std::string note;
 				{
@@ -5620,7 +5622,7 @@ int main(int argc, char* argv[]) {
 					}
 				}
 
-				auto result = database_add_drop(guild_id, member_id, g_current_draft_code, note);
+				auto result = database_add_drop(guild_id, member_id, draft_code, note);
 				if(!is_error(result)) {
 					const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
 					event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
