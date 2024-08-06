@@ -973,6 +973,9 @@ static const size_t DISCORD_MESSAGE_CHARACTER_LIMIT = 2000;
 // The maximum allowed characters in a Discord username or nickname.
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
 
+// The maximum allowed characters in a Discord role name.
+static const size_t DISCORD_ROLE_LENGTH_MAX = 32;
+
 // The maximum allowed byte length of a draft format string.
 static const size_t DRAFT_FORMAT_LENGTH_MAX = 64;
 
@@ -3862,6 +3865,16 @@ static void output_sql() {
 	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
 	fprintf(stdout, "note VARCHAR(%lu),\n", DROPPER_NOTE_LENGTH_MAX);
 	fprintf(stdout, "CONSTRAINT UC_Dropper UNIQUE(guild_id, member_id, draft_code)\n");
+	fprintf(stdout, ");");
+	fprintf(stdout, "\n\n");
+
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS role_command(\n");
+	fprintf(stdout, "row_id BIGINT NOT NULL AUTO_INCREMENT,\n");
+	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
+	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
+	fprintf(stdout, "command INT NOT NULL,\n");
+	fprintf(stdout, "role VARCHAR(%lu) NOT NULL,\n", DISCORD_ROLE_LENGTH_MAX);
+	fprintf(stdout, "PRIMARY KEY (row_id)\n");
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
