@@ -64,21 +64,21 @@ static constexpr std::string_view global_error_to_string(const GLOBAL_ERROR e) {
 	switch(e) {
 		case ERROR_NONE: return {"no error"};
 
-		case ERROR_OUT_OF_MEMORY: return {"Internal EventBot error: The server is out of memory."};
+		case ERROR_OUT_OF_MEMORY: return {"Internal XDHS Bot error: The server is out of memory."};
 
-		case ERROR_INVALID_FUNCTION_PARAMETER: return {"Internal EventBot error: Invalid function parameter."};
+		case ERROR_INVALID_FUNCTION_PARAMETER: return {"Internal XDHS Bot error: Invalid function parameter."};
 
-		case ERROR_MYSQL_INIT_FAILED:              return {"Internal EventBot Error: mysql_init() failed."};
-		case ERROR_MYSQL_REAL_CONNECT_FAILED:      return {"Internal EventBot Error: mysql_real_connect() failed: {}"};
-		case ERROR_MYSQL_STMT_INIT_FAILED:         return {"Internal EventBot Error: mysql_stmt_init() failed: {}"};
-		case ERROR_MYSQL_STMT_PREPARE_FAILED:      return {"Internal EventBot Error: mysql_stmt_prepare() failed: {}"};
-		case ERROR_MYSQL_BIND_PARAM_FAILED:        return {"Internal EventBot Error: mysql_bind_param() failed: {}"};
-		case ERROR_MYSQL_STMT_EXECUTE_FAILED:      return {"Internal EventBot Error: mysql_stmt_execute() failed: {}"};
-		case ERROR_MYSQL_STMT_BIND_RESULT_FAILED:  return {"Internal EventBot Error: mysql_stmt_bind_result() failed: {}"};
-		case ERROR_MYSQL_STMT_STORE_RESULT_FAILED: return {"Internal EventBot Error: mysql_stmt_store_result() failed: {}"};
-		case ERROR_MYSQL_STMT_FETCH_FAILED:        return {"Internal EventBot Error: mysql_stmt_fetch() failed: {}"};
-		case ERROR_DATABASE_TOO_MANY_RESULTS:      return {"Internal EventBot Error: Database query returned {} rows, but 0 or 1 was expected."};
-		case ERROR_DATABASE_UNEXPECTED_ROW_COUNT:  return {"Internal EventBot Error: Database query returned unexpected row count of {} rows."};
+		case ERROR_MYSQL_INIT_FAILED:              return {"Internal XDHS Bot Error: mysql_init() failed."};
+		case ERROR_MYSQL_REAL_CONNECT_FAILED:      return {"Internal XDHS Bot Error: mysql_real_connect() failed: {}"};
+		case ERROR_MYSQL_STMT_INIT_FAILED:         return {"Internal XDHS Bot Error: mysql_stmt_init() failed: {}"};
+		case ERROR_MYSQL_STMT_PREPARE_FAILED:      return {"Internal XDHS Bot Error: mysql_stmt_prepare() failed: {}"};
+		case ERROR_MYSQL_BIND_PARAM_FAILED:        return {"Internal XDHS Bot Error: mysql_bind_param() failed: {}"};
+		case ERROR_MYSQL_STMT_EXECUTE_FAILED:      return {"Internal XDHS Bot Error: mysql_stmt_execute() failed: {}"};
+		case ERROR_MYSQL_STMT_BIND_RESULT_FAILED:  return {"Internal XDHS Bot Error: mysql_stmt_bind_result() failed: {}"};
+		case ERROR_MYSQL_STMT_STORE_RESULT_FAILED: return {"Internal XDHS Bot Error: mysql_stmt_store_result() failed: {}"};
+		case ERROR_MYSQL_STMT_FETCH_FAILED:        return {"Internal XDHS Bot Error: mysql_stmt_fetch() failed: {}"};
+		case ERROR_DATABASE_TOO_MANY_RESULTS:      return {"Internal XDHS Bot Error: Database query returned {} rows, but 0 or 1 was expected."};
+		case ERROR_DATABASE_UNEXPECTED_ROW_COUNT:  return {"Internal XDHS Bot Error: Database query returned unexpected row count of {} rows."};
 
 		case ERROR_MALFORMED_DATE_STRING: return {"Malformed date string. The date should be written as YYYY-MM-DD."};
 		case ERROR_DATE_IS_IN_PAST:       return {"The date is in the past and time travel does not yet exist."};
@@ -95,10 +95,10 @@ static constexpr std::string_view global_error_to_string(const GLOBAL_ERROR e) {
 		case ERROR_INVALID_HOUR:                return {"Hour should be between 0 and 23."};
 		case ERROR_INVALID_MINUTE:              return {"Minute should be between 1 and 59."};
 
-		case ERROR_LOAD_FONT_FAILED:      return {"Internal EventBot error: stbtt_InitFont() failed to load banner font."};
-		case ERROR_LOAD_ART_FAILED:       return {"Internal EventBot error: stbi_load() failed to load art file. file: '{}' reason: {}"};
-		case ERROR_INVALID_PACK_COUNT:    return {"Internal EventBot error: Unexpected background image count of {}."};
-		case ERROR_FAILED_TO_SAVE_BANNER: return {"Internal EventBot error: Failed to save generated banner to storage. If this is the first instance of seeing this error, please try again."};
+		case ERROR_LOAD_FONT_FAILED:      return {"Internal XDHS Bot error: stbtt_InitFont() failed to load banner font."};
+		case ERROR_LOAD_ART_FAILED:       return {"Internal XDHS Bot error: stbi_load() failed to load art file. file: '{}' reason: {}"};
+		case ERROR_INVALID_PACK_COUNT:    return {"Internal XDHS Bot error: Unexpected background image count of {}."};
+		case ERROR_FAILED_TO_SAVE_BANNER: return {"Internal XDHS Bot error: Failed to save generated banner to storage. If this is the first instance of seeing this error, please try again."};
 
 		case ERROR_CURL_INIT:       return {"Internal error: curl_easy_init() failed."};
 		case ERROR_DOWNLOAD_FAILED: return {"Internal error: Downloading file '{}' failed: {}"};

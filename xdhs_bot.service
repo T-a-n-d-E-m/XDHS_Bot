@@ -1,13 +1,13 @@
 [Unit]
-Description=XDHS EventBot
+Description=XDHS Bot
 After=network.target
 
 [Service]
 Type=simple
-User=eventbot
-Group=eventbot
-WorkingDirectory=/opt/EventBot/
-ExecStart=/opt/EventBot/eventbot
+User=xdhs_bot
+Group=xdhs_bot
+WorkingDirectory=/opt/XDHS_Bot/
+ExecStart=/opt/XDHS_Bot/xdhs_bot
 StandardOutput=syslog
 Restart=always
 RestartSec=1

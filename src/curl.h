@@ -28,7 +28,7 @@ static size_t curl_write_memory_callback(void* data, size_t size, size_t nmemb, 
 		if(mem->data != NULL) {
 			free(mem->data);
 		}
-		//log(LOG_LEVEL_ERROR, "%s: out of memeory", __FUNCTION__); // TODO: Now what? On the potato server EventBot is on this could happen...
+		//log(LOG_LEVEL_ERROR, "%s: out of memeory", __FUNCTION__); // TODO: Now what? On the potato server XDHS Bot is on this could happen...
 		return 0;
 	}
 

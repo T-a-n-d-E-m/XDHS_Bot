@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# This script will copy files from the repository to where they need to be and restart the eventbot.service.
+# This script will copy files from the repository to where they need to be and restart the xdhs_bot.service.
 
 # Works on Debian 11. May need tweaking for other distros...
 
-# Directory to install EventBot
-INSTALL_DIR="/opt/EventBot"
+# Directory to install XDHS Bot
+INSTALL_DIR="/opt/XDHS_Bot"
 
 # Check we're actually on the host server
 if [ "$HOSTNAME" != harvest-sigma ]; then
@@ -14,7 +14,7 @@ if [ "$HOSTNAME" != harvest-sigma ]; then
 fi
 
 # Check the version we're installing is RELEASE
-VERSION=$(./eventbot -version)
+VERSION=$(./xdhs_bot -version)
 if [ "$VERSION" != Release ]; then
 	echo "Trying to install $VERSION build. Run './build.sh release' to build the installable version."
 	exit
@@ -26,46 +26,46 @@ if [ $(id -u) -ne 0 ]; then
 	exit
 fi
 
-# Create the eventbot group, if it doesn't already exist.
-if ! id -g "eventbot" > /dev/null 2&>1; then
-	addgroup --system eventbot
+# Create the xdhs_bot group, if it doesn't already exist.
+if ! id -g "xdhs_bot" > /dev/null 2&>1; then
+	addgroup --system xdhs_bot
 fi
 
-# Create the eventbot user, if it doesn't already exist.
-if ! id -u "eventbot" > /dev/null 2&>1; then
+# Create the xdhs_bot user, if it doesn't already exist.
+if ! id -u "xdhs_bot" > /dev/null 2&>1; then
 	# Create the user
-	adduser --system --ingroup eventbot --home=$INSTALL_DIR --no-create-home --disabled-login eventbot
+	adduser --system --ingroup xdhs_bot --home=$INSTALL_DIR --no-create-home --disabled-login xdhs_bot
 fi
 
 # Create the installation directory, if it doesn't already exist.
 mkdir -p $INSTALL_DIR
-chown eventbot:eventbot $INSTALL_DIR 
+chown xdhs_bot:xdhs_bot $INSTALL_DIR
 
 # Will fail on first run of this script, but that doesn't really matter.
-systemctl stop eventbot
+systemctl stop xdhs_bot
 
-# Copy the EventBot executable to the installation directory and change permissions and ownership.
-cp eventbot $INSTALL_DIR
-chown eventbot:eventbot $INSTALL_DIR/eventbot
-chmod 500 $INSTALL_DIR/eventbot
+# Copy the XDHS Bot executable to the installation directory and change permissions and ownership.
+cp xdhs_bot $INSTALL_DIR
+chown xdhs_bot:xdhs_bot $INSTALL_DIR/xdhs_bot
+chmod 500 $INSTALL_DIR/xdhs_bot
 
 # Log file. Only needs to be done once.
 # TODO: Set up log rotation?
-touch $INSTALL_DIR/eventbot.log
-chown eventbot:eventbot $INSTALL_DIR/eventbot.log
-chmod 600 $INSTALL_DIR/eventbot.log
+touch $INSTALL_DIR/xdhs_bot.log
+chown xdhs_bot:xdhs_bot $INSTALL_DIR/xdhs_bot.log
+chmod 600 $INSTALL_DIR/xdhs_bot.log
 
 # bot.ini.
 # Has to be manually created. See bot.ini.templace for variables.
-chown eventbot:eventbot $INSTALL_DIR/bot.ini
+chown xdhs_bot:xdhs_bot $INSTALL_DIR/bot.ini
 chmod 400 $INSTALL_DIR/bot.ini
 
 # Copy static assets, if they're newer, and create the www-root generation directory.
 cp --update --recursive gfx $INSTALL_DIR
 mkdir -p $INSTALL_DIR/www-root
 
-#cp eventbot.service /etc/systemd/system
-#chown root:root /etc/systemd/system/eventbot.service
+#cp xdhs_bot.service /etc/systemd/system
+#chown root:root /etc/systemd/system/xdhs_bot.service
 #systemctl daemon-reload
-#systemctl enable eventbot
-#systemctl start eventbot
+#systemctl enable xdhs_bot
+#systemctl start xdhs_bot

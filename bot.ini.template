@@ -1,9 +1,9 @@
 # A template for the bot.ini file.
 
 # Only allow execution if running on this hostname. Stops accidentally running the bot on the wrong server.
-eventbot_host =
+xdhs_bot_host =
 
-# Hostname of the MySQL server. EventBot currently only supports connecting over IPV4 connections.
+# Hostname of the MySQL server. XDHS Bot currently only supports connecting over IPV4 connections.
 mysql_host = hostname
 
 # Port the MySQL server is listening on.
@@ -18,8 +18,8 @@ mysql_password = password
 # Database to read/write from
 mysql_database = database
 
-# Where to write the EventBot log file
-logfile_path = /var/log/eventbot.log
+# Where to write the XDHS Bot log file
+logfile_path = /var/log/xdhs_bot.log
 
 # The Discord token for this bot. Can be found (or created) in the Discord Developer Portal
 discord_token = 123456890ABCDEF

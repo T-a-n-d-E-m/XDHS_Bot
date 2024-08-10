@@ -107,7 +107,7 @@ struct Config {
 	char* logfile_path;
 	char* discord_token;
 	char* xmage_server;
-	char* eventbot_host;
+	char* xdhs_bot_host;
 	char* api_key;
 	char* imgur_client_secret;
 
@@ -121,7 +121,7 @@ struct Config {
 		if(logfile_path != NULL)        free(logfile_path);
 		if(discord_token != NULL)       free(discord_token);
 		if(xmage_server != NULL)        free(xmage_server);
-		if(eventbot_host != NULL)       free(eventbot_host);
+		if(xdhs_bot_host != NULL)       free(xdhs_bot_host);
 		if(api_key != NULL)             free(api_key);
 		if(imgur_client_secret != NULL) free(imgur_client_secret);
 	}
@@ -171,7 +171,7 @@ static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 
 // The directory where the RELEASE build is run from.
-static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
+static const char* EXPECTED_WORKING_DIR                 = "/opt/XDHS_Bot";
 
 static const char* CONFIG_FILE_NAME = "bot.ini";
 
@@ -3008,7 +3008,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	// TODO: Only need to save RGB, this saves having to clear the alpha channel, but does stbii_write support this?
 	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
 	image_max_alpha(&banner.value);
-	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
+	std::string file_path = fmt::format("/tmp/XDHS_Bot_Banner_{}.png", random_string(16));
 	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
 		//RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 		RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
@@ -3695,7 +3695,7 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 	if(has_value(draft)) {
 		std::string text = fmt::format("# :alarm_clock: Attention hosts! Draft {} has now been locked. :alarm_clock:\n\n", draft_code);
 
-		text += "## Use the following EventBot commands to manage the draft.\n\n";
+		text += "## Use the following XDHS Bot commands to manage the draft.\n\n";
 
 		text += "### :one: Before pod allocations can be posted the :white_check_mark:Playing column on the sign-up sheet needs to show only players who are confirmed to be playing. The following commands can be used to add or remove players from the sheet:\n";
 		text += "	**/add_player** - Add a player to the :white_check_mark:Playing column. Use this for adding Minutemages or players who want to play but didn't sign up before the draft was locked.\n";
@@ -3856,7 +3856,7 @@ static void do_role_commands(dpp::cluster& bot) {
 
 // Output the required MySQL tables for this bot. These tables could be created programmatically but I prefer to limit table creation/deletion to root.
 static void output_sql() {
-	fprintf(stdout, "-- Use ./eventbot -sql to create this file.\n\n");
+	fprintf(stdout, "-- Use ./xdhs_bot -sql to create this file.\n\n");
 	fprintf(stdout, "CREATE DATABASE IF NOT EXISTS %s; USE %s;\n\n", g_config.mysql_database, g_config.mysql_database);
 
 	fprintf(stdout, "\n");
@@ -4073,7 +4073,7 @@ static void config_file_kv_pair_callback(const char* key, const char* value, siz
 	CONFIG_KEY_STR(logfile_path)   else
 	CONFIG_KEY_STR(discord_token)  else
 	CONFIG_KEY_STR(xmage_server)   else
-	CONFIG_KEY_STR(eventbot_host)  else
+	CONFIG_KEY_STR(xdhs_bot_host)  else
 	CONFIG_KEY_STR(api_key)        else
 	CONFIG_KEY_STR(imgur_client_secret)
 }
@@ -4099,17 +4099,17 @@ int main(int argc, char* argv[]) {
 
 	}
 
-	// Check the version of EventBot that's running is in the correct place.
+	// Check the version of XDHS Bot that's running is in the correct place.
 	// This is to prevent accidentally running the DEBUG version instead of the RELEASE version.
 	{
 		char cwd[FILENAME_MAX];
 #ifdef DEBUG
 		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, EXPECTED_WORKING_DIR) == 0)) {
-			fprintf(stderr, "Running the DEBUG build of EventBot from '%s' is not supported!\n", EXPECTED_WORKING_DIR);
+			fprintf(stderr, "Running the DEBUG build of XDHS Bot from '%s' is not supported!\n", EXPECTED_WORKING_DIR);
 #endif
 #ifdef RELEASE
 		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, EXPECTED_WORKING_DIR) != 0)) {
-			fprintf(stderr, "Running the RELEASE build of EventBot from anywhere other than '%s' is not supported!\n", EXPECTED_WORKING_DIR);
+			fprintf(stderr, "Running the RELEASE build of XDHS Bot from anywhere other than '%s' is not supported!\n", EXPECTED_WORKING_DIR);
 #endif
 			return EXIT_FAILURE;
 		}
@@ -4119,14 +4119,14 @@ int main(int argc, char* argv[]) {
 	{
 		static const size_t HOSTNAME_MAX = 253 + 1; // 253 is the maximum number of ASCII characters allowed for a hostname.
 		char hostname[HOSTNAME_MAX];
-		if(gethostname(hostname, HOSTNAME_MAX) != 0 || strcmp(hostname, g_config.eventbot_host) != 0) {
-			fprintf(stderr, "Running on wrong HOSTNAME. You are on '%s' but '%s' is required.\n", hostname, g_config.eventbot_host);
+		if(gethostname(hostname, HOSTNAME_MAX) != 0 || strcmp(hostname, g_config.xdhs_bot_host) != 0) {
+			fprintf(stderr, "Running on wrong HOSTNAME. You are on '%s' but '%s' is required.\n", hostname, g_config.xdhs_bot_host);
 			return EXIT_FAILURE;
 		}
 	}
 
 	// Careful not to pipe these somewhere a malicious user could find...
-	fprintf(stdout, "eventbot_host	     = '%s'\n", g_config.eventbot_host);
+	fprintf(stdout, "xdhs_bot_host	     = '%s'\n", g_config.xdhs_bot_host);
 	fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
 	fprintf(stdout, "mysql_host          = '%s'\n", g_config.mysql_host);
 	fprintf(stdout, "mysql_username      = '%s'\n", g_config.mysql_username);
@@ -4138,7 +4138,7 @@ int main(int argc, char* argv[]) {
 	fprintf(stdout, "api_key             = '%s'\n", g_config.api_key);
 	fprintf(stdout, "imgur_client_secret = '%s'\n", g_config.imgur_client_secret);
 
-	// EventBot runs as a Linux systemd service, so we need to gracefully handle these signals.
+	// XDHS Bot runs as a Linux systemd service, so we need to gracefully handle these signals.
 	(void)signal(SIGINT,  sig_handler);
 	(void)signal(SIGABRT, sig_handler);
 	(void)signal(SIGHUP,  sig_handler);
@@ -4153,7 +4153,7 @@ int main(int argc, char* argv[]) {
 	// Set up logging to an external file.
 	log_init(g_config.logfile_path);
 
-	log(LOG_LEVEL_INFO, "====== EventBot starting ======");
+	log(LOG_LEVEL_INFO, "====== XDHS Bot starting ======");
 	log(LOG_LEVEL_INFO, "Build mode: %s",	         BUILD_MODE);
 	log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
@@ -4388,7 +4388,7 @@ int main(int argc, char* argv[]) {
 				dpp::slashcommand cmd("delete_draft", "Delete a draft post.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The code of the draft to delete.", true).set_auto_complete(true));
-				cmd.add_option(dpp::command_option(dpp::co_boolean, "purge", "Purge the draft and delete all sign ups from the EventBot database.", false));
+				cmd.add_option(dpp::command_option(dpp::co_boolean, "purge", "Purge the draft and delete all sign ups from the XDHS Bot database.", false));
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
@@ -4639,7 +4639,7 @@ int main(int argc, char* argv[]) {
 						return;
 					}
 
-					std::string temp_file = fmt::format("/tmp/EventBot_Art_{}", random_string(16));
+					std::string temp_file = fmt::format("/tmp/XDHS_Bot_Art_{}", random_string(16));
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
 						defer { fclose(file); };

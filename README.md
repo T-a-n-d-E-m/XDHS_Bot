@@ -8,36 +8,22 @@ Installation as a systemd service on Debian 11 (Bullseye):
 		mysql -u root -p
 			CREATE DATABASE XDHS;
 			CREATE USER 'xdhs'@localhost IDENTIFIED BY 'password goes here';
-			GRANT DELETE, INSERT, SELECT, UPDATE ON XDHS.* TO 'xdhs'@localhost;	
+			GRANT DELETE, INSERT, SELECT, UPDATE ON XDHS.* TO 'xdhs'@localhost;
 			FLUSH PRIVILEGES;
 
 	Clone this repository to your build server.
 
-	Install headers and libs for libDPP++, MariaDB, fmt and Curl.
+	Install headers and libs for libDPP++, MariaDB, fmt, libpoppler-cpp and Curl.
 
 	Compile the executable with './build.sh release'
 
-	Run ./eventbot -sql to generate the database schema.sql file. Create these tables with the mysql admin tool.
+	Run ./xdhs_bot -sql to generate the database schema.sql file. Create these tables with the mysql admin tool.
 
 	Run the ./install.sh script to create the installation directory, username/group and install the systemd service.
 
-	Edit /opt/EventBot/bot.ini. See bot.ini.template for what each line is for.
+	Edit /opt/XDHS_Bot/bot.ini. See bot.ini.template for what each line is for.
 
-		eventbot_host=
-
-		mysql_host=
-
-		mysql_username=
-
-		mysql_password=
-
-		mysql_port=
-
-		logfile_path=
-
-		discord_token=
-	
-	TODO: Write the log to /var/log/eventbot.log and use logrotated?
+	TODO: Write the log to /var/log/xdhs_bot.log and use logrotated?
 
 
 
@@ -47,6 +33,6 @@ DPP: https://github.com/brainboxdotcc/DPP
 
 fmt: https://github.com/fmtlib/fmt
 
-MySQL or MariaDB, curl (Install with package manager)
+MySQL or MariaDB, Curl (Install with package manager)
 
  libpoppler-cpp https://poppler.freedesktop.org/api/cpp/
