@@ -1,5 +1,6 @@
 bot.ini
 xdhs_bot
+xdhs_bot_dev
 xdhs_bot.log
 schema.sql
 *.swp
