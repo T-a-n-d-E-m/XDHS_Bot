@@ -23,28 +23,27 @@
 //
 // For more information, please refer to <http://unlicense.org/>
 
+// Probably need to do these sooner rather than later...
 // FIXME: Weird bug after creating a draft or using /edit_draft to change the banner for a posted draft: The first embed button clicked after this will cause the embed to flash and redraw. This only happens after the first button click though... why?
-
-// TODO: Make most commands ephemeral so it doesn't matter where they are used.
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
+// TODO: Rename "Event" to draft where appropriate
 // Note: Only one minutemage will be asked to fill a seat.
 // FIXME: dpp::utility::read_file can throw... just use slurp
 // FIXME: dpp::message::add_file is deprecated
 // FIXME: find_guild_member can throw
 
-// Nice functionality, but not needed before going live
+// Nice functionality, but not needed.
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
 // TODO: The /timer command should edit the original message once the timer expires to indicate that time is up and decks must be submitted ASAP.
 
-// Code/performance improvements
+// Program improvements
 // TODO: Thread pools for database connections
-// TODO: All the blit_ functions can be rewritten to use SIMD ops
-// TODO: Cleanup inconsistent use of char* and std::string in database functions.
-// TODO: Rename "Event" to draft where appropriate
+// TODO: All the blit_ functions can be rewritten to use SIMD ops.
+// TODO: Cleanup inconsistent use of char*, std::string and std::string_view all over the place.
 
 
 // C libraries
@@ -3725,7 +3724,7 @@ static void set_bot_presence(dpp::cluster& bot) {
 	std::string description;
 
 	auto draft_code = database_get_next_upcoming_draft(GUILD_ID);
-	if(!is_error(draft_code)) {
+	if(has_value(draft_code)) {
 		if(draft_code.value.length() > 0) {
 			auto draft = database_get_event(GUILD_ID, draft_code.value);
 			if(!is_error(draft)) {
@@ -3778,7 +3777,7 @@ static void do_role_commands(dpp::cluster& bot) {
 							dpp::guild_member member = dpp::find_guild_member(GUILD_ID, command.member_id);
 							std::string message;
 							if(command.action == 0) { // del
-								// Check if the user already has the role. Unlike add_role it is not an error to remove a role they don't have. 
+								// Check if the user already has the role. Unlike add_role it is not an error to remove a role they don't have.
 								auto& roles = member.get_roles();
 								if(std::find(roles.begin(), roles.end(), role_id) != roles.end()) {
 									// Found, remove the role
@@ -3799,7 +3798,7 @@ static void do_role_commands(dpp::cluster& bot) {
 								}
 							} else
 							if(command.action == 1) { // add
-								// Check if the user already has the role. Discord returns an error if a member already has a role.
+								// Check if the user already has the role. Discord returns an error if a member already has a role so we have to check.
 								auto& roles = member.get_roles();
 								if(std::find(roles.begin(), roles.end(), role_id) == roles.end()) {
 									// Not found, add the role
@@ -4284,13 +4283,13 @@ int main(int argc, char* argv[]) {
 		// We only want to re-create the slash commands when the bot is first started, not when Discord reconnects a guild, so check if we've already created the slash commands on this execution.
 		if(g_commands_registered == false) {
 			// Create slash commands
-#if CPU_BURNER
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("cpu_burner", "Create banner art for every set that has >= 3 images.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif // DEBUG
+#endif
 			{
 				dpp::slashcommand cmd("banner", "Create a banner image for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4310,6 +4309,7 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_attachment, "art", "Art to use as the background. Will be resized to 825x550 pixels.", false));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("create_draft", "Create a new draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4337,12 +4337,16 @@ int main(int argc, char* argv[]) {
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("view_draft", "View the details for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code of the draft to view.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("edit_draft", "Edit the details of a draft", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4370,12 +4374,16 @@ int main(int argc, char* argv[]) {
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("post_draft", "Post a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The code of the draft event to post.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("delete_draft", "Delete a draft post.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4384,11 +4392,15 @@ int main(int argc, char* argv[]) {
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("view_allocations", "Print the pod allocations to the #-current-draft-management channel.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("add_player", "Add a member to the Playing column of the sign up sheet.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4400,6 +4412,8 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(pod_option);
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("remove_player", "Remove a player from the sign up sheet and (optionally) record them as a No Show", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4407,16 +4421,21 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "noshow", "Record this as a No Show.", true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("fire", "Create a role with all draft participants, and separate roles for each pod.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
 			{
 				dpp::slashcommand cmd("timer", "Post the Draftmancer specific reminders and a timer for deck submission.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4440,7 +4459,6 @@ int main(int argc, char* argv[]) {
 
 					cmd.add_option(opt);
 				}
-
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
@@ -5765,7 +5783,7 @@ int main(int argc, char* argv[]) {
 
 			if(subcommand.name == "add") {
 				const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
-				const auto draft_code = std::get<std::string>(event.get_parameter("draft code"));
+				const auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
 
 				std::string note;
 				{
