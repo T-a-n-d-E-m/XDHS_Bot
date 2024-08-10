@@ -1,4 +1,4 @@
-A Discord bot for the XMage Draft Historical Society. Used for scheduling multiple weekly Magic: The Gathering drafts. This bot is created specifically for our needs and channel layout and thus is unlikely to work "out of the box" for other servers.
+A Discord bot for the XMage Draft Historical Society. This bot is created specifically for our needs and channel layout and thus is unlikely to work "out of the box" for other servers.
 
 Still in development. Features are added, changed or removed frequently.
 
