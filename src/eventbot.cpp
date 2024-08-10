@@ -32,6 +32,7 @@
 // Note: Only one minutemage will be asked to fill a seat.
 // FIXME: dpp::utility::read_file can throw... just use slurp
 // FIXME: dpp::message::add_file is deprecated
+// FIXME: find_guild_member can throw
 
 // Nice functionality, but not needed before going live
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
@@ -974,7 +975,7 @@ static const size_t DISCORD_MESSAGE_CHARACTER_LIMIT = 2000;
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
 
 // The maximum allowed characters in a Discord role name.
-static const size_t DISCORD_ROLE_LENGTH_MAX = 32;
+static const size_t DISCORD_ROLE_LENGTH_MAX = 32; // FIXME: This is actually 100?
 
 // The maximum allowed byte length of a draft format string.
 static const size_t DRAFT_FORMAT_LENGTH_MAX = 64;
@@ -2544,6 +2545,47 @@ static const Database_Result<std::vector<Command_Summary>> database_get_all_help
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
+struct Role_Command {
+	u64 row_id;
+	u64 member_id;
+	int action; // 0 = delete, 1 = add
+	char role[DISCORD_ROLE_LENGTH_MAX + 1];
+};
+
+static const Database_Result<std::vector<Role_Command>> database_get_role_commands(const u64 guild_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT row_id, member_id, action, role FROM role_commands WHERE guild_id=? ORDER BY member_id, action";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Role_Command result;
+	MYSQL_OUTPUT_INIT(4);
+	MYSQL_OUTPUT_I64(&result.row_id);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_I32(&result.action);
+	MYSQL_OUTPUT_STR(result.role, DISCORD_ROLE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Role_Command> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+static const Database_Result<Database_No_Value> database_del_role_command(const u64 role_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "DELETE FROM role_commands WHERE row_id=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&role_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
 static const int BANNER_IMAGE_WIDTH = 825;
 static const int BANNER_IMAGE_HEIGHT = 550;
 
@@ -3718,6 +3760,101 @@ static void set_bot_presence(dpp::cluster& bot) {
 	bot.set_presence({status, type, description});
 }
 
+static void do_role_commands(dpp::cluster& bot) {
+	// Action any role commands
+	auto role_commands = database_get_role_commands(GUILD_ID);
+	if(has_value(role_commands)) {
+		bot.roles_get(GUILD_ID, [&bot, role_commands = role_commands.value](const dpp::confirmation_callback_t& callback) {
+			if(!callback.is_error()) {
+				const auto& role_map = std::get<dpp::role_map>(callback.value);
+				for(const auto& command : role_commands) {
+					if(command.action < 0 || command.action > 1) {
+						log(LOG_LEVEL_ERROR, "Unknown command action: %d", command.action);
+						continue;
+					}
+					for(const auto [role_id, role] : role_map) {
+						if(role.name == command.role) {
+							bool edit_member = false;
+							dpp::guild_member member = dpp::find_guild_member(GUILD_ID, command.member_id);
+							std::string message;
+							if(command.action == 0) { // del
+								// Check if the user already has the role. Unlike add_role it is not an error to remove a role they don't have. 
+								auto& roles = member.get_roles();
+								if(std::find(roles.begin(), roles.end(), role_id) != roles.end()) {
+									// Found, remove the role
+									edit_member = true;
+									member.remove_role(role_id);
+								} else {
+									// Doesn't have the role.
+									const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+									send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+										fmt::format(":orange_circle: {} doesn't have the '{}' role",
+											preferred_name,
+											command.role)
+									);
+									auto del_result = database_del_role_command(command.row_id);
+									if(is_error(del_result)) {
+										log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+									}
+								}
+							} else
+							if(command.action == 1) { // add
+								// Check if the user already has the role. Discord returns an error if a member already has a role.
+								auto& roles = member.get_roles();
+								if(std::find(roles.begin(), roles.end(), role_id) == roles.end()) {
+									// Not found, add the role
+									member.add_role(role_id);
+									edit_member = true;
+								} else {
+									// Already has the role.
+									const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+									send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+										fmt::format(":orange_circle: {} already has the '{}' role",
+											preferred_name,
+											command.role)
+									);
+									auto del_result = database_del_role_command(command.row_id);
+									if(is_error(del_result)) {
+										log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+									}
+								}
+							}
+
+							if(edit_member) {
+								bot.guild_edit_member(member, [&bot, member, command](const dpp::confirmation_callback_t& callback){ 
+									if(!callback.is_error()) {
+										const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+										send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+											fmt::format("{} {} role '{}' {} {}",
+												command.action == 0 ? ":red_circle:" : ":green_circle:",
+												command.action == 0 ? "Removed" : "Added",
+												command.role,
+												command.action == 0 ? "from" : "to",
+												preferred_name)
+										);
+										auto del_result = database_del_role_command(command.row_id);
+										if(is_error(del_result)) {
+											log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+										}
+									} else {
+										log(LOG_LEVEL_ERROR, "guild_edit_member failed: %s", callback.get_error().human_readable.c_str());
+									}
+								});
+							}
+						}
+					}
+				}
+			} else {
+				log(LOG_LEVEL_ERROR, "Failed to get guild roles: %s", callback.get_error().human_readable.c_str());
+			}
+		});
+	} else {
+		if(is_error(role_commands)) {
+			log(LOG_LEVEL_ERROR, "database_get_role_commands failed");
+		}
+	}
+}
+
 // Output the required MySQL tables for this bot. These tables could be created programmatically but I prefer to limit table creation/deletion to root.
 static void output_sql() {
 	fprintf(stdout, "-- Use ./eventbot -sql to create this file.\n\n");
@@ -3868,11 +4005,11 @@ static void output_sql() {
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
-	fprintf(stdout, "CREATE TABLE IF NOT EXISTS role_command(\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS role_commands(\n");
 	fprintf(stdout, "row_id BIGINT NOT NULL AUTO_INCREMENT,\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
-	fprintf(stdout, "command INT NOT NULL,\n");
+	fprintf(stdout, "action INT NOT NULL,\n");
 	fprintf(stdout, "role VARCHAR(%lu) NOT NULL,\n", DISCORD_ROLE_LENGTH_MAX);
 	fprintf(stdout, "PRIMARY KEY (row_id)\n");
 	fprintf(stdout, ");");
@@ -4292,7 +4429,7 @@ int main(int argc, char* argv[]) {
 				{
 					auto opt = dpp::command_option(dpp::co_sub_command, "add", "Add a dropper to the drop list with an optional note.");
 					opt.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the drop list.", true));
-					opt.add_option(dpp::command_option(dpp::co_string, "draft code", "The draft the member dropped from.", true));
+					opt.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft the member dropped from.", true));
 					opt.add_option(dpp::command_option(dpp::co_string, "note", fmt::format("Attach a note to the drop record. Max. {} characters.", DROPPER_NOTE_LENGTH_MAX), false));
 
 					cmd.add_option(opt);
@@ -5477,6 +5614,9 @@ int main(int argc, char* argv[]) {
 											u64 draft_role_id = draft_role.id;
 											u64 pod_role_id = pod_role.id;
 											try {
+												// FIXME: dpp fixed the bug that caused roles to not update. I can now
+												// use member.add_role(role_id) and guild_edit_member(...) instead
+												// of needing to get the entire vector and adding the role to it.
 												dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
 												std::vector<dpp::snowflake> roles = member.get_roles();
 												roles.push_back(draft_role_id);
@@ -5976,6 +6116,8 @@ int main(int argc, char* argv[]) {
 
 	bot.start_timer([&bot](dpp::timer t) {
 		set_bot_presence(bot);
+
+		do_role_commands(bot);
 
 		auto draft_code = database_get_next_upcoming_draft(GUILD_ID);
 		if(is_error(draft_code)) {
