@@ -62,10 +62,13 @@ chmod 400 $INSTALL_DIR/bot.ini
 
 # Copy static assets, if they're newer, and create the www-root generation directory.
 cp --update --recursive gfx $INSTALL_DIR
+cp --update --recursive www-root $INSTALL_DIR
 mkdir -p $INSTALL_DIR/www-root
+chown xdhs_bot:xdhs_bot $INSTALL_DIR/gfx
+chown xdhs_bot:xdhs_bot $INSTALL_DIR/www-root
 
-#cp xdhs_bot.service /etc/systemd/system
-#chown root:root /etc/systemd/system/xdhs_bot.service
-#systemctl daemon-reload
-#systemctl enable xdhs_bot
-#systemctl start xdhs_bot
+cp xdhs_bot.service /etc/systemd/system
+chown root:root /etc/systemd/system/xdhs_bot.service
+systemctl daemon-reload
+systemctl enable xdhs_bot
+systemctl start xdhs_bot
