@@ -3014,6 +3014,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 	}
 
+	log(LOG_LEVEL_INFO, "Banner saved to: '%s'", file_path.c_str());
+
 	return {file_path};
 }
 
@@ -4161,6 +4163,7 @@ int main(int argc, char* argv[]) {
 
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
+	// FIXME: This can clash with other processes...
 	log(LOG_LEVEL_INFO, "Downloading IANA time zone database.");
 	const std::string tz_version = date::remote_version(); // FIXME?: Valgrind says this leaks...
 	(void)date::remote_download(tz_version);
@@ -4562,9 +4565,9 @@ int main(int argc, char* argv[]) {
 
 			// Create the default zoned time for this region.
 			auto zoned_time = date::make_zoned(league->time_zone,
-								date::local_days{date::year{date.year} / date.month / date.day} +
-								std::chrono::hours(league->time.hour) +
-								 std::chrono::minutes(league->time.minute));
+				date::local_days{date::year{date.year} / date.month / date.day} +
+				std::chrono::hours(league->time.hour) +
+				std::chrono::minutes(league->time.minute));
 
 			opts.datetime = date::format("%a %b %d @ %H:%M %Z", zoned_time).c_str();
 
@@ -4626,7 +4629,7 @@ int main(int argc, char* argv[]) {
 					auto art_id = std::get<dpp::snowflake>(event.get_parameter("art"));
 					auto itr = event.command.resolved.attachments.find(art_id);
 					auto art = itr->second;
-				event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
+				//event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
 				auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
 					if(is_error(download)) {
 						event.edit_response(std::string{global_error_to_string(download.error)});
@@ -4643,8 +4646,10 @@ int main(int argc, char* argv[]) {
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
 						defer { fclose(file); };
-						event.edit_response(":hourglass_flowing_sand: Saving image");
+						//event.edit_response(":hourglass_flowing_sand: Saving image");
+						log(LOG_LEVEL_INFO, "Saving banner file to %s...", temp_file.c_str());
 						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
+						log(LOG_LEVEL_INFO, "... file saved");
 						if(wrote == download.value.size) {
 							opts.images.push_back(temp_file);
 						} else {
@@ -4668,7 +4673,7 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
-			event.edit_response(":hourglass_flowing_sand: Rendering banner");
+			//event.edit_response(":hourglass_flowing_sand: Rendering banner");
 			auto start = std::chrono::high_resolution_clock::now();
 			const auto result = render_banner(&opts);
 			if(is_error(result)) {
