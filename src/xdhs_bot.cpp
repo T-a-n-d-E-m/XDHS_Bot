@@ -2521,7 +2521,7 @@ static const Database_Result<Command> database_get_help_message(const u64 guild_
 	MYSQL_OUTPUT_STR(result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
-	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
 static const Database_Result<std::vector<Command_Summary>> database_get_all_help_messages(const u64 guild_id) {
@@ -5969,39 +5969,54 @@ int main(int argc, char* argv[]) {
 			} else {
 				auto result = database_get_help_message(guild_id, message);
 				if(has_value(result)) {
-					std::string content;
-					dpp::message msg;
+					if(result.count == 1) {
+						std::string content;
+						dpp::message msg;
 
-					if(result.value.host == true) {
-						// Check the user has the HOST role.
-						const dpp::user& issuing_user = event.command.get_issuing_user();
-						dpp::guild_member member = dpp::find_guild_member(guild_id, issuing_user.id);
-						std::vector<dpp::snowflake> roles = member.get_roles();
-						bool is_host = false;
-						for(auto role : roles) {
-							if(role == XDHS_HOST_ROLE_ID) {
-								is_host = true;
-								break;
+						if(result.value.host == true) {
+							// Check the user has the HOST role.
+							const dpp::user& issuing_user = event.command.get_issuing_user();
+							dpp::guild_member member = dpp::find_guild_member(guild_id, issuing_user.id);
+							std::vector<dpp::snowflake> roles = member.get_roles();
+							bool is_host = false;
+							for(auto role : roles) {
+								if(role == XDHS_HOST_ROLE_ID) {
+									is_host = true;
+									break;
+								}
 							}
-						}
 
-						if(is_host == true) {
-							msg.set_content(result.value.content);
+							if(is_host == true) {
+								msg.set_content(result.value.content);
+							} else {
+								msg.set_content("The Host role is required to post this help message.");
+								msg.set_flags(dpp::m_ephemeral);
+							}
 						} else {
-							msg.set_content("The Host role is required to post this help message.");
-							msg.set_flags(dpp::m_ephemeral);
+							msg.set_content(result.value.content);
 						}
+						event.reply(msg);
 					} else {
-						msg.set_content(result.value.content);
+						event.reply(dpp::message(fmt::format("'{}' is not a valid help topic.", message)).set_flags(dpp::m_ephemeral));
 					}
-
-					event.reply(msg);
 				} else {
 					// TODO: Log database error and return message
 				}
 			}
 		} else {
 			log(LOG_LEVEL_ERROR, "No handler for '{}' command.", command_name);
+		}
+	});
+
+	bot.on_message_create([&bot](const dpp::message_create_t& event) {
+		const std::string& content = event.msg.content;
+		if(content[0] == '?') {
+			if(content == "?stats" || content == "?badges" || content == "?pmbadges") {
+				// Legacy commands.
+				event.reply("This command has been deprecated. Use the slash command ``/stats`` to see your stats and badges.");
+			} else {
+				//auto result = database_get_command()
+			}
 		}
 	});
 
