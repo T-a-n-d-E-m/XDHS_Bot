@@ -193,6 +193,8 @@ static const u64 CALENDAR_CHANNEL_ID             = 1155774664732323952;
 static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
 static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
 static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
+static const char* POD1_EMOJI                    = ":Pod1:1037638721115275284";
+static const char* POD2_EMOJI                    = ":Pod2:1037638719156518935";
 #endif
 
 #ifdef RELEASE
@@ -211,6 +213,8 @@ static const u64 CALENDAR_CHANNEL_ID             = 794227134892998666;
 static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
 static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
 static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
+static const char* POD1_EMOJI                    = ":Pod1:1037398751339360286";
+static const char* POD2_EMOJI                    = ":Pod2:1037398772017287319";
 #endif
 
 // Have the bot slash commands been registered?
@@ -6058,6 +6062,11 @@ int main(int argc, char* argv[]) {
 					log(LOG_LEVEL_ERROR, "database_get_help_message_by_name failed: %s", result.errstr);
 				}
 			}
+		} else
+		if(event.msg.author.id == 475744554910351370 /*Apollo*/ && event.msg.channel_id == PRE_REGISTER_CHANNEL_ID) {
+			// Add the Pod 1 and Pod 2 reaction emojis
+			bot.message_add_reaction(event.msg, POD1_EMOJI);
+			bot.message_add_reaction(event.msg, POD2_EMOJI);
 		}
 	});
 
