@@ -6036,7 +6036,7 @@ int main(int argc, char* argv[]) {
 		if(content[0] == '?' && content.length() > 1) {
 			if(content == "?stats" || content == "?badges" || content == "?pmbadges") {
 				// Legacy commands.
-				event.reply("This command has been deprecated. Use the slash command ``/stats`` to see your stats and badges.");
+				event.reply("This command has been removed. Use the new ``/stats`` slash command instead.");
 			} else {
 				std::string_view command = std::string_view(content).substr(1, content.length()-1);
 				auto result = database_get_help_message_by_name(GUILD_ID, command);
