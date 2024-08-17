@@ -276,6 +276,17 @@ static void send_message(dpp::cluster& bot, const u64 guild_id, const u64 channe
 	bot.message_create(message);
 }
 
+static bool member_has_role(const u64 guild_id, const u64 member_id, const u64 role_id) {
+	dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
+	std::vector<dpp::snowflake> roles = member.get_roles();
+	for(auto role : roles) {
+		if(role == role_id) {
+			return true;
+		}
+	}
+	return false;
+}
+
 struct MTG_Draftable_Set {
 	const char* code;
 	const char* name;
@@ -2504,10 +2515,32 @@ struct Command {
 	char content[DISCORD_MESSAGE_CHARACTER_LIMIT + 1]; // TODO: Enforce this in the spreadsheet.
 };
 
-static const Database_Result<Command> database_get_help_message(const u64 guild_id, const std::string_view name) {
+// For the /help command
+static const Database_Result<Command> database_get_help_message_by_summary(const u64 guild_id, const std::string_view summary) {
 	(void)guild_id;
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "SELECT team, content FROM commands WHERE summary=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_STR(summary.data(), summary.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Command result;
+
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_I64(&result.host);
+	MYSQL_OUTPUT_STR(result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
+}
+
+// The old style ?commands
+static const Database_Result<Command> database_get_help_message_by_name(const u64 guild_id, const std::string_view name) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT team, content FROM commands WHERE name=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(1);
@@ -5967,26 +6000,12 @@ int main(int argc, char* argv[]) {
 					// TODO: Log database error and return message
 				}
 			} else {
-				auto result = database_get_help_message(guild_id, message);
+				auto result = database_get_help_message_by_summary(guild_id, message);
 				if(has_value(result)) {
 					if(result.count == 1) {
-						std::string content;
 						dpp::message msg;
-
 						if(result.value.host == true) {
-							// Check the user has the HOST role.
-							const dpp::user& issuing_user = event.command.get_issuing_user();
-							dpp::guild_member member = dpp::find_guild_member(guild_id, issuing_user.id);
-							std::vector<dpp::snowflake> roles = member.get_roles();
-							bool is_host = false;
-							for(auto role : roles) {
-								if(role == XDHS_HOST_ROLE_ID) {
-									is_host = true;
-									break;
-								}
-							}
-
-							if(is_host == true) {
+							if(member_has_role(guild_id, event.command.get_issuing_user().id, XDHS_HOST_ROLE_ID)) {
 								msg.set_content(result.value.content);
 							} else {
 								msg.set_content("The Host role is required to post this help message.");
@@ -6000,7 +6019,7 @@ int main(int argc, char* argv[]) {
 						event.reply(dpp::message(fmt::format("'{}' is not a valid help topic.", message)).set_flags(dpp::m_ephemeral));
 					}
 				} else {
-					// TODO: Log database error and return message
+					log(LOG_LEVEL_ERROR, "database_get_help_message_by_summary failed: %s", result.errstr);
 				}
 			}
 		} else {
@@ -6010,12 +6029,34 @@ int main(int argc, char* argv[]) {
 
 	bot.on_message_create([&bot](const dpp::message_create_t& event) {
 		const std::string& content = event.msg.content;
-		if(content[0] == '?') {
+		if(content[0] == '?' && content.length() > 1) {
 			if(content == "?stats" || content == "?badges" || content == "?pmbadges") {
 				// Legacy commands.
 				event.reply("This command has been deprecated. Use the slash command ``/stats`` to see your stats and badges.");
 			} else {
-				//auto result = database_get_command()
+				std::string_view command = std::string_view(content).substr(1, content.length()-1);
+				auto result = database_get_help_message_by_name(GUILD_ID, command);
+				if(has_value(result)) {
+					if(result.count == 1) {
+						dpp::message msg;
+						if(result.value.host == true) {
+							if(member_has_role(GUILD_ID, event.msg.author.id, XDHS_HOST_ROLE_ID)) {
+								msg.set_content(result.value.content);
+							} else {
+								msg.set_content("The Host role is required to post this help message.");
+								msg.set_flags(dpp::m_ephemeral);
+							}
+						} else {
+							msg.set_content(result.value.content);
+						}
+						event.reply(msg);
+					} else {
+						// FIXME: Why does ephemeral not work here?
+						event.reply(dpp::message(fmt::format("'{}' is not a valid command name.", command)).set_flags(dpp::m_ephemeral));
+					}
+				} else {
+					log(LOG_LEVEL_ERROR, "database_get_help_message_by_name failed: %s", result.errstr);
+				}
 			}
 		}
 	});
