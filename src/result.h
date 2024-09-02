@@ -27,6 +27,8 @@ enum GLOBAL_ERROR {
 	ERROR_DATABASE_TOO_MANY_RESULTS,
 	ERROR_DATABASE_UNEXPECTED_ROW_COUNT,
 
+	ERROR_SQLITE3_STMT_STEP_FAILED,
+
 	// parse_date_string
 	ERROR_MALFORMED_DATE_STRING,
 	ERROR_DATE_IS_IN_PAST,
@@ -79,6 +81,8 @@ static constexpr std::string_view global_error_to_string(const GLOBAL_ERROR e) {
 		case ERROR_MYSQL_STMT_FETCH_FAILED:        return {"Internal XDHS Bot Error: mysql_stmt_fetch() failed: {}"};
 		case ERROR_DATABASE_TOO_MANY_RESULTS:      return {"Internal XDHS Bot Error: Database query returned {} rows, but 0 or 1 was expected."};
 		case ERROR_DATABASE_UNEXPECTED_ROW_COUNT:  return {"Internal XDHS Bot Error: Database query returned unexpected row count of {} rows."};
+
+		case ERROR_SQLITE3_STMT_STEP_FAILED:       return {"Internak XDHS Bot Error: sqlite3_step() failed: {}"};
 
 		case ERROR_MALFORMED_DATE_STRING: return {"Malformed date string. The date should be written as YYYY-MM-DD."};
 		case ERROR_DATE_IS_IN_PAST:       return {"The date is in the past and time travel does not yet exist."};

@@ -110,6 +110,10 @@ struct Config {
 	char* xdhs_bot_host;
 	char* api_key;
 	char* imgur_client_secret;
+	// HTTP server
+	char* bind_address;
+	char* server_fqdn;
+	unsigned short bind_port;
 
 	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
 	// leak testing with Valgrind is easier if we free it ourselves.
@@ -124,6 +128,8 @@ struct Config {
 		if(xdhs_bot_host != NULL)       free(xdhs_bot_host);
 		if(api_key != NULL)             free(api_key);
 		if(imgur_client_secret != NULL) free(imgur_client_secret);
+		if(bind_address != NULL)        free(bind_address);
+		if(server_fqdn != NULL)         free(server_fqdn);
 	}
 } g_config;
 #include "config.h"
@@ -131,6 +137,7 @@ struct Config {
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
 #include "constants.h"
 #include "curl.h"
+#include "http_server.h"
 #include "image.h"
 #include "database.h"
 #include "result.h"
@@ -2590,7 +2597,7 @@ struct Role_Command {
 
 static const Database_Result<std::vector<Role_Command>> database_get_role_commands(const u64 guild_id) {
 	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
-	const char* query = "SELECT row_id, member_id, action, role FROM role_commands WHERE guild_id=? ORDER BY member_id, action";
+	const char* query = "SELECT row_id, member_id, action, role FROM role_commands WHERE guild_id=? ORDER BY member_id, action LIMIT 1";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(1);
@@ -3800,8 +3807,28 @@ static void set_bot_presence(dpp::cluster& bot) {
 
 static void do_role_commands(dpp::cluster& bot) {
 	// Action any role commands
+	//
+	// The asynchronous DPP library function, guild_edit_member, can cause race conditions
+	// when two or more roles are to be added or removed from a member in quick succession.
+	//
+	// This is what happens:
+	//	guild_edit_member(member) -> 1st call, actual change handled in another thread
+	//	guild_edit_member(member) -> 2nd call, actual change handled in another thread
+	//
+	//	1st thread sends request to Discord. Discord loads member state
+	//	2nd thread sends request to Discord. Discord loads member state
+	//	Discord actions 1st request and saves member state.
+	//	Discord actions 2nd request and saves member state.
+	//
+	// The outcome being the 1st guild_edit_member() call is overwritten by the 2nd call.
+	//
+	// The correct fix to the following code would be to cache all role additions or deletions
+	// per member and call guild_edit_member() only once per member.
+	//
+	// However, for now I'm going to do the easiest fix and simply only handle one role
+	// change per database query.
 	auto role_commands = database_get_role_commands(GUILD_ID);
-	if(has_value(role_commands)) {
+	if(has_value(role_commands) && role_commands.value.size() > 0) {
 		bot.roles_get(GUILD_ID, [&bot, role_commands = role_commands.value](const dpp::confirmation_callback_t& callback) {
 			if(!callback.is_error()) {
 				const auto& role_map = std::get<dpp::role_map>(callback.value);
@@ -4114,7 +4141,10 @@ static void config_file_kv_pair_callback(const char* key, const char* value, siz
 	CONFIG_KEY_STR(xmage_server)   else
 	CONFIG_KEY_STR(xdhs_bot_host)  else
 	CONFIG_KEY_STR(api_key)        else
-	CONFIG_KEY_STR(imgur_client_secret)
+	CONFIG_KEY_STR(imgur_client_secret) else
+	CONFIG_KEY_STR(bind_address) else
+	CONFIG_KEY_STR(server_fqdn) else
+	CONFIG_KEY_U16(bind_port)
 }
 
 int main(int argc, char* argv[]) {
@@ -4191,20 +4221,29 @@ int main(int argc, char* argv[]) {
 
 	// Set up logging to an external file.
 	log_init(g_config.logfile_path);
+	defer{ log_close(); };
 
 	log(LOG_LEVEL_INFO, "====== XDHS Bot starting ======");
 	log(LOG_LEVEL_INFO, "Build mode: %s",	         BUILD_MODE);
 	log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
 	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
+	log(LOG_LEVEL_INFO, "mongoose version: %s", MG_VERSION);
 
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
 	// FIXME: This can clash with other processes...
-	log(LOG_LEVEL_INFO, "Downloading IANA time zone database.");
 	const std::string tz_version = date::remote_version(); // FIXME?: Valgrind says this leaks...
-	(void)date::remote_download(tz_version);
-	(void)date::remote_install(tz_version);
+	log(LOG_LEVEL_INFO, "Downloading IANA time zone database %s.", tz_version.c_str());
+	if(date::remote_download(tz_version) != true) {
+		log(LOG_LEVEL_ERROR, "Download of IANA time zone database FAILED!");
+		return EXIT_FAILURE;
+	}
+	if(date::remote_install(tz_version) != true) {
+		log(LOG_LEVEL_ERROR, "Installing IANA time zone database FAILED!");
+		return EXIT_FAILURE;
+	}
+	log(LOG_LEVEL_INFO, "IANA time zone database downloaded and installed.");
 
 	// Create the bot and connect to Discord.
 	// TODO: We don't need all intents, so just request what we need...
@@ -6203,9 +6242,12 @@ int main(int argc, char* argv[]) {
 	bot.start(true);
 
 	bot.start_timer([&bot](dpp::timer t) {
-		set_bot_presence(bot);
-
 		do_role_commands(bot);
+	}, 5, [](dpp::timer){});
+
+#if 0
+	bot.start_timer([&bot](dpp::timer t) {
+		set_bot_presence(bot);
 
 		auto draft_code = database_get_next_upcoming_draft(GUILD_ID);
 		if(is_error(draft_code)) {
@@ -6262,10 +6304,19 @@ int main(int argc, char* argv[]) {
 		}
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
+#endif
 
+#if 0
+	http_server_start();
+	while(g_exit_code == 0) {
+		http_server_poll();
+	}
+	http_server_end();
+#else
 	while(g_exit_code == 0) {
 		sleep(1);
 	}
+#endif
 
 	bot.shutdown();
 	mysql_library_end();
@@ -6273,7 +6324,7 @@ int main(int argc, char* argv[]) {
 
 	log(LOG_LEVEL_INFO, "Exiting");
 
-	log_close();
+	//log_close();
 
 	return g_exit_code;
 }

@@ -32,3 +32,12 @@ api_key = 1234567890ABCDEF
 
 # Imgur client secret key
 imgur_client_secret = 1234567890ABCDEF
+
+# HTTP server bind address
+bind_address = 0.0.0.0
+
+# HTTP server bind port
+bind_port = 80
+
+# FQDN of the server we're running on
+server_fqdn = http://www.some-server.com
