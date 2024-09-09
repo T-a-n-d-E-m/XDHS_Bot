@@ -4233,7 +4233,11 @@ int main(int argc, char* argv[]) {
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
 	// FIXME: This can clash with other processes...
+#if 0
 	const std::string tz_version = date::remote_version(); // FIXME?: Valgrind says this leaks...
+#endif
+	// The 2024b version of the IANA time zone database has a typo causing an exception to be thrown, so use an older version.
+	const std::string tz_version = "2024a";
 	log(LOG_LEVEL_INFO, "Downloading IANA time zone database %s.", tz_version.c_str());
 	if(date::remote_download(tz_version) != true) {
 		log(LOG_LEVEL_ERROR, "Download of IANA time zone database FAILED!");

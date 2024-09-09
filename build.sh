@@ -19,7 +19,7 @@ else
 fi
 
 # Opts for Howard Hinnant's date/tz library.
-LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1" # -DAUTO_DOWNLOAD=1
+LIB_DATE_OPTS="-DINSTALL=/tmp -DHAS_REMOTE_API=1 -DAUTO_DOWNLOAD=0"
 
 # Libraries to link with
 LIBS="$(mariadb_config --include --libs) -ldpp -lfmt -lcurl -lpoppler-cpp -lpthread"
