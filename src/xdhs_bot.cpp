@@ -252,6 +252,15 @@ static void sig_handler(int signo) {
 	g_exit_code = signo;
 }
 
+static const char* get_tmp_dir() {
+#ifdef DEBUG
+	return "/tmp/xdhs_bot_dev";
+#endif
+#ifdef RELEASE
+	return "/tmp/xdhs_bot";
+#endif
+}
+
 static std::string to_upper(const std::string_view src) {
 	const size_t len = src.length();
 	std::string result;
@@ -3052,9 +3061,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	// TODO: Only need to save RGB, this saves having to clear the alpha channel, but does stbii_write support this?
 	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
 	image_max_alpha(&banner.value);
-	std::string file_path = fmt::format("/tmp/XDHS_Bot_Banner_{}.png", random_string(16));
+	std::string file_path = fmt::format("{}/XDHS_Bot_Banner_{}.png", get_tmp_dir(), random_string(16));
 	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
-		//RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 		RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 	}
 
@@ -4234,9 +4242,7 @@ int main(int argc, char* argv[]) {
 	log(LOG_LEVEL_INFO, "mongoose version: %s", MG_VERSION);
 
 	// Download and install the latest IANA time zone database.
-	// TODO: Only do this if /tmp/tzdata doesn't exist?
-	// FIXME: This can clash with other processes...
-	// The 2024b version of the IANA time zone database has a typo causing an exception to be thrown, so use an older version.
+	// The 2024b version (latest as I type this) of the IANA time zone database has a typo causing an exception to be thrown, so use an older version.
 	//const std::string tz_version = date::remote_version(); // Get the latest version
 	const std::string tz_version = "2024a"; // Get a specific (known working!) version
 	log(LOG_LEVEL_INFO, "Downloading IANA time zone database %s.", tz_version.c_str());
@@ -4683,7 +4689,7 @@ int main(int argc, char* argv[]) {
 						return;
 					}
 
-					std::string temp_file = fmt::format("/tmp/XDHS_Bot_Art_{}", random_string(16));
+					std::string temp_file = fmt::format("{}/XDHS_Bot_Art_{}", get_tmp_dir(), random_string(16));
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
 						defer { fclose(file); };
