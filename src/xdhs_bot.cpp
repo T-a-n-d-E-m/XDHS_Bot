@@ -4206,6 +4206,9 @@ int main(int argc, char* argv[]) {
 	fprintf(stdout, "xmage_server        = '%s'\n", g_config.xmage_server);
 	fprintf(stdout, "api_key             = '%s'\n", g_config.api_key);
 	fprintf(stdout, "imgur_client_secret = '%s'\n", g_config.imgur_client_secret);
+	fprintf(stdout, "bind_address        = '%s'\n", g_config.bind_address);
+	fprintf(stdout, "server_fqdn         = '%s'\n", g_config.server_fqdn);
+	fprintf(stdout, "bind_port           = '%d'\n", g_config.bind_port);
 
 	// XDHS Bot runs as a Linux systemd service, so we need to gracefully handle these signals.
 	(void)signal(SIGINT,  sig_handler);
@@ -4233,15 +4236,16 @@ int main(int argc, char* argv[]) {
 	// Download and install the latest IANA time zone database.
 	// TODO: Only do this if /tmp/tzdata doesn't exist?
 	// FIXME: This can clash with other processes...
-#if 0
-	const std::string tz_version = date::remote_version(); // FIXME?: Valgrind says this leaks...
-#endif
 	// The 2024b version of the IANA time zone database has a typo causing an exception to be thrown, so use an older version.
-	const std::string tz_version = "2024a";
+	//const std::string tz_version = date::remote_version(); // Get the latest version
+	const std::string tz_version = "2024a"; // Get a specific (known working!) version
 	log(LOG_LEVEL_INFO, "Downloading IANA time zone database %s.", tz_version.c_str());
-	if(date::remote_download(tz_version) != true) {
-		log(LOG_LEVEL_ERROR, "Download of IANA time zone database FAILED!");
-		return EXIT_FAILURE;
+	{
+		char error_string[CURL_ERROR_SIZE];
+		if(date::remote_download(tz_version, error_string) != true) {
+			log(LOG_LEVEL_ERROR, "Download of IANA time zone database FAILED: %s", error_string);
+			return EXIT_FAILURE;
+		}
 	}
 	if(date::remote_install(tz_version) != true) {
 		log(LOG_LEVEL_ERROR, "Installing IANA time zone database FAILED!");
@@ -6199,14 +6203,12 @@ int main(int argc, char* argv[]) {
 		// Discord will now call on_guild_create for each guild this bot is a member of.
 	});
 
-
 	bot.start(true);
 
 	bot.start_timer([&bot](dpp::timer t) {
 		do_role_commands(bot);
 	}, 5, [](dpp::timer){});
 
-#if 0
 	bot.start_timer([&bot](dpp::timer t) {
 		set_bot_presence(bot);
 
@@ -6265,19 +6267,12 @@ int main(int argc, char* argv[]) {
 		}
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
-#endif
 
-#if 0
 	http_server_start();
 	while(g_exit_code == 0) {
 		http_server_poll();
 	}
 	http_server_end();
-#else
-	while(g_exit_code == 0) {
-		sleep(1);
-	}
-#endif
 
 	bot.shutdown();
 	mysql_library_end();
