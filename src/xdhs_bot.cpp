@@ -4366,13 +4366,6 @@ int main(int argc, char* argv[]) {
 		// We only want to re-create the slash commands when the bot is first started, not when Discord reconnects a guild, so check if we've already created the slash commands on this execution.
 		if(g_commands_registered == false) {
 			// Create slash commands
-#ifdef DEBUG
-			{
-				dpp::slashcommand cmd("cpu_burner", "Create banner art for every set that has >= 3 images.", bot.me.id);
-				cmd.default_member_permissions = dpp::p_use_application_commands;
-				bot.guild_command_create(cmd, event.created->id);
-			}
-#endif
 			{
 				dpp::slashcommand cmd("banner", "Create a banner image for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4570,42 +4563,6 @@ int main(int argc, char* argv[]) {
 		const auto command_name = event.command.get_command_name();
 		const auto guild_id = event.command.get_guild().id;
 
-#ifdef CPU_BURNER
-		if(command_name == "cpu_burner") {
-			event.reply("Here we go!");
-
-			Banner_Opts opts;
-			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
-			opts.datetime = "DATETIME / DATETIME / DATETIME / DATETIME";
-			for(size_t i = 0; i < SET_COUNT; ++i) {
-				const XDHS_League* league = &g_xdhs_leagues[rand() % XDHS_LEAGUE_COUNT];
-				opts.league_color = league->color & 0x0000FF00;
-				opts.league_color |= (league->color & 0xFF) << 16;
-				opts.league_color |= (league->color & 0x00FF0000) >> 16;
-				const MTG_Draftable_Set* set = &g_draftable_sets[i];
-				if(set->pack_images >= 1) {
-					std::string format = fmt::format("{}/{}/{}", set->code, set->code, set->code);
-					opts.images = get_pack_images(format.c_str());
-					opts.title = fmt::format("BANNER TEST / SS.W-LT: {}", format);
-					//log(LOG_LEVEL_DEBUG, "Rendering: %s", format.c_str());
-					const auto banner = render_banner(&opts);
-					if(!is_error(banner)) {
-						dpp::message message;
-						message.set_type(dpp::message_type::mt_default);
-						message.set_guild_id(GUILD_ID);
-						message.set_channel_id(1170985661185151017); // #spam
-						message.set_allowed_mentions(false, false, false, false, {}, {});
-						message.set_content(format);
-						message.add_file("banner.png", dpp::utility::read_file(banner.value));
-						bot.message_create(message);
-					} else {
-						event.reply(std::string{global_error_to_string(banner.error)});
-					}
-					opts.images.clear();
-				}
-			}
-		} else
-#endif // DEBUG
 		if(command_name == "banner") {
 			Banner_Opts opts;
 			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
