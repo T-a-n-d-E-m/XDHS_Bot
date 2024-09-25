@@ -92,7 +92,7 @@ static constexpr std::string_view global_error_to_string(const GLOBAL_ERROR e) {
 		case ERROR_INVALID_DAY_30:        return {"Day should be between 01 and 30 for the specified month."};
 		case ERROR_INVALID_DAY_31:        return {"Day should be between 01 and 31 for the specified month."};
 
-		case ERROR_MALFORMED_DRAFT_CODE: return {"**Malformed draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific, A(S)ia or A(T)lantic\n\t**T** is the league type: (C)hrono or (B)onus."};
+		case ERROR_MALFORMED_DRAFT_CODE: return {"**Malformed draft code.** Draft codes should look like SS.W-RT, where:\n\t**SS** is the season\n\t**W** is the week in the season\n\t**R** is the region code: (E)uro, (A)mericas, (P)acific or A(S)ia\n\t**T** is the league type: (C)hrono or (B)onus."};
 		case ERROR_LEAGUE_NOT_FOUND:     return {"No matching league found for draft code."};
 
 		case ERROR_MALFORMED_START_TIME_STRING: return {"Malformed start time string. Start time should be written as HH:MM in 24 hour time."};
