@@ -1,10 +1,10 @@
 // This is free and unencumbered software released into the public domain.
-// 
+//
 // Anyone is free to copy, modify, publish, use, compile, sell, or
 // distribute this software, either in source code form or as a compiled
 // binary, for any purpose, commercial or non-commercial, and by any
 // means.
-// 
+//
 // In jurisdictions that recognize copyright laws, the author or authors
 // of this software dedicate any and all copyright interest in the
 // software to the public domain. We make this dedication for the benefit
@@ -12,7 +12,7 @@
 // successors. We intend this dedication to be an overt act of
 // relinquishment in perpetuity of all present and future rights to this
 // software under copyright law.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
 // EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
@@ -20,28 +20,30 @@
 // OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 // ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 // OTHER DEALINGS IN THE SOFTWARE.
-// 
+//
 // For more information, please refer to <http://unlicense.org/>
 
+// Probably need to do these sooner rather than later...
 // FIXME: Weird bug after creating a draft or using /edit_draft to change the banner for a posted draft: The first embed button clicked after this will cause the embed to flash and redraw. This only happens after the first button click though... why?
-
-// TODO: Make most commands ephemeral so it doesn't matter where they are used. 
 // TODO: Store the pod allocations somewhere so they can be manipulated after they've been posted.
 // TODO: Need a /swap_players command? Swap two players in different pods, update roles and threads accordingly.
 // TODO: Create a message that explains what all the sign up options are and what the expectation for minutemages is.
+// TODO: Rename "Event" to draft where appropriate
 // Note: Only one minutemage will be asked to fill a seat.
 // FIXME: dpp::utility::read_file can throw... just use slurp
+// FIXME: dpp::message::add_file is deprecated
+// FIXME: find_guild_member can throw
 
-// Nice functionality, but not needed before going live
+// Nice functionality, but not needed.
 // TODO: Add "Devotion Week" and "Meme Week" to the banner creation command.
 // TODO: Alert hosts when a drafter is a first time player and recommend longer timers.
 // TODO: Do we want to send automated messages to people when their drop count exceeds a certain threshold?
+// TODO: The /timer command should edit the original message once the timer expires to indicate that time is up and decks must be submitted ASAP.
 
-// Code/performance improvements
+// Program improvements
 // TODO: Thread pools for database connections
-// TODO: All the blit_ functions can be rewritten to use SIMD ops
-// TODO: Cleanup inconsistent use of char* and std::string in database functions.
-// TODO: Rename "Event" to draft where appropriate
+// TODO: All the blit_ functions can be rewritten to use SIMD ops.
+// TODO: Cleanup inconsistent use of char*, std::string and std::string_view all over the place.
 
 
 // C libraries
@@ -60,6 +62,7 @@
 
 // User libraries
 #include <dpp/dpp.h>
+#define FMT_HEADER_ONLY
 #include <fmt/format.h>
 
 // Local libraries
@@ -94,14 +97,52 @@
 #include "stb_truetype.h"
 #endif // #ifndef
 
+
+struct Config {
+	char* mysql_host;
+	char* mysql_username;
+	char* mysql_password;
+	char* mysql_database;
+	unsigned short mysql_port;
+	char* logfile_path;
+	char* discord_token;
+	char* xmage_server;
+	char* xdhs_bot_host;
+	char* api_key;
+	char* imgur_client_secret;
+	// HTTP server
+	char* bind_address;
+	char* server_fqdn;
+	unsigned short bind_port;
+
+	// There's no real need to ever free this structure as the OS will clean it up for us on program exit, but
+	// leak testing with Valgrind is easier if we free it ourselves.
+	~Config() {
+		if(mysql_host != NULL)          free(mysql_host);
+		if(mysql_username != NULL)      free(mysql_username);
+		if(mysql_password != NULL)      free(mysql_password);
+		if(mysql_database != NULL)      free(mysql_database);
+		if(logfile_path != NULL)        free(logfile_path);
+		if(discord_token != NULL)       free(discord_token);
+		if(xmage_server != NULL)        free(xmage_server);
+		if(xdhs_bot_host != NULL)       free(xdhs_bot_host);
+		if(api_key != NULL)             free(api_key);
+		if(imgur_client_secret != NULL) free(imgur_client_secret);
+		if(bind_address != NULL)        free(bind_address);
+		if(server_fqdn != NULL)         free(server_fqdn);
+	}
+} g_config;
+#include "config.h"
+
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
+#include "constants.h"
+#include "curl.h"
 #include "http_server.h"
 #include "image.h"
 #include "database.h"
 #include "result.h"
 #include "log.h"
-#include "config.h"
-#include "scope_exit.h"
+#include "defer.h"
 #include "utf8.h"
 
 // Some useful shorthands for common types.
@@ -120,7 +161,7 @@ using f64 = double;
 
 // FIXME: This is an awful hack so I don't have to deal with timezone conversion stuff. Add this to timestamps inserted in the database by Badge Bot by this amount. This is the UTC offset of where the server running this code is.
 static const int SERVER_TIME_ZONE_OFFSET = (60*60*10);
- 
+
 // How many seconds before a draft the pre-draft reminder message should be sent.
 static const time_t SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER   = (60*60*1);
 
@@ -133,11 +174,13 @@ static const time_t SECONDS_AFTER_DRAFT_TO_DELETE_POSTS     = (60*60*5);
 // How often often to spin up the thread that sends the pre-draft reminders, tentatives ping, etc.
 static const dpp::timer JOB_THREAD_TICK_RATE                = 15;
 
-// How long we allow for deck construction
+// How long we allow for deck construction.
 static const time_t DECK_CONSTRUCTION_MINUTES               = (10*60);
 
 // The directory where the RELEASE build is run from.
-static const char* EXPECTED_WORKING_DIR                 = "/opt/EventBot";
+static const char* EXPECTED_WORKING_DIR                 = "/opt/XDHS_Bot";
+
+static const char* CONFIG_FILE_NAME = "bot.ini";
 
 // The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
@@ -157,7 +200,8 @@ static const u64 CALENDAR_CHANNEL_ID             = 1155774664732323952;
 static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
 static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
 static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
-static bool g_commands_registered                = false; // Have the bot slash commands been registered for this guild?
+static const char* POD1_EMOJI                    = ":Pod1:1037638721115275284";
+static const char* POD2_EMOJI                    = ":Pod2:1037638719156518935";
 #endif
 
 #ifdef RELEASE
@@ -170,15 +214,18 @@ static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 535127333401657354;
 static const u64 BOT_COMMANDS_CHANNEL_ID         = 753637350877429842;
 static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 647073844649000962;
 static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
-static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 796861143594958868; 
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 796861143594958868;
 static const u64 FEEDBACK_CHANNEL_ID             = 822015209756950528;
 static const u64 CALENDAR_CHANNEL_ID             = 794227134892998666;
 static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
 static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
 static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
-static bool g_commands_registered                = false; // Have the bot slash commands been registered for this guild?;
-
+static const char* POD1_EMOJI                    = ":Pod1:1037398751339360286";
+static const char* POD2_EMOJI                    = ":Pod2:1037398772017287319";
 #endif
+
+// Have the bot slash commands been registered?
+static bool g_commands_registered                = false;
 
 // Some serious errors will ping this person as the error needs attention ASAP.
 static const u64 TANDEM_DISCORD_ID               = 767299805348233217;
@@ -192,21 +239,30 @@ static int g_exit_code = 0;
 
 static void sig_handler(int signo) {
 	// TODO: All database writes need to be done as transactions so a sudden shutdown of the service here won't mess up the database.
-    switch(signo) {
-        case SIGINT:  // Fall through
-        case SIGABRT: // Fall through
-        case SIGHUP:  // Fall through
-        case SIGTERM:
-            log(LOG_LEVEL_INFO, "Caught signal %d", strsignal(signo));
-        	break;
+	switch(signo) {
+		case SIGINT:  // Fall through
+		case SIGABRT: // Fall through
+		case SIGHUP:  // Fall through
+		case SIGTERM:
+			log(LOG_LEVEL_INFO, "Caught signal %s", strsignal(signo));
+			break;
 
-        default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
-    }
-    g_exit_code = signo;
+		default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
+	}
+	g_exit_code = signo;
 }
 
-static std::string to_upper(const char* src) {
-	const size_t len = strlen(src);
+static const char* get_tmp_dir() {
+#ifdef DEBUG
+	return "/tmp/xdhs_bot_dev";
+#endif
+#ifdef RELEASE
+	return "/tmp/xdhs_bot";
+#endif
+}
+
+static std::string to_upper(const std::string_view src) {
+	const size_t len = src.length();
 	std::string result;
 	result.reserve(len);
 	for(size_t i = 0; i < len; ++i) {
@@ -230,14 +286,25 @@ static std::string random_string(const int len) {
 static const size_t DOWNLOAD_BYTES_MAX = (3 * 1024 * 1024);
 
 // Send a message to a channel. Mostly used for posting what the bot is currently doing.
-static void send_message(dpp::cluster& bot, const u64 channel_id, const std::string& text) {
+static void send_message(dpp::cluster& bot, const u64 guild_id, const u64 channel_id, const std::string& text) {
 	dpp::message message;
 	message.set_type(dpp::message_type::mt_default);
-	message.set_guild_id(GUILD_ID);
+	message.set_guild_id(guild_id);
 	message.set_channel_id(channel_id);
 	message.set_allowed_mentions(false, false, false, false, {}, {});
 	message.set_content(text);
 	bot.message_create(message);
+}
+
+static bool member_has_role(const u64 guild_id, const u64 member_id, const u64 role_id) {
+	dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
+	std::vector<dpp::snowflake> roles = member.get_roles();
+	for(auto role : roles) {
+		if(role == role_id) {
+			return true;
+		}
+	}
+	return false;
 }
 
 struct MTG_Draftable_Set {
@@ -399,6 +466,8 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"OTJ", "Outlaws of Thunder Junction",                 1, false},
 	{"MH3", "Modern Horizons 3",                           1, false},
 	{"BLB", "Bloomburrow",                                 1, false},
+	{"DSK", "Duskmourn: House of Horror",                  0, false}, // TODO: Needs art
+	{"FDN", "Foundations",                                 0, false}, // TODO: Needs art
 
 	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
@@ -524,10 +593,10 @@ struct Set_List {
 static Set_List get_set_list_from_string(const char* format) {
 	size_t len = strlen(format);
 	char* str = (char*)alloca(len+1);
-	memcpy(str, format, len+1);
 	for(size_t i = 0; i < len; ++i) {
-		str[i] = toupper(str[i]);
+		str[i] = toupper(format[i]);
 	}
+	str[len] = 0;
 	char* start = str;
 	char* end = start;
 	bool done = false;
@@ -541,7 +610,7 @@ static Set_List get_set_list_from_string(const char* format) {
 
 		*end = 0;
 		if(strlen(start) == 0) break;
-		
+
 		const MTG_Draftable_Set* set = get_set_from_code(start);
 		if(set != NULL) {
 			list.set[list.count++] = set;
@@ -626,30 +695,28 @@ static void expand_format_string(const char* format, size_t len, char* out, size
 }
 
 // The maximum number of leagues to be pinged when a draft sign up is posted. Increase this if a league ever needs to ping more than two roles.
-static const size_t LEAGUE_PINGS_MAX = 2; 
+static const size_t LEAGUE_PINGS_MAX = 2;
 
 enum LEAGUE_ID {
 	LEAGUE_ID_AMERICAS_CHRONO,
 	LEAGUE_ID_EURO_CHRONO,
 	LEAGUE_ID_ASIA_CHRONO,
 	LEAGUE_ID_PACIFIC_CHRONO,
-	LEAGUE_ID_ATLANTIC_BONUS,
 	LEAGUE_ID_AMERICAS_BONUS,
 	LEAGUE_ID_EURO_BONUS,
 };
 
-static const char* to_cstring(const LEAGUE_ID id) {
+static constexpr const std::string_view to_string(const LEAGUE_ID id) {
 	switch(id) {
-		case LEAGUE_ID_AMERICAS_CHRONO: return "Americas Chrono";
-		case LEAGUE_ID_EURO_CHRONO:     return "Euro Chrono";
-		case LEAGUE_ID_ASIA_CHRONO:     return "Asia Chrono";
-		case LEAGUE_ID_PACIFIC_CHRONO:  return "Pacific Chrono";
-		case LEAGUE_ID_ATLANTIC_BONUS:  return "Atlantic Bonus";
-		case LEAGUE_ID_AMERICAS_BONUS:  return "Americas Bonus";
-		case LEAGUE_ID_EURO_BONUS:      return "Euro Bonus";
+		case LEAGUE_ID_AMERICAS_CHRONO: return {"Americas Chrono"};
+		case LEAGUE_ID_EURO_CHRONO:     return {"Euro Chrono"};
+		case LEAGUE_ID_ASIA_CHRONO:     return {"Asia Chrono"};
+		case LEAGUE_ID_PACIFIC_CHRONO:  return {"Pacific Chrono"};
+		case LEAGUE_ID_AMERICAS_BONUS:  return {"Americas Bonus"};
+		case LEAGUE_ID_EURO_BONUS:      return {"Euro Bonus"};
 	}
 
-	return NULL;
+	return {""};
 }
 
 struct Start_Time {
@@ -702,14 +769,6 @@ static const XDHS_League g_xdhs_leagues[] = {
 		{"Pacific", NULL},
 	},
 	{
-		LEAGUE_ID_ATLANTIC_BONUS,
-		'T','B',
-		0x00ed8821,
-		"Europe/Berlin",
-		{19,50},
-		{"Euro", "Americas"},
-	},
-	{
 		LEAGUE_ID_AMERICAS_BONUS,
 		'A','B',
 		0x006aa84f,
@@ -740,9 +799,9 @@ struct Draft_Code {
 
 
 static Result<Draft_Code> parse_draft_code(const char* draft_code) {
-	if(draft_code == NULL) return MAKE_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(draft_code == NULL) RETURN_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
 	const size_t len = strlen(draft_code);
-	if(len > DRAFT_CODE_LENGTH_MAX) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(len > DRAFT_CODE_LENGTH_MAX) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	char str[DRAFT_CODE_LENGTH_MAX+1]; // Mutable copy
 	memcpy(str, draft_code, len);
 
@@ -753,19 +812,19 @@ static Result<Draft_Code> parse_draft_code(const char* draft_code) {
 
 	// Season
 	while(isdigit(*end)) end++;
-	if(*end != '.') return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(*end != '.') RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
-	if(strlen(start) > 3) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) == 0) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 3) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	out.season = strtol(start, NULL, 10);
 	start = ++end;
 
 	// Week
 	while(isdigit(*end)) end++;
-	if(*end != '-') return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(*end != '-') RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	*end = 0;
-	if(strlen(start) == 0) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
-	if(strlen(start) > 2) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) == 0) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
+	if(strlen(start) > 2) RETURN_ERROR_RESULT(ERROR_MALFORMED_DRAFT_CODE);
 	out.week = strtol(start, NULL, 10);
 	end++;
 
@@ -779,7 +838,7 @@ static Result<Draft_Code> parse_draft_code(const char* draft_code) {
 		}
 	}
 
-	return MAKE_ERROR_RESULT(ERROR_LEAGUE_NOT_FOUND);
+	RETURN_ERROR_RESULT(ERROR_LEAGUE_NOT_FOUND);
 }
 
 static inline int pack_time(int year, int month, int day, int hour, int minute) {
@@ -841,23 +900,23 @@ struct Date {
 #define split_date(str, min_len, max_len, out) \
 { \
 	const char* start = str; \
-	while(isdigit(*str)) str++;       \
+	while(isdigit(*str)) str++;	   \
 	if(*str != '-' && *str != '.' && *str != '\\' && *str != '/' && *str != '\0') { \
-		return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);  \
+		RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);  \
 	} \
 	*str++ = 0; \
-	if(strlen(start) < min_len || strlen(start) > max_len) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING); \
+	if(strlen(start) < min_len || strlen(start) > max_len) RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING); \
 	out = strtol(start, NULL, 10); \
 }
 static const Result<Date> parse_date_string(const char* date_string) {
-	if(strlen(date_string) < strlen("YY-M-D")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
-	if(strlen(date_string) > strlen("YYYY-MM-DD")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) < strlen("YY-M-D")) RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
+	if(strlen(date_string) > strlen("YYYY-MM-DD")) RETURN_ERROR_RESULT(ERROR_MALFORMED_DATE_STRING);
 
 	// Make a mutable copy of the date string, including terminator.
 	char str[strlen("YYYY-MM-DD")+1];
 	memcpy(str, date_string, strlen(date_string)+1);
 	char* str_ptr = str;
-	
+
 	Date result;
 
 	split_date(str_ptr, 2, 4, result.year);
@@ -865,7 +924,7 @@ static const Result<Date> parse_date_string(const char* date_string) {
 	split_date(str_ptr, 1, 2, result.day);
 
 	if(result.year <= 99) result.year += 2000;
-	
+
 	// String parsed - check if this looks like a valid date.
 	// TODO: The date library probably could do this, right?
 
@@ -876,24 +935,24 @@ static const Result<Date> parse_date_string(const char* date_string) {
 	// TODO: Check the date is in the future
 
 	if(result.year < current_year) {
-		return MAKE_ERROR_RESULT(ERROR_DATE_IS_IN_PAST);
+		RETURN_ERROR_RESULT(ERROR_DATE_IS_IN_PAST);
 	}
 
 	if(result.month < 1 || result.month > 12) {
-		return MAKE_ERROR_RESULT(ERROR_INVALID_MONTH);
+		RETURN_ERROR_RESULT(ERROR_INVALID_MONTH);
 	} else
 	if(result.month == 1 || result.month == 3 || result.month == 5 || result.month == 7 || result.month == 8 || result.month == 10 || result.month == 12) {
-		if(result.day > 31) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_31);
+		if(result.day > 31) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_31);
 	} else
 	if (result.month == 4 || result.month == 6 || result.month == 9 || result.month == 11) {
-		if(result.day > 30) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_30);
+		if(result.day > 30) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_30);
 	} else {
 		// Febuary
 		if(((result.year % 4 == 0) && (result.year % 100 != 0)) || (result.year % 400 == 0)) {
 			// Leap year
-			if(result.day > 29) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_29);
+			if(result.day > 29) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_29);
 		} else {
-			if(result.day > 28) return MAKE_ERROR_RESULT(ERROR_INVALID_DAY_28);
+			if(result.day > 28) RETURN_ERROR_RESULT(ERROR_INVALID_DAY_28);
 		}
 	}
 
@@ -902,9 +961,9 @@ static const Result<Date> parse_date_string(const char* date_string) {
 
 // Do some rudimentary validation on the start time string sent with create_draft command and parse the provided values. Returns true and fills the 'out' variable if no problem was found, false otherwise.
 static const Result<Start_Time> parse_start_time_string(const char* start_time_string) {
-	if(start_time_string == NULL) return MAKE_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
-	if(strlen(start_time_string) < strlen("H:M")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
-	if(strlen(start_time_string) > strlen("HH:MM")) return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+	if(start_time_string == NULL) RETURN_ERROR_RESULT(ERROR_INVALID_FUNCTION_PARAMETER);
+	if(strlen(start_time_string) < strlen("H:M")) RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+	if(strlen(start_time_string) > strlen("HH:MM")) RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 
 	// Make a copy of the date string, including terminator.
 	char str[strlen("HH:MM")+1];
@@ -919,11 +978,11 @@ static const Result<Start_Time> parse_start_time_string(const char* start_time_s
 		str_ptr++;
 	}
 	if(*str_ptr != ':' && *str_ptr != '-' && *str_ptr != ',' && *str_ptr != '.') {
-		return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+		RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	*str_ptr++ = 0;
 	result.hour = (int) strtol(hour, NULL, 10);
-	if(result.hour < 0 || result.hour > 23) return MAKE_ERROR_RESULT(ERROR_INVALID_HOUR);
+	if(result.hour < 0 || result.hour > 23) RETURN_ERROR_RESULT(ERROR_INVALID_HOUR);
 
 	// Parse the minutes
 	const char* minute = str_ptr;
@@ -931,10 +990,10 @@ static const Result<Start_Time> parse_start_time_string(const char* start_time_s
 		str_ptr++;
 	}
 	if(*str_ptr != '\0') {
-		return MAKE_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
+		RETURN_ERROR_RESULT(ERROR_MALFORMED_START_TIME_STRING);
 	}
 	result.minute = (int) strtol(minute, NULL, 10);
-	if(result.minute < 1 && result.minute > 59) return MAKE_ERROR_RESULT(ERROR_INVALID_MINUTE);
+	if(result.minute < 1 && result.minute > 59) RETURN_ERROR_RESULT(ERROR_INVALID_MINUTE);
 
 	return {result};
 }
@@ -945,6 +1004,9 @@ static const size_t DISCORD_MESSAGE_CHARACTER_LIMIT = 2000;
 // The maximum allowed characters in a Discord username or nickname.
 static const size_t DISCORD_NAME_LENGTH_MAX = 32;
 
+// The maximum allowed characters in a Discord role name.
+static const size_t DISCORD_ROLE_LENGTH_MAX = 32; // FIXME: This is actually 100?
+
 // The maximum allowed byte length of a draft format string.
 static const size_t DRAFT_FORMAT_LENGTH_MAX = 64;
 
@@ -954,8 +1016,8 @@ static const size_t DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX = 128;
 // The maximum allowed byte length for each 'blurb' paragraph in the draft details post.
 static const size_t DRAFT_BLURB_LENGTH_MAX = 512;
 
-// URLs can potentially be much longer than this but with Discord message character limits we want to keep things short and sweet.
-static const size_t URL_LENGTH_MAX = 512; 
+// The maximum allowed byte length for a note added to a dropper record.
+static const size_t DROPPER_NOTE_LENGTH_MAX = 100;
 
 // Maximum length of the filename for a downloaded banner file.
 static const size_t BANNER_FILENAME_MAX = 64;
@@ -993,25 +1055,26 @@ enum DRAFT_STATUS {
 	DRAFT_STATUS_END                = 128,
 };
 
-static const char* to_cstring(DRAFT_STATUS status) {
+static constexpr const std::string_view to_string(const DRAFT_STATUS status) {
 	switch(status) {
-		case DRAFT_STATUS_INVALID:           return "DRAFT_STATUS_INVALID";
+		case DRAFT_STATUS_INVALID:           return {"DRAFT_STATUS_INVALID"};
 
-		case DRAFT_STATUS_CREATED:           return "DRAFT_STATUS_CREATED";
-		case DRAFT_STATUS_POSTED:            return "DRAFT_STATUS_POSTED";
-		case DRAFT_STATUS_REMINDER_SENT:     return "DRAFT_STATUS_REMINDER_SENT";
-		case DRAFT_STATUS_TENTATIVES_PINGED: return "DRAFT_STATUS_TENTATIVES_PINGED";
-		case DRAFT_STATUS_LOCKED:            return "DRAFT_STATUS_LOCKED";
-		case DRAFT_STATUS_FIRED:             return "DRAFT_STATUS_FIRED";
-		case DRAFT_STATUS_COMPLETE:          return "DRAFT_STATUS_COMPLETE";
-		default:
-			break;
+		case DRAFT_STATUS_CREATED:           return {"DRAFT_STATUS_CREATED"};
+		case DRAFT_STATUS_POSTED:            return {"DRAFT_STATUS_POSTED"};
+		case DRAFT_STATUS_REMINDER_SENT:     return {"DRAFT_STATUS_REMINDER_SENT"};
+		case DRAFT_STATUS_TENTATIVES_PINGED: return {"DRAFT_STATUS_TENTATIVES_PINGED"};
+		case DRAFT_STATUS_LOCKED:            return {"DRAFT_STATUS_LOCKED"};
+		case DRAFT_STATUS_FIRED:             return {"DRAFT_STATUS_FIRED"};
+		case DRAFT_STATUS_COMPLETE:          return {"DRAFT_STATUS_COMPLETE"};
+
+		case DRAFT_STATUS_END:               return {"DRAFT_STATUS_END"};
 	}
-	return NULL;
+	return {""};
 }
 
 static std::string draft_status_to_string(int status) {
 	std::string result;
+	result.reserve(64);
 
 	bool first = true;
 	for(int i = (int)DRAFT_STATUS_CREATED; i < (int)DRAFT_STATUS_END; i *= 2) {
@@ -1021,12 +1084,11 @@ static std::string draft_status_to_string(int status) {
 			} else {
 				first = false;
 			}
-			result += to_cstring((DRAFT_STATUS)i) + strlen("DRAFT_STATUS_");
+			result += std::string{to_string((DRAFT_STATUS)i)};
 		}
 	}
 
 	return result;
-	
 }
 
 // All data needed for a #-pre-register post is available in this structure.
@@ -1081,7 +1143,7 @@ enum POD_ALLOCATION_REASON {
 	POD_ALLOCATION_RANDOM // Flexible players are randomly assigned to whatever empty seats are left
 };
 
-static const char* emoji_for_reason(POD_ALLOCATION_REASON r) {
+static const char* emoji_for_reason(const POD_ALLOCATION_REASON r) {
 	switch(r) {
 		case POD_ALLOCATION_REASON_UNALLOCATED: return ":grey_question:"; // Should never happen
 		case POD_ALLOCATION_REASON_SINGLE_POD:  return ":one:";
@@ -1188,7 +1250,7 @@ static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 	// As we only need to consider an even number of players, we can halve the player count and use it as an array index.
 	player_count /= 2;
 	//                                   Player count: 0 2 4 6 8 10 ...
-	static const int pods_needed_for_player_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8}; 
+	static const int pods_needed_for_player_count[] = {0,0,0,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8};
 
 	static const int seats_per_pod[(PLAYERS_MAX/2)+1/*plus 1 for 0 players*/][PODS_MAX] = {
 		{ 0, 0, 0, 0, 0, 0, 0, 0}, //  0
@@ -1242,10 +1304,8 @@ static Draft_Tournament set_up_pod_count_and_sizes(int player_count) {
 	return tournament;
 }
 
-//static const char* DATABASE_NAME = "XDHS"; // TODO: We want release and debug to use different databases, right?
-
 static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id, const Draft_Event* event) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = R"(
 		INSERT INTO draft_events(
 			guild_id,     -- 0
@@ -1275,35 +1335,34 @@ static Database_Result<Database_No_Value> database_add_draft(const u64 guild_id,
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(21);
-	MYSQL_INPUT( 0, MYSQL_TYPE_LONGLONG, &guild_id,                 sizeof(guild_id));
-	MYSQL_INPUT( 1, MYSQL_TYPE_STRING,   event->pings,              strlen(event->pings));
-	MYSQL_INPUT( 2, MYSQL_TYPE_STRING,   event->draft_code,         strlen(event->draft_code));
-	MYSQL_INPUT( 3, MYSQL_TYPE_STRING,   event->league_name,        strlen(event->league_name));
-	MYSQL_INPUT( 4, MYSQL_TYPE_STRING,   event->format,             strlen(event->format));
-	MYSQL_INPUT( 5, MYSQL_TYPE_STRING,   event->time_zone,          strlen(event->time_zone));
-	MYSQL_INPUT( 6, MYSQL_TYPE_LONG,     &event->time,              sizeof(event->time));
-	MYSQL_INPUT( 7, MYSQL_TYPE_FLOAT,    &event->duration,          sizeof(event->duration));
-	MYSQL_INPUT( 8, MYSQL_TYPE_STRING,   &event->blurbs[0][0],      strlen(&event->blurbs[0][0]));
-	MYSQL_INPUT( 9, MYSQL_TYPE_STRING,   &event->blurbs[1][0],      strlen(&event->blurbs[1][0]));
-	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   &event->blurbs[2][0],      strlen(&event->blurbs[2][0]));
-	MYSQL_INPUT(11, MYSQL_TYPE_STRING,   event->draft_guide_url,    strlen(event->draft_guide_url));
-	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->card_list_url,      strlen(event->card_list_url));
-	MYSQL_INPUT(13, MYSQL_TYPE_STRING,   event->set_list,           strlen(event->set_list));
-	MYSQL_INPUT(14, MYSQL_TYPE_LONG,     &event->color,             sizeof(event->color));
-	MYSQL_INPUT(15, MYSQL_TYPE_STRING,   event->xmage_server,       strlen(event->xmage_server));
-	MYSQL_INPUT(16, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
-	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->banner_file,        strlen(event->banner_file));
-	MYSQL_INPUT(18, MYSQL_TYPE_LONGLONG, &event->signup_channel_id, sizeof(event->signup_channel_id));
-	MYSQL_INPUT(19, MYSQL_TYPE_LONGLONG, &event->reminder_channel_id, sizeof(event->reminder_channel_id));
-	MYSQL_INPUT(20, MYSQL_TYPE_LONGLONG, &event->hosting_channel_id, sizeof(event->hosting_channel_id));
-
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(event->pings,              strlen(event->pings));
+	MYSQL_INPUT_STR(event->draft_code,         strlen(event->draft_code));
+	MYSQL_INPUT_STR(event->league_name,        strlen(event->league_name));
+	MYSQL_INPUT_STR(event->format,             strlen(event->format));
+	MYSQL_INPUT_STR(event->time_zone,          strlen(event->time_zone));
+	MYSQL_INPUT_I32(&event->time);
+	MYSQL_INPUT_F32(&event->duration);
+	MYSQL_INPUT_STR(&event->blurbs[0][0],      strlen(&event->blurbs[0][0]));
+	MYSQL_INPUT_STR(&event->blurbs[1][0],      strlen(&event->blurbs[1][0]));
+	MYSQL_INPUT_STR(&event->blurbs[2][0],      strlen(&event->blurbs[2][0]));
+	MYSQL_INPUT_STR(event->draft_guide_url,    strlen(event->draft_guide_url));
+	MYSQL_INPUT_STR(event->card_list_url,      strlen(event->card_list_url));
+	MYSQL_INPUT_STR(event->set_list,           strlen(event->set_list));
+	MYSQL_INPUT_I32(&event->color);
+	MYSQL_INPUT_STR(event->xmage_server,       strlen(event->xmage_server));
+	MYSQL_INPUT_I8(&event->draftmancer_draft);
+	MYSQL_INPUT_STR(event->banner_file,        strlen(event->banner_file));
+	MYSQL_INPUT_I64(&event->signup_channel_id);
+	MYSQL_INPUT_I64(&event->reminder_channel_id);
+	MYSQL_INPUT_I64(&event->hosting_channel_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
 static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id, const std::shared_ptr<Draft_Event> event) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = R"(
 		UPDATE draft_events SET
 			format=?,       -- 0
@@ -1327,33 +1386,32 @@ static Database_Result<Database_No_Value> database_edit_draft(const u64 guild_id
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(18);
-	MYSQL_INPUT( 0, MYSQL_TYPE_STRING,   event->format,          strlen(event->format));
-	MYSQL_INPUT( 1, MYSQL_TYPE_LONG,     &event->time,           sizeof(event->time));
-	MYSQL_INPUT( 2, MYSQL_TYPE_FLOAT,    &event->duration,       sizeof(event->duration));
-	MYSQL_INPUT( 3, MYSQL_TYPE_STRING,   &event->blurbs[0][0],   strlen(&event->blurbs[0][0]));
-	MYSQL_INPUT( 4, MYSQL_TYPE_STRING,   &event->blurbs[1][0],   strlen(&event->blurbs[1][0]));
-	MYSQL_INPUT( 5, MYSQL_TYPE_STRING,   &event->blurbs[2][0],   strlen(&event->blurbs[2][0]));
-	MYSQL_INPUT( 6, MYSQL_TYPE_STRING,   event->draft_guide_url, strlen(event->draft_guide_url));
-	MYSQL_INPUT( 7, MYSQL_TYPE_STRING,   event->card_list_url,   strlen(event->card_list_url));
-	MYSQL_INPUT( 8, MYSQL_TYPE_STRING,   event->set_list,        strlen(event->set_list));
-	MYSQL_INPUT( 9, MYSQL_TYPE_LONG,     &event->color,          sizeof(event->color));
-	MYSQL_INPUT(10, MYSQL_TYPE_STRING,   event->xmage_server,    strlen(event->xmage_server));
-	MYSQL_INPUT(11, MYSQL_TYPE_TINY,     &event->draftmancer_draft, sizeof(event->draftmancer_draft));
-	MYSQL_INPUT(12, MYSQL_TYPE_STRING,   event->banner_file,     strlen(event->banner_file));
-	MYSQL_INPUT(13, MYSQL_TYPE_LONGLONG, &event->signup_channel_id, sizeof(event->signup_channel_id));
-	MYSQL_INPUT(14, MYSQL_TYPE_LONGLONG, &event->reminder_channel_id, sizeof(event->reminder_channel_id));
-	MYSQL_INPUT(15, MYSQL_TYPE_LONGLONG, &event->hosting_channel_id, sizeof(event->hosting_channel_id));
-	MYSQL_INPUT(16, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
-	MYSQL_INPUT(17, MYSQL_TYPE_STRING,   event->draft_code,      strlen(event->draft_code));
+	MYSQL_INPUT_STR(event->format,          strlen(event->format));
+	MYSQL_INPUT_I32(&event->time);
+	MYSQL_INPUT_F32(&event->duration);
+	MYSQL_INPUT_STR(&event->blurbs[0][0],   strlen(&event->blurbs[0][0]));
+	MYSQL_INPUT_STR(&event->blurbs[1][0],   strlen(&event->blurbs[1][0]));
+	MYSQL_INPUT_STR(&event->blurbs[2][0],   strlen(&event->blurbs[2][0]));
+	MYSQL_INPUT_STR(event->draft_guide_url, strlen(event->draft_guide_url));
+	MYSQL_INPUT_STR(event->card_list_url,   strlen(event->card_list_url));
+	MYSQL_INPUT_STR(event->set_list,        strlen(event->set_list));
+	MYSQL_INPUT_I32(&event->color);
+	MYSQL_INPUT_STR(event->xmage_server,    strlen(event->xmage_server));
+	MYSQL_INPUT_I8(&event->draftmancer_draft);
+	MYSQL_INPUT_STR(event->banner_file,     strlen(event->banner_file));
+	MYSQL_INPUT_I64(&event->signup_channel_id);
+	MYSQL_INPUT_I64(&event->reminder_channel_id);
+	MYSQL_INPUT_I64(&event->hosting_channel_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(event->draft_code,      strlen(event->draft_code));
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
 // TODO: Rename database_get_draft?
-static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-
+static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = R"(
 		SELECT
 			status,              -- 0
@@ -1387,46 +1445,45 @@ static Database_Result<std::shared_ptr<Draft_Event>> database_get_event(const u6
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	auto result = std::make_shared<Draft_Event>();
 
 	MYSQL_OUTPUT_INIT(25);
-	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result->status,         sizeof(result->status));
-	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result->pings,           PING_STRING_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 3, MYSQL_TYPE_STRING,   result->league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING,   result->format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 5, MYSQL_TYPE_STRING,   result->time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONG,     &result->time,           sizeof(result->time));
-	MYSQL_OUTPUT( 7, MYSQL_TYPE_FLOAT,    &result->duration,       sizeof(result->duration));
-	MYSQL_OUTPUT( 8, MYSQL_TYPE_STRING,   &result->blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 9, MYSQL_TYPE_STRING,   &result->blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING,   &result->blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(11, MYSQL_TYPE_STRING,   result->draft_guide_url, URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(12, MYSQL_TYPE_STRING,   result->card_list_url,   URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING,   result->set_list,        SET_LIST_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result->color,          sizeof(result->color)); 
-	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result->draftmancer_draft, sizeof(result->draftmancer_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result->banner_file,     BANNER_FILENAME_MAX + 1);
-	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result->banner_timestamp, sizeof(result->banner_timestamp));
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result->signup_channel_id,     sizeof(result->signup_channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result->reminder_channel_id,     sizeof(result->reminder_channel_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result->hosting_channel_id,     sizeof(result->hosting_channel_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result->details_id,     sizeof(result->details_id));
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result->signups_id,     sizeof(result->signups_id));
-	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result->reminder_id,    sizeof(result->reminder_id));
+	MYSQL_OUTPUT_I32(&result->status);
+	MYSQL_OUTPUT_STR(result->draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->pings,           PING_STRING_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result->time);
+	MYSQL_OUTPUT_F32(&result->duration);
+	MYSQL_OUTPUT_STR(&result->blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result->blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result->blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->draft_guide_url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->card_list_url,   URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result->set_list,        SET_LIST_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result->color);
+	MYSQL_OUTPUT_STR(result->xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result->draftmancer_draft);
+	MYSQL_OUTPUT_STR(result->banner_file,     BANNER_FILENAME_MAX + 1);
+	MYSQL_OUTPUT_I64(&result->banner_timestamp);
+	MYSQL_OUTPUT_I64(&result->signup_channel_id);
+	MYSQL_OUTPUT_I64(&result->reminder_channel_id);
+	MYSQL_OUTPUT_I64(&result->hosting_channel_id);
+	MYSQL_OUTPUT_I64(&result->details_id);
+	MYSQL_OUTPUT_I64(&result->signups_id);
+	MYSQL_OUTPUT_I64(&result->reminder_id);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
 static const Database_Result<std::vector<Draft_Event>> database_get_all_events(const u64 guild_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = R"(
 		SELECT
 			status,              -- 0
@@ -1460,38 +1517,37 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(1);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
+	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-	//auto results = std::vector<Draft_Event>();
 	Draft_Event result;
 
 	MYSQL_OUTPUT_INIT(25);
-	MYSQL_OUTPUT( 0, MYSQL_TYPE_LONG,     &result.status,         sizeof(result.status));
-	MYSQL_OUTPUT( 1, MYSQL_TYPE_STRING,   result.draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 2, MYSQL_TYPE_STRING,   result.pings,           PING_STRING_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 3, MYSQL_TYPE_STRING,   result.league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 4, MYSQL_TYPE_STRING,   result.format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 5, MYSQL_TYPE_STRING,   result.time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 6, MYSQL_TYPE_LONG,     &result.time,           sizeof(result.time));
-	MYSQL_OUTPUT( 7, MYSQL_TYPE_FLOAT,    &result.duration,       sizeof(result.duration));
-	MYSQL_OUTPUT( 8, MYSQL_TYPE_STRING,   &result.blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT( 9, MYSQL_TYPE_STRING,   &result.blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(10, MYSQL_TYPE_STRING,   &result.blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(11, MYSQL_TYPE_STRING,   result.draft_guide_url, URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(12, MYSQL_TYPE_STRING,   result.card_list_url,   URL_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(13, MYSQL_TYPE_STRING,   result.set_list,        SET_LIST_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(14, MYSQL_TYPE_LONG,     &result.color,          sizeof(result.color)); 
-	MYSQL_OUTPUT(15, MYSQL_TYPE_STRING,   result.xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(16, MYSQL_TYPE_LONG,     &result.draftmancer_draft, sizeof(result.draftmancer_draft));
-	MYSQL_OUTPUT(17, MYSQL_TYPE_STRING,   result.banner_file,     BANNER_FILENAME_MAX + 1);
-	MYSQL_OUTPUT(18, MYSQL_TYPE_LONGLONG, &result.banner_timestamp, sizeof(result.banner_timestamp)); 
-	MYSQL_OUTPUT(19, MYSQL_TYPE_LONGLONG, &result.signup_channel_id, sizeof(result.signup_channel_id));
-	MYSQL_OUTPUT(20, MYSQL_TYPE_LONGLONG, &result.reminder_channel_id, sizeof(result.reminder_channel_id));
-	MYSQL_OUTPUT(21, MYSQL_TYPE_LONGLONG, &result.hosting_channel_id, sizeof(result.hosting_channel_id));
-	MYSQL_OUTPUT(22, MYSQL_TYPE_LONGLONG, &result.details_id,     sizeof(result.details_id));
-	MYSQL_OUTPUT(23, MYSQL_TYPE_LONGLONG, &result.signups_id,     sizeof(result.signups_id));
-	MYSQL_OUTPUT(24, MYSQL_TYPE_LONGLONG, &result.reminder_id,    sizeof(result.reminder_id));
+	MYSQL_OUTPUT_I32(&result.status);
+	MYSQL_OUTPUT_STR(result.draft_code,      DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.pings,           PING_STRING_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.league_name,     LEAGUE_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.format,          DRAFT_FORMAT_DESCRIPTION_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.time_zone,       IANA_TIME_ZONE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.time);
+	MYSQL_OUTPUT_F32(&result.duration);
+	MYSQL_OUTPUT_STR(&result.blurbs[0][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result.blurbs[1][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result.blurbs[2][0],   DRAFT_BLURB_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.draft_guide_url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.card_list_url,   URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.set_list,        SET_LIST_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.color);
+	MYSQL_OUTPUT_STR(result.xmage_server,    XMAGE_SERVER_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.draftmancer_draft);
+	MYSQL_OUTPUT_STR(result.banner_file,     BANNER_FILENAME_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.banner_timestamp);
+	MYSQL_OUTPUT_I64(&result.signup_channel_id);
+	MYSQL_OUTPUT_I64(&result.reminder_channel_id);
+	MYSQL_OUTPUT_I64(&result.hosting_channel_id);
+	MYSQL_OUTPUT_I64(&result.details_id);
+	MYSQL_OUTPUT_I64(&result.signups_id);
+	MYSQL_OUTPUT_I64(&result.reminder_id);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Draft_Event> results;
@@ -1500,7 +1556,7 @@ static const Database_Result<std::vector<Draft_Event>> database_get_all_events(c
 }
 
 // NOTE: As we're storing the values of these in the database, the order of these must not change! Add new values to the end.
-enum SIGNUP_STATUS : int { 
+enum SIGNUP_STATUS : int {
 	SIGNUP_STATUS_NONE        = 0,
 	SIGNUP_STATUS_COMPETITIVE = 1,
 	SIGNUP_STATUS_CASUAL      = 2,
@@ -1517,18 +1573,23 @@ enum SIGNUP_STATUS : int {
 };
 
 
-static const char* to_cstring(SIGNUP_STATUS s) {
+static constexpr const std::string_view to_string(const SIGNUP_STATUS s) {
 	switch(s) {
-		case SIGNUP_STATUS_NONE:        return "none";
-		case SIGNUP_STATUS_COMPETITIVE: return "competitive";
-		case SIGNUP_STATUS_CASUAL:      return "casual";
-		case SIGNUP_STATUS_FLEXIBLE:    return "flexible";
-		case SIGNUP_STATUS_TENTATIVE:   return "tentative";
-		case SIGNUP_STATUS_MINUTEMAGE:  return "minutemage";
-		case SIGNUP_STATUS_DECLINE:     return "decline";
-		case SIGNUP_STATUS_REMOVED:     return "removed";
-		default:                        return NULL;
+		case SIGNUP_STATUS_NONE:        return {"none"};
+		case SIGNUP_STATUS_COMPETITIVE: return {"competitive"};
+		case SIGNUP_STATUS_CASUAL:      return {"casual"};
+		case SIGNUP_STATUS_FLEXIBLE:    return {"flexible"};
+		case SIGNUP_STATUS_TENTATIVE:   return {"tentative"};
+		case SIGNUP_STATUS_MINUTEMAGE:  return {"minutemage"};
+		case SIGNUP_STATUS_DECLINE:     return {"decline"};
+		case SIGNUP_STATUS_REMOVED:     return {"removed"};
+
+		case SIGNUP_STATUS_INVALID:     return {"invalid"};
+
+		case SIGNUP_STATUS_PLAYING:     return {"playing"};
+		case SIGNUP_STATUS_NOT_PLAYING: return {"not playing"};
 	}
+	return {""};
 }
 
 
@@ -1542,15 +1603,15 @@ struct Draft_Signup_Status {
 	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 };
 
-static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(const u64 guild_id, const std::string& draft_code, const u64 member_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(const u64 guild_id, const std::string_view draft_code, const u64 member_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "SELECT status, time, preferred_name FROM draft_signups WHERE guild_id=? AND member_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,         sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE()
 
 	// Defaults for "not currently signed up"
@@ -1561,29 +1622,29 @@ static Database_Result<Draft_Signup_Status> database_get_members_sign_up_status(
 	result.preferred_name[0] = '\0';
 
 	MYSQL_OUTPUT_INIT(3);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONG,     &result.status,         sizeof(result.status));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.timestamp,      sizeof(result.timestamp));
-	MYSQL_OUTPUT(2, MYSQL_TYPE_STRING,   &result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.status);
+	MYSQL_OUTPUT_I64(&result.timestamp);
+	MYSQL_OUTPUT_STR(&result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 guild_id, const std::string& draft_code, const u64 member_id, const std::string& preferred_name, const time_t timestamp, const SIGNUP_STATUS status) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 guild_id, const std::string_view draft_code, const u64 member_id, const std::string& preferred_name, const time_t timestamp, const SIGNUP_STATUS status) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "INSERT INTO draft_signups (guild_id, member_id, preferred_name, draft_code, time, status) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE preferred_name=?, time=?, status=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(9);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,              sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id,             sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   preferred_name.c_str(), preferred_name.length());
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   draft_code.c_str(),     draft_code.length());
-	MYSQL_INPUT(4, MYSQL_TYPE_LONGLONG, &timestamp,             sizeof(timestamp));
-	MYSQL_INPUT(5, MYSQL_TYPE_TINY,     &status,                sizeof(status));
-	MYSQL_INPUT(6, MYSQL_TYPE_STRING,   preferred_name.c_str(), preferred_name.length());
-	MYSQL_INPUT(7, MYSQL_TYPE_LONGLONG, &timestamp,             sizeof(timestamp));
-	MYSQL_INPUT(8, MYSQL_TYPE_TINY,     &status,                sizeof(status));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(preferred_name.c_str(), preferred_name.length());
+	MYSQL_INPUT_STR(draft_code.data(),      draft_code.length());
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_I8(&status);
+	MYSQL_INPUT_STR(preferred_name.c_str(), preferred_name.length());
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_I8(&status);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -1591,23 +1652,23 @@ static Database_Result<Database_No_Value> database_sign_up_to_a_draft(const u64 
 
 // Get a list of all sign ups for a draft, sorted by time
 // TODO: This gets passed around a bunch of threads so likely should be a shared_ptr
-static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draft_sign_ups(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static const Database_Result<std::vector<Draft_Signup_Status>> database_get_draft_sign_ups(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	const char* query = "SELECT member_id, preferred_name, time, status FROM draft_signups WHERE guild_id=? AND draft_code=? ORDER BY time";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Signup_Status result;
 
 	MYSQL_OUTPUT_INIT(4);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id,     sizeof(result.member_id));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING,   result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(2, MYSQL_TYPE_LONGLONG, &result.timestamp,     sizeof(result.timestamp));
-	MYSQL_OUTPUT(3, MYSQL_TYPE_LONG,     &result.status,        sizeof(result.status));
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.timestamp);
+	MYSQL_OUTPUT_I32(&result.status);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Draft_Signup_Status> results;
@@ -1620,16 +1681,16 @@ struct Draft_Sign_Up {
 	char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 	SIGNUP_STATUS status;
 	time_t time;
-	
+
 	my_bool rank_is_null;
 	int rank;
 
 	my_bool is_shark_is_null;
 	bool is_shark;
-	
+
 	my_bool points_is_null;
 	int points;
-	
+
 	my_bool devotion_is_null;
 	int devotion;
 
@@ -1641,8 +1702,8 @@ struct Draft_Sign_Up {
 };
 
 // TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
-static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u64 guild_id, const std::string_view draft_code, const char* league, int season) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = R"(
 		SELECT
 			draft_signups.member_id,
@@ -1655,7 +1716,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 			devotion.value AS devotion,
 			win_rate_recent.overall AS win_rate
 		FROM draft_signups
-		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? AND leaderboards.season=?-- League code from spreadsheet: PC, AC, EB etc 
+		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? AND leaderboards.season=?-- League code from spreadsheet: PC, AC, EB etc
 		LEFT JOIN shark ON draft_signups.member_id=shark.id
 		LEFT JOIN devotion ON draft_signups.member_id=devotion.id
 		LEFT JOIN win_rate_recent ON draft_signups.member_id=win_rate_recent.id
@@ -1668,24 +1729,26 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_STR(league, strlen(league));
+	MYSQL_INPUT_I32(&season);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
 
+#if 0
 	MYSQL_BIND output[9];
 	memset(output, 0, sizeof(output));
 	unsigned long length[9];
 	my_bool is_error[9];
 	my_bool is_null[9]; // NOTE: Not all are used here
-
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
-	MYSQL_OUTPUT(2, MYSQL_TYPE_LONG, &result.status, sizeof(result.status));
-	MYSQL_OUTPUT(3, MYSQL_TYPE_LONGLONG, &result.time, sizeof(result.time));
+#endif
+	MYSQL_OUTPUT_INIT(9);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(result.preferred_name, DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I32(&result.status);
+	MYSQL_OUTPUT_I64(&result.time);
 
 	output[4].buffer_type = MYSQL_TYPE_LONG;
 	output[4].buffer = (void*) &result.rank;
@@ -1731,8 +1794,8 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_sign_ups(const u
 
 #if 0
 // TODO: This function needs a more accurate name - it's also too similar to database_get_draft_sign_ups
-static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups(const u64 guild_id, const std::string& draft_code, const char* league, int season) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups(const u64 guild_id, const std::string_view draft_code, const char* league, int season) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = R"(
 		SELECT
 			draft_signups.member_id,
@@ -1745,7 +1808,7 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups
 			devotion.value AS devotion,
 			win_rate_recent.overall AS win_rate
 		FROM draft_signups
-		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? AND leaderboards.season=?-- League code from spreadsheet: PC, AC, EB etc 
+		LEFT JOIN leaderboards ON draft_signups.member_id=leaderboards.member_id AND leaderboards.league=? AND leaderboards.season=?-- League code from spreadsheet: PC, AC, EB etc
 		LEFT JOIN shark ON draft_signups.member_id=shark.id
 		LEFT JOIN devotion ON draft_signups.member_id=devotion.id
 		LEFT JOIN win_rate_recent ON draft_signups.member_id=win_rate_recent.id
@@ -1760,10 +1823,10 @@ static Database_Result<std::vector<Draft_Sign_Up>> database_get_playing_sign_ups
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_STRING, league, strlen(league));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG, &season, sizeof(season));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING, draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_STR(league, strlen(league));
+	MYSQL_INPUT_I32(&season);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Sign_Up result;
@@ -1827,23 +1890,24 @@ struct Member {
 	const char preferred_name[DISCORD_NAME_LENGTH_MAX + 1];
 };
 
-static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const char* draft_code, std::string& prefix) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static const Database_Result<std::vector<Member>> database_get_sign_up_names_autocomplete(const u64 guild_id, const std::string_view draft_code, std::string& prefix, int limit) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	prefix += "%";
-	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT 25";
+	const char* query = "SELECT member_id, preferred_name FROM draft_signups WHERE guild_id=? AND draft_code=? AND preferred_name LIKE ? ORDER BY preferred_name LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code,     strlen(draft_code));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_STR(prefix.c_str(),    prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Member result = {0};
 
 	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.member_id, sizeof(result.member_id));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_STRING, &result.preferred_name[0], DISCORD_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(&result.preferred_name[0], DISCORD_NAME_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<Member> results;
@@ -1851,25 +1915,25 @@ static const Database_Result<std::vector<Member>> database_get_sign_up_names_aut
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_post_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
 	const DRAFT_STATUS status = DRAFT_STATUS_CREATED;
 
-	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status,        sizeof(status));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I32(&status);
+	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
 	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<std::string> results;
@@ -1877,22 +1941,23 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_edit_draft_autocomplete(const u64 guild_id, std::string& prefix) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_edit_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
-	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
 	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<std::string> results;
@@ -1900,27 +1965,28 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_delete_draft_autocomplete(const u64 guild_id, std::string& prefix) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static const Database_Result<std::vector<std::string>> database_get_draft_codes_for_delete_draft_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 
 	prefix += "%"; // The LIKE operator has to be part of the parameter, not in the query string.
-	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status>=? AND status<? AND draft_code LIKE ? ORDER BY draft_code LIMIT 25";
+	const char* query = "SELECT draft_code FROM draft_events WHERE guild_id=? AND status>=? AND status<? AND draft_code LIKE ? ORDER BY draft_code LIMIT ?";
 	MYSQL_STATEMENT();
 
 	const DRAFT_STATUS status1 = DRAFT_STATUS_CREATED;
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
-	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,      sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status1,       sizeof(status1));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONG,     &status2,       sizeof(status2));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   prefix.c_str(), prefix.length());
+	MYSQL_INPUT_INIT(5);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I32(&status1);
+	MYSQL_INPUT_I32(&status2);
+	MYSQL_INPUT_STR(prefix.c_str(), prefix.length());
+	MYSQL_INPUT_I32(&limit);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
 	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX + 1);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<std::string> results;
@@ -1928,50 +1994,50 @@ static const Database_Result<std::vector<std::string>> database_get_draft_codes_
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_set_details_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_set_details_message_id(const u64 guild_id, const std::string_view draft_code, const u64 message_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET details_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id, sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT_I64(&message_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_set_signups_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_set_signups_message_id(const u64 guild_id, const std::string_view draft_code, const u64 message_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET signups_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id, sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT_I64(&message_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_set_reminder_message_id(const u64 guild_id, const char* draft_code, const u64 message_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_set_reminder_message_id(const u64 guild_id, const std::string_view draft_code, const u64 message_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET reminder_id=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &message_id, sizeof(message_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT_I64(&message_id);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
 static Database_Result<std::string> database_get_next_upcoming_draft(const u64 guild_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT draft_code FROM draft_events WHERE status>? AND status<? AND guild_id=? ORDER BY time ASC LIMIT 1";
 	MYSQL_STATEMENT();
 
@@ -1979,55 +2045,55 @@ static Database_Result<std::string> database_get_next_upcoming_draft(const u64 g
 	const DRAFT_STATUS status2 = DRAFT_STATUS_COMPLETE;
 
 	MYSQL_INPUT_INIT(3)
-	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status1,   sizeof(status1));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONG,     &status2,   sizeof(status2));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
+	MYSQL_INPUT_I32(&status1);
+	MYSQL_INPUT_I32(&status2);
+	MYSQL_INPUT_I64(&guild_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
-	
+
 	char result[DRAFT_CODE_LENGTH_MAX + 1];
 
 	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING, &result[0], DRAFT_CODE_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(&result[0], DRAFT_CODE_LENGTH_MAX);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_clear_draft_post_ids(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET details_id=0, signups_id=0 WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string& draft_code, const DRAFT_STATUS status) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_set_draft_status(const u64 guild_id, const std::string_view draft_code, const DRAFT_STATUS status) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET status=status|? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONG,     &status,            sizeof(status));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I32(&status);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_purge_draft_event(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_purge_draft_event(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "DELETE FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2040,55 +2106,55 @@ struct Draft_Post_IDs {
 };
 
 // TODO: Don't need this? No function calls this that doesn't call database_get_event
-static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 guild_id, const std::string& draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?"; 
+static Database_Result<Draft_Post_IDs> database_get_draft_post_ids(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT signup_channel_id, details_id, signups_id FROM draft_events WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,          sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code.c_str(), draft_code.length());
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	Draft_Post_IDs result;
 
 	MYSQL_OUTPUT_INIT(3);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result.channel, sizeof(result.channel));
-	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.details, sizeof(result.details));
-	MYSQL_OUTPUT(2, MYSQL_TYPE_LONGLONG, &result.signups, sizeof(result.signups));
+	MYSQL_OUTPUT_I64(&result.channel);
+	MYSQL_OUTPUT_I64(&result.details);
+	MYSQL_OUTPUT_I64(&result.signups);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
 }
 
-static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild_id, const char* draft_code, const u64 role_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_add_temp_role(const u64 guild_id, const std::string_view draft_code, const u64 role_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_roles (guild_id, draft_code, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,   sizeof(role_id));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_I64(&role_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT role_id FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code, strlen(draft_code));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
 
 	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result, sizeof(result));
+	MYSQL_OUTPUT_I64(&result);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<u64> results;
@@ -2096,29 +2162,29 @@ static Database_Result<std::vector<u64>> database_get_temp_roles(const u64 guild
 	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
 }
 
-static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_del_temp_roles(const u64 guild_id, const std::string draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "DELETE FROM temp_roles WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code, strlen(draft_code));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
 #if 0
-static Database_Result<Database_No_Value> database_add_temp_thread(const u64 guild_id, const u64 thread_id, const char* draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_add_temp_thread(const u64 guild_id, const u64 thread_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_threads (guild_id, draft_code, thread_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &thread_id,   sizeof(thread_id));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_I64(&thread_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2126,20 +2192,20 @@ static Database_Result<Database_No_Value> database_add_temp_thread(const u64 gui
 #endif
 
 #if 0
-static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT thread_id FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id, sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING, draft_code, strlen(draft_code));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	u64 result;
 
 	MYSQL_OUTPUT_INIT(1);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_LONGLONG, &result, sizeof(result));
+	MYSQL_OUTPUT_I64(&result);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	std::vector<u64> results;
@@ -2150,14 +2216,14 @@ static Database_Result<std::vector<u64>> database_get_temp_threads(const u64 gui
 
 
 #if 0
-static Database_Result<Database_No_Value> database_del_temp_threads(const u64 guild_id, const char* draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_del_temp_threads(const u64 guild_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char *query = "DELETE FROM temp_threads WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2168,71 +2234,124 @@ static Database_Result<Database_No_Value> database_del_temp_threads(const u64 gu
 #if 0
 // Not used, but may want this back in the short term.
 static Database_Result<Database_No_Value> database_add_temp_member_role(const u64 guild_id, const u64 member_id, const u64 role_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO temp_members (guild_id, member_id, role_id) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_LONGLONG, &role_id,   sizeof(role_id));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_I64(&role_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 #endif
 
-static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const char* draft_code) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_add_noshow(const u64 guild_id, const u64 member_id, const std::string_view draft_code) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO noshows (guild_id, member_id, draft_code) VALUES(?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_add_dropper(const u64 guild_id, const u64 member_id, const char* draft_code, const char* note) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_add_drop(const u64 guild_id, const u64 member_id, const std::string_view draft_code, const std::string_view note) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "REPLACE INTO droppers (guild_id, member_id, draft_code, note) VALUES(?,?,?,?)";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(4);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code, strlen(draft_code));
-	MYSQL_INPUT(3, MYSQL_TYPE_STRING,   note,       (note == NULL ? 0 : strlen(note))); 
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
+	MYSQL_INPUT_STR(note.data(),       note.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
+struct Dropper {
+	u64 member_id;
+	char draft_code[DRAFT_CODE_LENGTH_MAX + 1];
+	char note[DISCORD_MESSAGE_CHARACTER_LIMIT + 1]; // FIXME: This only needs to be 100ish chars?
+};
+
+static Database_Result<std::vector<Dropper>> database_get_droppers(const u64 guild_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT member_id, draft_code, note FROM droppers WHERE guild_id=? ORDER BY member_id";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Dropper result;
+	MYSQL_OUTPUT_INIT(3);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_STR(result.draft_code, DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.note, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Dropper> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+struct Specific_Dropper {
+	char draft_code[DRAFT_CODE_LENGTH_MAX + 1];
+	char note[DISCORD_MESSAGE_CHARACTER_LIMIT + 1];
+};
+
+static Database_Result<std::vector<Specific_Dropper>> database_get_specific_dropper(const u64 guild_id, const u64 member_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT draft_code, note note FROM droppers WHERE guild_id=? AND member_id=? ORDER BY draft_code";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Specific_Dropper result;
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_STR(result.draft_code, DRAFT_CODE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.note, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Specific_Dropper> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
 static Database_Result<Database_No_Value> database_delete_member_from_all_sign_ups(const u64 guild_id, const u64 member_id) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "DELETE FROM draft_signups WHERE guild_id=? AND member_id=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(2);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &guild_id,  sizeof(guild_id));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &member_id, sizeof(member_id));
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_update_banner_timestamp(const u64 guild_id, const char* draft_code, const time_t timestamp) {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+static Database_Result<Database_No_Value> database_update_banner_timestamp(const u64 guild_id, const std::string_view draft_code, const time_t timestamp) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "UPDATE draft_events SET banner_timestamp=? WHERE guild_id=? AND draft_code=?";
 	MYSQL_STATEMENT();
 
 	MYSQL_INPUT_INIT(3);
-	MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &timestamp,  sizeof(timestamp));
-	MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &guild_id,   sizeof(guild_id));
-	MYSQL_INPUT(2, MYSQL_TYPE_STRING,   draft_code,  strlen(draft_code));
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_STR(draft_code.data(), draft_code.length());
 	MYSQL_INPUT_BIND_AND_EXECUTE();
 
 	MYSQL_RETURN();
@@ -2247,7 +2366,7 @@ struct XMage_Version {
 };
 
 static Database_Result<XMage_Version> database_get_xmage_version() {
-	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
 	static const char* query = "SELECT version, timestamp FROM xmage_version ORDER BY timestamp DESC LIMIT 1";
 	MYSQL_STATEMENT();
 
@@ -2256,13 +2375,268 @@ static Database_Result<XMage_Version> database_get_xmage_version() {
 	XMage_Version result;
 
 	MYSQL_OUTPUT_INIT(2);
-	MYSQL_OUTPUT(0, MYSQL_TYPE_STRING,   &result.version[0], XMAGE_VERSION_STRING_MAX);
-	MYSQL_OUTPUT(1, MYSQL_TYPE_LONGLONG, &result.timestamp,  sizeof(result.timestamp));
+	MYSQL_OUTPUT_STR(&result.version[0], XMAGE_VERSION_STRING_MAX);
+	MYSQL_OUTPUT_I32(&result.timestamp);
 	MYSQL_OUTPUT_BIND_AND_STORE();
 
 	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
 }
 
+struct Stats {
+	u64 timestamp;
+	struct {
+		char name[DEVOTION_BADGE_NAME_LENGTH_MAX + 1];
+		int value;
+		int next;
+	} devotion;
+
+	struct {
+		char name[VICTORY_BADGE_NAME_LENGTH_MAX + 1];
+		int value;
+		int next;
+	} victory;
+
+	struct {
+		char name[TROPHIES_BADGE_NAME_LENGTH_MAX + 1];
+		int value;
+		int next;
+	} trophies;
+
+	struct {
+		char name[SHARK_BADGE_NAME_LENGTH_MAX + 1];
+		int value;
+		int next;
+	} shark;
+
+	struct {
+		char name[HERO_BADGE_NAME_LENGTH_MAX + 1];
+		int value;
+		int next;
+	} hero;
+
+	struct {
+		float chrono; // TODO: Still called 'league' in the database schema.
+		float bonus;
+		float overall;
+	} win_rate_recent;
+
+	struct {
+		float chrono; // TODO: Still called 'league' in the database schema.
+		float bonus;
+		float overall;
+	} win_rate_all_time;
+
+	struct {
+		u64 timestamp;
+		char url[URL_LENGTH_MAX + 1];
+	} badge_card;
+};
+
+static Database_Result<Stats> database_get_stats(const u64 member_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = R"(
+	SELECT
+		stats.timestamp, -- 0
+		devotion.name, devotion.value, devotion.next, -- 1, 2, 3
+		victory.name, victory.value, victory.next, -- 4, 5, 6
+		trophies.name, trophies.value, trophies.next, -- 7, 8, 9
+		shark.name, shark.value, shark.next, -- 10, 11, 12
+		hero.name, hero.value, hero.next, -- 13, 14, 15
+		ROUND(win_rate_recent.league,2), ROUND(win_rate_recent.bonus,2), ROUND(win_rate_recent.overall,2), -- 16, 17, 18
+		ROUND(win_rate_all_time.league,2), ROUND(win_rate_all_time.bonus,2), ROUND(win_rate_all_time.overall,2), -- 19, 20, 21
+		badges.url, badges.timestamp -- 22, 23
+	FROM stats
+	INNER JOIN devotion ON stats.id = devotion.id
+	INNER JOIN victory ON stats.id = victory.id
+	INNER JOIN trophies ON stats.id = trophies.id
+	INNER JOIN shark ON stats.id = shark.id
+	INNER JOIN hero ON stats.id = hero.id
+	INNER JOIN win_rate_recent ON stats.id = win_rate_recent.id
+	INNER JOIN win_rate_all_time ON stats.id = win_rate_all_time.id
+	INNER JOIN badges ON stats.id = badges.id
+	WHERE stats.id=?
+	)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Stats result;
+	memset(&result, 0, sizeof(result));
+
+	MYSQL_OUTPUT_INIT(24);
+	MYSQL_OUTPUT_I64(&result.timestamp);
+	MYSQL_OUTPUT_STR(result.devotion.name, DEVOTION_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.devotion.value);
+	MYSQL_OUTPUT_I32(&result.devotion.next);
+	MYSQL_OUTPUT_STR(result.victory.name, VICTORY_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.victory.value);
+	MYSQL_OUTPUT_I32(&result.victory.next);
+	MYSQL_OUTPUT_STR(result.trophies.name, TROPHIES_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.trophies.value);
+	MYSQL_OUTPUT_I32(&result.trophies.next);
+	MYSQL_OUTPUT_STR(result.shark.name, SHARK_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.shark.value);
+	MYSQL_OUTPUT_I32(&result.shark.next);
+	MYSQL_OUTPUT_STR(result.hero.name, HERO_BADGE_NAME_LENGTH_MAX+1);
+	MYSQL_OUTPUT_I32(&result.hero.value);
+	MYSQL_OUTPUT_I32(&result.hero.next);
+	MYSQL_OUTPUT_F32(&result.win_rate_recent.chrono);
+	MYSQL_OUTPUT_F32(&result.win_rate_recent.bonus);
+	MYSQL_OUTPUT_F32(&result.win_rate_recent.overall);
+	MYSQL_OUTPUT_F32(&result.win_rate_all_time.chrono);
+	MYSQL_OUTPUT_F32(&result.win_rate_all_time.bonus);
+	MYSQL_OUTPUT_F32(&result.win_rate_all_time.overall);
+	MYSQL_OUTPUT_STR(result.badge_card.url, URL_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_I64(&result.badge_card.timestamp);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
+}
+
+// NOTE: Discord has a limit of 100 characters for auto complete options.
+static const size_t COMMAND_NAME_LENGTH_MAX = 32; // TODO: Validate/enforce this in the spreadsheet. FIXME: This does not match the db schema max
+static const size_t COMMAND_SUMMARY_LENGTH_MAX = 64;
+
+struct Command_Summary {
+	char name[COMMAND_NAME_LENGTH_MAX + 1];
+	char summary[COMMAND_SUMMARY_LENGTH_MAX + 1]; // FIXME: Magic number
+};
+
+static const Database_Result<std::vector<Command_Summary>> database_get_help_messages_for_autocomplete(const u64 guild_id, std::string& prefix, int limit) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const std::string search = "%" + prefix + "%";
+	//prefix += "%";
+	// NOTE: Discord allows a max of 25 auto complete options, but we only want 24 here to
+	// leave room for the 'all commands' option.
+	const char* query = "SELECT name, summary FROM commands WHERE hidden=0 AND LOWER(summary) LIKE LOWER(?) ORDER BY name LIMIT ?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_STR(search.c_str(), search.length());
+	MYSQL_INPUT_I32(&limit);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Command_Summary result;
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_STR(result.name, COMMAND_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Command_Summary> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+struct Command {
+	bool host; // TODO: Still called "team" in the db schema
+	char content[DISCORD_MESSAGE_CHARACTER_LIMIT + 1]; // TODO: Enforce this in the spreadsheet.
+};
+
+// For the /help command
+static const Database_Result<Command> database_get_help_message_by_summary(const u64 guild_id, const std::string_view summary) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT team, content FROM commands WHERE summary=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_STR(summary.data(), summary.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Command result;
+
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_I64(&result.host);
+	MYSQL_OUTPUT_STR(result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
+}
+
+// The old style ?commands
+static const Database_Result<Command> database_get_help_message_by_name(const u64 guild_id, const std::string_view name) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT team, content FROM commands WHERE name=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_STR(name.data(), name.length());
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Command result;
+
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_I64(&result.host);
+	MYSQL_OUTPUT_STR(result.content, DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
+}
+
+static const Database_Result<std::vector<Command_Summary>> database_get_all_help_messages(const u64 guild_id) {
+	(void)guild_id;
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT name, summary FROM commands WHERE hidden=0 ORDER BY name";
+	MYSQL_STATEMENT();
+
+	MYSQL_EXECUTE();
+
+	Command_Summary result;
+
+	MYSQL_OUTPUT_INIT(2);
+	MYSQL_OUTPUT_STR(result.name, COMMAND_NAME_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_STR(result.summary, COMMAND_SUMMARY_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Command_Summary> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+struct Role_Command {
+	u64 row_id;
+	u64 member_id;
+	int action; // 0 = delete, 1 = add
+	char role[DISCORD_ROLE_LENGTH_MAX + 1];
+};
+
+static const Database_Result<std::vector<Role_Command>> database_get_role_commands(const u64 guild_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "SELECT row_id, member_id, action, role FROM role_commands WHERE guild_id=? ORDER BY member_id, action LIMIT 1";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Role_Command result;
+	MYSQL_OUTPUT_INIT(4);
+	MYSQL_OUTPUT_I64(&result.row_id);
+	MYSQL_OUTPUT_I64(&result.member_id);
+	MYSQL_OUTPUT_I32(&result.action);
+	MYSQL_OUTPUT_STR(result.role, DISCORD_ROLE_LENGTH_MAX + 1);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Role_Command> results;
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+static const Database_Result<Database_No_Value> database_del_role_command(const u64 role_id) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "DELETE FROM role_commands WHERE row_id=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I64(&role_id);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
 
 static const int BANNER_IMAGE_WIDTH = 825;
 static const int BANNER_IMAGE_HEIGHT = 550;
@@ -2298,7 +2672,7 @@ static Text_Dim get_text_dimensions(stbtt_fontinfo* font, const int size, const 
 		int advance, lsb;
 		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
 		int x0, y0, x1, y1;
-      	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+	  	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
 		xpos += advance * scale;
 		if(str[index+1] != 0 && isutf(str[index+1])) {
 			int tmp = index;
@@ -2333,10 +2707,10 @@ static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int 
 		int advance, lsb;
 		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
 		int x0, y0, x1, y1;
-      	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+	  	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
 		bitmap.w = x1-x0;
 		bitmap.h = y1-y0;
-      	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
+	  	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
 
 		if(canvas->channels == 4) {
 			blit_A8_to_RGBA(&bitmap, GLYPH_WIDTH_MAX, color, canvas, (int)xpos + x0, y + baseline + y0);
@@ -2365,7 +2739,7 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 	// FIXME: There are no bounds checks done here
 
 	Result<Image> upscaled = make_image(dim.w, dim.h, 1, 0x00000000);
-	SCOPE_EXIT(free(upscaled.value.data));
+	defer { free(upscaled.value.data); };
 	if(is_error(upscaled)) return;// MAKE_ERROR_RESULT(upscaled.error);
 	render_text_to_image(font, str, upscaled_font_size, &upscaled.value, 0, 0, {.c=shadow_color});
 
@@ -2378,11 +2752,11 @@ void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, cons
 		int height = ceil(((f32)dim.h * ratio));
 		downscaled = make_image(max_width, height, 1, 0x00000000);
 	}
-	SCOPE_EXIT(free(downscaled.value.data));
+	defer { free(downscaled.value.data); };
 	if(is_error(downscaled)) return;
 
 	stbir_resize_uint8_srgb((const u8*)upscaled.value.data, upscaled.value.w, upscaled.value.h, 0,
-	                        (u8*)downscaled.value.data, downscaled.value.w, downscaled.value.h, 0, STBIR_1CHANNEL);
+					        (u8*)downscaled.value.data, downscaled.value.w, downscaled.value.h, 0, STBIR_1CHANNEL);
 
 	const int xpos = (BANNER_IMAGE_WIDTH / 2) - (downscaled.value.w / 2);
 	ypos -= (downscaled.value.h / 2);
@@ -2418,33 +2792,35 @@ enum DRAFT_TYPE {
 	DRAFT_TYPE_COUNT
 };
 
-static const char* to_cstring(const DRAFT_TYPE dt) {
+static constexpr const std::string_view to_string(const DRAFT_TYPE dt) {
 	switch(dt) {
-		case DRAFT_TYPE_DEVOTION_GIANT:  return "Devotion - Giant";
-		case DRAFT_TYPE_DEVOTION_SPHINX: return "Devotion - Sphinx";
-		case DRAFT_TYPE_DEVOTION_DEMON:  return "Devotion - Demon";
-		case DRAFT_TYPE_DEVOTION_DRAGON: return "Devotion - Dragon";
-		case DRAFT_TYPE_DEVOTION_TITAN:  return "Devotion - Titan";
-		case DRAFT_TYPE_DEVOTION_GOD:    return "Devotion - God";
+		case DRAFT_TYPE_NOT_APPLICABLE: return {""};
 
-		case DRAFT_TYPE_COMMUNITY_CHOICE: return "Community Choice";
+		case DRAFT_TYPE_DEVOTION_GIANT:  return {"Devotion - Giant"};
+		case DRAFT_TYPE_DEVOTION_SPHINX: return {"Devotion - Sphinx"};
+		case DRAFT_TYPE_DEVOTION_DEMON:  return {"Devotion - Demon"};
+		case DRAFT_TYPE_DEVOTION_DRAGON: return {"Devotion - Dragon"};
+		case DRAFT_TYPE_DEVOTION_TITAN:  return {"Devotion - Titan"};
+		case DRAFT_TYPE_DEVOTION_GOD:    return {"Devotion - God"};
 
-		case DRAFT_TYPE_HERO_20: return "Hero - 20";
-		case DRAFT_TYPE_HERO_40: return "Hero - 40";
-		case DRAFT_TYPE_HERO_60: return "Hero - 60";
+		case DRAFT_TYPE_COMMUNITY_CHOICE: return {"Community Choice"};
 
-		case DRAFT_TYPE_NOT_APPLICABLE: // Fall through
-		default:
-			break;
+		case DRAFT_TYPE_HERO_20: return {"Hero - 20"};
+		case DRAFT_TYPE_HERO_40: return {"Hero - 40"};
+		case DRAFT_TYPE_HERO_60: return {"Hero - 60"};
+
+		default: break;
 	}
-	
-	return NULL;
+
+	return {""};
 }
 
+#if 0
 struct Draft_Type {
 	DRAFT_TYPE value;
 	const char* name;
 };
+#endif
 
 
 struct Icon {
@@ -2480,7 +2856,7 @@ static u8* file_slurp(const char* path, size_t* size) {
 	u8* file_contents = NULL;
 	FILE* f = fopen(path, "rb");
 	if(f != NULL) {
-		SCOPE_EXIT(fclose(f));
+		defer { fclose(f); };
 		struct stat s;
 		int result = stat(path, &s);
 		if(result != -1) {
@@ -2509,7 +2885,7 @@ struct Banner_Opts {
 	std::vector<std::string> images;
 };
 
-static stbtt_fontinfo g_banner_font; 
+static stbtt_fontinfo g_banner_font;
 static bool g_banner_font_loaded = false;
 static const char* g_banner_font_file = "gfx/banner/SourceSansPro-Black.otf";
 
@@ -2520,7 +2896,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		int result = stbtt_InitFont(&g_banner_font, buffer, stbtt_GetFontOffsetForIndex(buffer, 0));
 		if(result == 0) {
 			free(buffer);
-			return MAKE_ERROR_RESULT(ERROR_LOAD_FONT_FAILED);
+			RETURN_ERROR_RESULT(ERROR_LOAD_FONT_FAILED);
 		}
 		g_banner_font_loaded = true;
 	}
@@ -2546,21 +2922,21 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	static const int BANNER_PACK_DIVIDER_YPOS = 108; // Starting row to draw the divider between packs
 
 	Result<Image> banner = make_image(BANNER_IMAGE_WIDTH, BANNER_IMAGE_HEIGHT, 4, 0xFF000000);
-	SCOPE_EXIT(free(banner.value.data));
+	defer { free(banner.value.data); };
 	if(is_error(banner)) {
-		return MAKE_ERROR_RESULT(banner.error);
+		RETURN_ERROR_RESULT(banner.error);
 	}
 
 	// blit the background image(s)
 	if(opts->images.size() == 1) {
 		// A single piece of key art is to be used.
 		Result<Image> scaled = make_image(KEY_ART_WIDTH, KEY_ART_HEIGHT, 3, 0x00000000);
-		SCOPE_EXIT(free(scaled.value.data));
-		if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
+		defer { free(scaled.value.data); };
+		if(is_error(scaled)) RETURN_ERROR_RESULT(scaled.error);
 
 		Result<Image> img = load_image(opts->images[0].c_str(), 3);
-		SCOPE_EXIT(stbi_image_free(img.value.data));
-		if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
+		defer { stbi_image_free(img.value.data); };
+		if(is_error(img)) RETURN_ERROR_RESULT(img.error);
 
 		stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 				(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
@@ -2569,13 +2945,13 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	if(opts->images.size() == 3) {
 		// Three pack images given.
 		Result<Image> scaled = make_image(PACK_IMAGE_WIDTH, PACK_IMAGE_HEIGHT, 3, 0x00000000);
-		SCOPE_EXIT(free(scaled.value.data));
-		if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
+		defer { free(scaled.value.data); };
+		if(is_error(scaled)) RETURN_ERROR_RESULT(scaled.error);
 
 		for(size_t f = 0; f < opts->images.size(); ++f) {
 			Result<Image> img = load_image(opts->images[f].c_str(), 3);
-			SCOPE_EXIT(stbi_image_free(img.value.data));
-			if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
+			defer { stbi_image_free(img.value.data); };
+			if(is_error(img)) RETURN_ERROR_RESULT(img.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
 					(u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_RGB);
@@ -2585,21 +2961,21 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		// Draw a thin line to separate each pack.
 		// FIXME: Replace this with a draw_rect function to avoid unnecessary heap allocations for each line.
 		Result<Image> line = make_image(3, BANNER_IMAGE_HEIGHT-BANNER_PACK_DIVIDER_YPOS, 4, 0xFF000000);
-		SCOPE_EXIT(free(line.value.data));
-		if(is_error(line)) return MAKE_ERROR_RESULT(line.error);
+		defer { free(line.value.data); };
+		if(is_error(line)) RETURN_ERROR_RESULT(line.error);
 
 		for(int i = 1; i < 3; ++i) {
-			blit_RGBA_to_RGBA(&line.value, &banner.value, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);		
+			blit_RGBA_to_RGBA(&line.value, &banner.value, (i * PACK_IMAGE_WIDTH)-1, BANNER_PACK_DIVIDER_YPOS);
 		}
 	} else {
-		return MAKE_ERROR_RESULT(ERROR_INVALID_PACK_COUNT, opts->images.size());
+		RETURN_ERROR_RESULT(ERROR_INVALID_PACK_COUNT, opts->images.size());
 	}
 
 	// Blit the gradient. TODO: This could be done in code instead of using an image...
 	{
 		Result<Image> grad = load_image(BANNER_GRADIENT_FILE, 1);
-		SCOPE_EXIT(stbi_image_free(grad.value.data));
-		if(is_error(grad)) return MAKE_ERROR_RESULT(grad.error);
+		defer { stbi_image_free(grad.value.data); };
+		if(is_error(grad)) RETURN_ERROR_RESULT(grad.error);
 
 		blit_A8_to_RGBA(&grad.value, grad.value.w, {.c=0xFF000000}, &banner.value, 0, 0);
 	}
@@ -2609,22 +2985,22 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		{
 			// Top
 			Result<Image> frame = load_image(BANNER_FRAME_TOP_FILE, 1);
-			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
+			defer { stbi_image_free(frame.value.data); };
+			if(is_error(frame)) RETURN_ERROR_RESULT(frame.error);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 57);
 		}
 		{
 			// Bottom
 			Result<Image> frame = load_image(BANNER_FRAME_BOTTOM_FILE, 1);
-			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
+			defer { stbi_image_free(frame.value.data); };
+			if(is_error(frame)) RETURN_ERROR_RESULT(frame.error);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 530);
 		}
 		{
 			// Left & right
 			Result<Image> frame = load_image(BANNER_FRAME_SIDE_FILE, 1);
-			SCOPE_EXIT(stbi_image_free(frame.value.data));
-			if(is_error(frame)) return MAKE_ERROR_RESULT(frame.error);
+			defer { stbi_image_free(frame.value.data); };
+			if(is_error(frame)) RETURN_ERROR_RESULT(frame.error);
 
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 9, 108);
 			blit_A8_to_RGBA(&frame.value, frame.value.w, {.c=opts->league_color}, &banner.value, 807, 108);
@@ -2635,8 +3011,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	{
 		Text_Dim dim = get_text_dimensions(&g_banner_font, BANNER_DATETIME_FONT_SIZE, (const u8*)opts->datetime.c_str());
 		Result<Image> img = make_image(dim.w, dim.h, 1, 0x00000000);
-		SCOPE_EXIT(free(img.value.data));
-		if(is_error(img)) return MAKE_ERROR_RESULT(img.error);
+		defer { free(img.value.data); };
+		if(is_error(img)) RETURN_ERROR_RESULT(img.error);
 
 		render_text_to_image(&g_banner_font, (const u8*)opts->datetime.c_str(), BANNER_DATETIME_FONT_SIZE, &img.value, 0, 0, {.c=0xFFFFFFFF});
 		if(img.value.w < (BANNER_IMAGE_WIDTH - 10)) {
@@ -2647,23 +3023,23 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 			int height = ceil(((f32)dim.h * ratio));
 
 			Result<Image> scaled = make_image((BANNER_IMAGE_WIDTH-10), height, 1, 0x00000000);
-			SCOPE_EXIT(free(scaled.value.data));
-			if(is_error(scaled)) return MAKE_ERROR_RESULT(scaled.error);
+			defer { free(scaled.value.data); };
+			if(is_error(scaled)) RETURN_ERROR_RESULT(scaled.error);
 
 			stbir_resize_uint8_srgb((const u8*)img.value.data, img.value.w, img.value.h, 0,
-			                        (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
+								    (u8*)scaled.value.data, scaled.value.w, scaled.value.h, 0, STBIR_1CHANNEL);
 			blit_A8_to_RGBA(&scaled.value, scaled.value.w, {.c=0xFFFFFFFF}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(scaled.value.w/2), BANNER_DATETIME_YPOS);
 		}
 	}
-	
+
 	// Blit the title text
 	draw_shadowed_text(&g_banner_font, BANNER_TITLE_FONT_SIZE, BANNER_TITLE_WIDTH_MAX, (const u8*)opts->title.c_str(), 0xFF000000, 0xFFFFFFFF, &banner.value, BANNER_TITLE_TEXT_YPOS);
 
 	if(opts->subtitle.length() > 0) {
 		// Blit the subtitle box
 		Result<Image> sub = load_image(BANNER_SUBTITLE_FILE, 1);
-		SCOPE_EXIT(stbi_image_free(sub.value.data));
-		if(is_error(sub)) return MAKE_ERROR_RESULT(sub.error);
+		defer { stbi_image_free(sub.value.data); };
+		if(is_error(sub)) RETURN_ERROR_RESULT(sub.error);
 
 		blit_A8_to_RGBA_no_alpha(&sub.value, sub.value.w, {.c=opts->league_color}, &banner.value, (BANNER_IMAGE_WIDTH/2)-(sub.value.w/2), BANNER_SUBTITLE_FRAME_YPOS);
 
@@ -2671,8 +3047,8 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 		const Icon* icon = get_icon(opts->draft_type);
 		if(icon != NULL) {
 			Result<Image> icon_image = load_image(icon->file, 4);
-			SCOPE_EXIT(stbi_image_free(icon_image.value.data));
-			if(is_error(icon_image)) return MAKE_ERROR_RESULT(icon_image.error);
+			defer { stbi_image_free(icon_image.value.data); };
+			if(is_error(icon_image)) RETURN_ERROR_RESULT(icon_image.error);
 
 			blit_RGBA_to_RGBA(&icon_image.value, &banner.value, icon->x, icon->y);
 		}
@@ -2685,10 +3061,12 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	// TODO: Only need to save RGB, this saves having to clear the alpha channel, but does stbii_write support this?
 	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
 	image_max_alpha(&banner.value);
-	std::string file_path = fmt::format("/tmp/EventBot_Banner_{}.png", random_string(16));
+	std::string file_path = fmt::format("{}/XDHS_Bot_Banner_{}.png", get_tmp_dir(), random_string(16));
 	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
-		return MAKE_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
+		RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 	}
+
+	log(LOG_LEVEL_INFO, "Banner saved to: '%s'", file_path.c_str());
 
 	return {file_path};
 }
@@ -2770,7 +3148,7 @@ struct {
 	int mask;
 } g_draft_sign_up_columns[3] = {
 	{
-		":white_check_mark:Playing [{:d}]", 
+		":white_check_mark:Playing [{:d}]",
 		SIGNUP_STATUS_PLAYING
 	},
 	{
@@ -2959,7 +3337,7 @@ static void add_sign_up_embed_to_message(const u64 guild_id, dpp::message& messa
 			}
 		}
 
-		embed.add_field(fmt::format(g_draft_sign_up_columns[i].header, count), names, true);
+		embed.add_field(fmt::format(fmt::runtime(g_draft_sign_up_columns[i].header), count), names, true);
 	}
 
 	// Attach banner if it hasn't already been attached, or if the file on disk is newer.
@@ -2989,7 +3367,7 @@ static void redraw_details(dpp::cluster& bot, const u64 guild_id, const u64 mess
 		if(!callback.is_error()) {
 			dpp::message message = std::get<dpp::message>(callback.value);
 
-			char description[1024]; // FIXME: This can overflow.	
+			char description[1024]; // FIXME: This can overflow.
 			expand_format_string(draft->format, strlen(draft->format), description, 1024);
 
 			int year, month, day, hour, minute;
@@ -3121,7 +3499,7 @@ static void post_pre_draft_reminder(dpp::cluster& bot, const u64 guild_id, const
 	if(is_error(draft_event)) {
 		log(LOG_LEVEL_ERROR, draft_event.errstr);
 		return;
-	};		
+	};
 
 	const auto sign_ups = database_get_draft_sign_ups(guild_id, draft_code);
 	if(is_error(sign_ups)) {
@@ -3303,7 +3681,7 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 					heroes_added++;
 				}
 
-				text += fmt::format("! You are needed on {} for {}.", 
+				text += fmt::format("! You are needed on {} for {}.",
 					draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
 					draft_event.value->format);
 
@@ -3318,7 +3696,7 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 				text += ":superhero: Paging minutemages ";
 
 				for(size_t i = 0; i < heroes_needed; ++i) {
-					const int r = rand() & minutemages.size();	
+					const int r = rand() & minutemages.size();
 					text += fmt::format("<@{}> ", minutemages[r]->member_id);
 
 					// Add them to the playing list as a flexible player.
@@ -3330,7 +3708,7 @@ static void ping_minutemages(dpp::cluster& bot, const u64 guild_id, const char* 
 					minutemages.erase(minutemages.begin() + r);
 				}
 
-				text += fmt::format("! You are needed on {} for {}.", 
+				text += fmt::format("! You are needed on {} for {}.",
 					draft_event.value->draftmancer_draft == true ? "Draftmancer" : draft_event.value->xmage_server,
 					draft_event.value->format);
 
@@ -3371,7 +3749,7 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 	if(has_value(draft)) {
 		std::string text = fmt::format("# :alarm_clock: Attention hosts! Draft {} has now been locked. :alarm_clock:\n\n", draft_code);
 
-		text += "## Use the following EventBot commands to manage the draft.\n\n";
+		text += "## Use the following XDHS Bot commands to manage the draft.\n\n";
 
 		text += "### :one: Before pod allocations can be posted the :white_check_mark:Playing column on the sign-up sheet needs to show only players who are confirmed to be playing. The following commands can be used to add or remove players from the sheet:\n";
 		text += "	**/add_player** - Add a player to the :white_check_mark:Playing column. Use this for adding Minutemages or players who want to play but didn't sign up before the draft was locked.\n";
@@ -3384,13 +3762,13 @@ static void post_host_guide(dpp::cluster& bot, const char* draft_code) {
 
 		text += "### :three: The follow commands can be used during the draft:\n";
 		text += "	**/timer**   - After a Draftmancer draft, use this command to post a 10 minute countdown timer to remind players to finish constructing their decks in a timely manner.\n";
-		text += "	**/dropper** - Increment the drop counter for a player. This needs to be done before the draft is completed.\n";
+		text += "	**/dropper** - Increment the drop count for a player. This needs to be done before the draft is completed.\n";
 		text += "\n";
 
 		text += "### :four: After all pods have completed round 3:\n";
 		text += fmt::format("	**/finish** - Post the post-draft reminder message to <#{}> draft.\n", draft.value->reminder_channel_id);
 
-		send_message(bot, draft.value->hosting_channel_id, text);
+		send_message(bot, GUILD_ID, draft.value->hosting_channel_id, text);
 	}
 }
 
@@ -3400,7 +3778,7 @@ static void set_bot_presence(dpp::cluster& bot) {
 	std::string description;
 
 	auto draft_code = database_get_next_upcoming_draft(GUILD_ID);
-	if(!is_error(draft_code)) {
+	if(has_value(draft_code)) {
 		if(draft_code.value.length() > 0) {
 			auto draft = database_get_event(GUILD_ID, draft_code.value);
 			if(!is_error(draft)) {
@@ -3435,12 +3813,143 @@ static void set_bot_presence(dpp::cluster& bot) {
 	bot.set_presence({status, type, description});
 }
 
+static void do_role_commands(dpp::cluster& bot) {
+	// Action any role commands
+	//
+	// The asynchronous DPP library function, guild_edit_member, can cause race conditions
+	// when two or more roles are to be added or removed from a member in quick succession.
+	//
+	// This is what happens:
+	//	guild_edit_member(member) -> 1st call, actual change handled in another thread
+	//	guild_edit_member(member) -> 2nd call, actual change handled in another thread
+	//
+	//	1st thread sends request to Discord. Discord loads member state
+	//	2nd thread sends request to Discord. Discord loads member state
+	//	Discord actions 1st request and saves member state.
+	//	Discord actions 2nd request and saves member state.
+	//
+	// The outcome being the 1st guild_edit_member() call is overwritten by the 2nd call.
+	//
+	// The correct fix to the following code would be to cache all role additions or deletions
+	// per member and call guild_edit_member() only once per member.
+	//
+	// However, for now I'm going to do the easiest fix and simply only handle one role
+	// change per database query.
+	auto role_commands = database_get_role_commands(GUILD_ID);
+	if(has_value(role_commands) && role_commands.value.size() > 0) {
+		bot.roles_get(GUILD_ID, [&bot, role_commands = role_commands.value](const dpp::confirmation_callback_t& callback) {
+			if(!callback.is_error()) {
+				const auto& role_map = std::get<dpp::role_map>(callback.value);
+				for(const auto& command : role_commands) {
+					if(command.action < 0 || command.action > 1) {
+						log(LOG_LEVEL_ERROR, "Unknown command action: %d", command.action);
+						continue;
+					}
+					for(const auto [role_id, role] : role_map) {
+						if(role.name == command.role) {
+							bool edit_member = false;
+							dpp::guild_member member = dpp::find_guild_member(GUILD_ID, command.member_id);
+							std::string message;
+							if(command.action == 0) { // del
+								// Check if the user already has the role. Unlike add_role it is not an error to remove a role they don't have.
+								auto& roles = member.get_roles();
+								if(std::find(roles.begin(), roles.end(), role_id) != roles.end()) {
+									// Found, remove the role
+									edit_member = true;
+									member.remove_role(role_id);
+								} else {
+									// Doesn't have the role.
+									const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+									send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+										fmt::format(":orange_circle: {} doesn't have the '{}' role",
+											preferred_name,
+											command.role)
+									);
+									auto del_result = database_del_role_command(command.row_id);
+									if(is_error(del_result)) {
+										log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+									}
+								}
+							} else
+							if(command.action == 1) { // add
+								// Check if the user already has the role. Discord returns an error if a member already has a role so we have to check.
+								auto& roles = member.get_roles();
+								if(std::find(roles.begin(), roles.end(), role_id) == roles.end()) {
+									// Not found, add the role
+									member.add_role(role_id);
+									edit_member = true;
+								} else {
+									// Already has the role.
+									const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+									send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+										fmt::format(":orange_circle: {} already has the '{}' role",
+											preferred_name,
+											command.role)
+									);
+									auto del_result = database_del_role_command(command.row_id);
+									if(is_error(del_result)) {
+										log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+									}
+								}
+							}
+
+							if(edit_member) {
+								bot.guild_edit_member(member, [&bot, member, command](const dpp::confirmation_callback_t& callback){ 
+									if(!callback.is_error()) {
+										const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+										send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+											fmt::format("{} {} role '{}' {} {}",
+												command.action == 0 ? ":red_circle:" : ":green_circle:",
+												command.action == 0 ? "Removed" : "Added",
+												command.role,
+												command.action == 0 ? "from" : "to",
+												preferred_name)
+										);
+										auto del_result = database_del_role_command(command.row_id);
+										if(is_error(del_result)) {
+											log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+										}
+									} else {
+										log(LOG_LEVEL_ERROR, "guild_edit_member failed: %s", callback.get_error().human_readable.c_str());
+									}
+								});
+							}
+						}
+					}
+				}
+			} else {
+				log(LOG_LEVEL_ERROR, "Failed to get guild roles: %s", callback.get_error().human_readable.c_str());
+			}
+		});
+	} else {
+		if(is_error(role_commands)) {
+			log(LOG_LEVEL_ERROR, "database_get_role_commands failed");
+		}
+	}
+}
+
 // Output the required MySQL tables for this bot. These tables could be created programmatically but I prefer to limit table creation/deletion to root.
 static void output_sql() {
-	fprintf(stdout, "-- Use ./eventbot -sql to create this file.\n\n");
-	fprintf(stdout, "CREATE DATABASE IF NOT EXISTS XDHS; USE XDHS\n\n");
+	fprintf(stdout, "-- Use ./xdhs_bot -sql to create this file.\n\n");
+	fprintf(stdout, "CREATE DATABASE IF NOT EXISTS %s; USE %s;\n\n", g_config.mysql_database, g_config.mysql_database);
 
-	// NOTE: BadgeBot tables not shown here.
+	fprintf(stdout, "\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS stats(id BIGINT PRIMARY KEY NOT NULL UNIQUE, timestamp BIGINT DEFAULT 0);\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS devotion (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", DEVOTION_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS victory (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", VICTORY_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS trophies (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", TROPHIES_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS shark (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0, is_shark BOOLEAN NOT NULL DEFAULT 0);\n", SHARK_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS hero (id BIGINT PRIMARY KEY NOT NULL UNIQUE, name VARCHAR(%d) NOT NULL, value SMALLINT DEFAULT 0, next SMALLINT DEFAULT 0);\n", HERO_BADGE_NAME_LENGTH_MAX);
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS win_rate_recent (id BIGINT PRIMARY KEY NOT NULL UNIQUE, league FLOAT NOT NULL DEFAULT 0, bonus FLOAT NOT NULL DEFAULT 0, overall FLOAT NOT NULL DEFAULT 0);\n");
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS win_rate_all_time (id BIGINT PRIMARY KEY NOT NULL UNIQUE, league FLOAT NOT NULL DEFAULT 0, bonus FLOAT NOT NULL DEFAULT 0, overall FLOAT NOT NULL DEFAULT 0);\n");
+
+	fprintf(stdout, "\n");
+
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS xmage_version (version VARCHAR(64) NOT NULL UNIQUE, timestamp BIGINT NOT NULL UNIQUE);\n");
+	// TODO: Delete name when BadgeBot is turned off
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS commands (name VARCHAR(64) NOT NULL UNIQUE PRIMARY KEY, team BOOLEAN NOT NULL DEFAULT 0, hidden BOOLEAN NOT NULL DEFAULT 0, content VARCHAR(%lu) NOT NULL, summary VARCHAR(%d) NOT NULL);\n", DISCORD_MESSAGE_CHARACTER_LIMIT, DISCORD_AUTOCOMPLETE_STRING_LENGTH_MAX);
+
+	fprintf(stdout, "\n");
 
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS draft_events(\n");
 	// Draft details
@@ -3542,7 +4051,6 @@ static void output_sql() {
 	fprintf(stdout, "\n\n");
 #endif
 
-
 #if 0
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS temp_members(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n"); // TODO: Not needed?
@@ -3553,11 +4061,11 @@ static void output_sql() {
 	fprintf(stdout, "\n\n");
 #endif
 
-
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS noshows(\n");
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
-	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
+	fprintf(stdout, "CONSTRAINT UC_Noshow UNIQUE(guild_id, member_id, draft_code)\n");
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
@@ -3565,10 +4073,25 @@ static void output_sql() {
 	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
 	fprintf(stdout, "draft_code VARCHAR(%lu) NOT NULL,\n", DRAFT_CODE_LENGTH_MAX);
-	fprintf(stdout, "note VARCHAR(%lu)\n", DISCORD_MESSAGE_CHARACTER_LIMIT);
+	fprintf(stdout, "note VARCHAR(%lu),\n", DROPPER_NOTE_LENGTH_MAX);
+	fprintf(stdout, "CONSTRAINT UC_Dropper UNIQUE(guild_id, member_id, draft_code)\n");
 	fprintf(stdout, ");");
 	fprintf(stdout, "\n\n");
 
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS role_commands(\n");
+	fprintf(stdout, "row_id BIGINT NOT NULL AUTO_INCREMENT,\n");
+	fprintf(stdout, "guild_id BIGINT NOT NULL,\n");
+	fprintf(stdout, "member_id BIGINT NOT NULL,\n");
+	fprintf(stdout, "action INT NOT NULL,\n");
+	fprintf(stdout, "role VARCHAR(%lu) NOT NULL,\n", DISCORD_ROLE_LENGTH_MAX);
+	fprintf(stdout, "PRIMARY KEY (row_id)\n");
+	fprintf(stdout, ");");
+	fprintf(stdout, "\n\n");
+
+	fprintf(stdout, "CREATE USER '%s'@localhost IDENTIFIED BY '%s'\n", g_config.mysql_username, g_config.mysql_password);
+	fprintf(stdout, "GRANT DELETE, INSERT, SELECT, UPDATE ON %s.* TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
+	fprintf(stdout, "GRANT DROP ON %s.commands TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
+	fprintf(stdout, "FLUSH PRIVILEGES;\n");
 }
 
 static std::vector<std::string> get_pack_images(const char* format) {
@@ -3615,7 +4138,29 @@ static std::vector<std::string> get_pack_images(const char* format) {
 	return result;
 }
 
+static void config_file_kv_pair_callback(const char* key, const char* value, size_t value_len) {
+	CONFIG_KEY_STR(mysql_host)     else
+	CONFIG_KEY_STR(mysql_username) else
+	CONFIG_KEY_STR(mysql_password) else
+	CONFIG_KEY_STR(mysql_database) else
+	CONFIG_KEY_U16(mysql_port)     else
+	CONFIG_KEY_STR(logfile_path)   else
+	CONFIG_KEY_STR(discord_token)  else
+	CONFIG_KEY_STR(xmage_server)   else
+	CONFIG_KEY_STR(xdhs_bot_host)  else
+	CONFIG_KEY_STR(api_key)        else
+	CONFIG_KEY_STR(imgur_client_secret) else
+	CONFIG_KEY_STR(bind_address) else
+	CONFIG_KEY_STR(server_fqdn) else
+	CONFIG_KEY_U16(bind_port)
+}
+
 int main(int argc, char* argv[]) {
+	// Load the config file. This file has sensitive information so isn't in version control.
+	if(!load_config_file(CONFIG_FILE_NAME, config_file_kv_pair_callback)) {
+		return EXIT_FAILURE;
+	}
+
 	if(argc > 1) {
 		if(strcmp(argv[1], "-sql") == 0) {
 			// Dump SQL schema to stdout and exit.
@@ -3631,98 +4176,106 @@ int main(int argc, char* argv[]) {
 
 	}
 
-	// Check the version of EventBot that's running is in the correct place.
+	// Check the version of XDHS Bot that's running is in the correct place.
 	// This is to prevent accidentally running the DEBUG version instead of the RELEASE version.
 	{
 		char cwd[FILENAME_MAX];
 #ifdef DEBUG
 		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, EXPECTED_WORKING_DIR) == 0)) {
-			fprintf(stderr, "Running the DEBUG build of EventBot from '%s' is not supported!\n", EXPECTED_WORKING_DIR);
+			fprintf(stderr, "Running the DEBUG build of XDHS Bot from '%s' is not supported!\n", EXPECTED_WORKING_DIR);
 #endif
 #ifdef RELEASE
 		if((getcwd(cwd, FILENAME_MAX) == NULL) || (strcmp(cwd, EXPECTED_WORKING_DIR) != 0)) {
-			fprintf(stderr, "Running the RELEASE build of EventBot from anywhere other than '%s' is not supported!\n", EXPECTED_WORKING_DIR);
+			fprintf(stderr, "Running the RELEASE build of XDHS Bot from anywhere other than '%s' is not supported!\n", EXPECTED_WORKING_DIR);
 #endif
 			return EXIT_FAILURE;
 		}
 	}
 
-	// Load the bot.ini config file. This file has sensitive information and so isn't versioned.
-	if(!load_config_file(CONFIG_FILE_PATH, config_file_kv_pair_callback)) {
-		return EXIT_FAILURE;
-	}
-
-	// Check we're running on the correct server.
+	// Check we're running on the deploy server and not the build server.
 	{
 		static const size_t HOSTNAME_MAX = 253 + 1; // 253 is the maximum number of ASCII characters allowed for a hostname.
 		char hostname[HOSTNAME_MAX];
-		if(gethostname(hostname, HOSTNAME_MAX) != 0 || strcmp(hostname, g_config.eventbot_host) != 0) { 
-			fprintf(stderr, "Running on wrong HOSTNAME. You are on '%s' but '%s' is required.\n", hostname, g_config.eventbot_host);
+		if(gethostname(hostname, HOSTNAME_MAX) != 0 || strcmp(hostname, g_config.xdhs_bot_host) != 0) {
+			fprintf(stderr, "Running on wrong HOSTNAME. You are on '%s' but '%s' is required.\n", hostname, g_config.xdhs_bot_host);
 			return EXIT_FAILURE;
 		}
 	}
 
-#ifdef DEBUG
-    // Careful not to pipe these somewhere a malicious user could find...
-	fprintf(stdout, "eventbot_host  = '%s'\n", g_config.eventbot_host);
-    fprintf(stdout, "mysql_host     = '%s'\n", g_config.mysql_host);
-    fprintf(stdout, "mysql_username = '%s'\n", g_config.mysql_username);
-    fprintf(stdout, "mysql_password = '%s'\n", g_config.mysql_password);
-    fprintf(stdout, "mysql_port     = '%d'\n", g_config.mysql_port);
-    fprintf(stdout, "logfile_path   = '%s'\n", g_config.logfile_path);
-    fprintf(stdout, "discord_token  = '%s'\n", g_config.discord_token);
-    fprintf(stdout, "xmage_server   = '%s'\n", g_config.xmage_server);
-    fprintf(stdout, "api_key        = '%s'\n", g_config.api_key);
-#endif
+	// Careful not to pipe these somewhere a malicious user could find...
+	fprintf(stdout, "xdhs_bot_host	     = '%s'\n", g_config.xdhs_bot_host);
+	fprintf(stdout, "mysql_port          = '%d'\n", g_config.mysql_port);
+	fprintf(stdout, "mysql_host          = '%s'\n", g_config.mysql_host);
+	fprintf(stdout, "mysql_username      = '%s'\n", g_config.mysql_username);
+	fprintf(stdout, "mysql_password      = '%s'\n", g_config.mysql_password);
+	fprintf(stdout, "mysql_database      = '%s'\n", g_config.mysql_database);
+	fprintf(stdout, "logfile_path        = '%s'\n", g_config.logfile_path);
+	fprintf(stdout, "discord_token       = '%s'\n", g_config.discord_token);
+	fprintf(stdout, "xmage_server        = '%s'\n", g_config.xmage_server);
+	fprintf(stdout, "api_key             = '%s'\n", g_config.api_key);
+	fprintf(stdout, "imgur_client_secret = '%s'\n", g_config.imgur_client_secret);
+	fprintf(stdout, "bind_address        = '%s'\n", g_config.bind_address);
+	fprintf(stdout, "server_fqdn         = '%s'\n", g_config.server_fqdn);
+	fprintf(stdout, "bind_port           = '%d'\n", g_config.bind_port);
 
-	// EventBot runs as a Linux systemd service, so we need to gracefully handle these signals.
-    (void)signal(SIGINT,  sig_handler);
-    (void)signal(SIGABRT, sig_handler);
-    (void)signal(SIGHUP,  sig_handler);
-    (void)signal(SIGTERM, sig_handler);
-    // NOTE: SIGKILL is uncatchable, for (presumably!) obvious reasons!
+	// XDHS Bot runs as a Linux systemd service, so we need to gracefully handle these signals.
+	(void)signal(SIGINT,  sig_handler);
+	(void)signal(SIGABRT, sig_handler);
+	(void)signal(SIGHUP,  sig_handler);
+	(void)signal(SIGTERM, sig_handler);
+	// NOTE: SIGKILL is uncatchable, for (presumably!) obvious reasons!
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+	curl_global_init(CURL_GLOBAL_DEFAULT);
 	mysql_library_init(0, NULL, NULL);
-
-    http_server_init();
 
 	srand(time(NULL));
 
 	// Set up logging to an external file.
 	log_init(g_config.logfile_path);
+	defer{ log_close(); };
 
-    log(LOG_LEVEL_INFO, "====== EventBot starting ======");
-	log(LOG_LEVEL_INFO, "Build mode: %s",             BUILD_MODE);
-    log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
+	log(LOG_LEVEL_INFO, "====== XDHS Bot starting ======");
+	log(LOG_LEVEL_INFO, "Build mode: %s",	         BUILD_MODE);
+	log(LOG_LEVEL_INFO, "MariaDB client version: %s", mysql_get_client_info());
 	log(LOG_LEVEL_INFO, "libDPP++ version: %s",       dpp::utility::version().c_str());
 	log(LOG_LEVEL_INFO, "libcurl version: %s",        curl_version());
-	log(LOG_LEVEL_INFO, "mongoose version: %s",       MG_VERSION);
+	log(LOG_LEVEL_INFO, "mongoose version: %s", MG_VERSION);
 
 	// Download and install the latest IANA time zone database.
-	// TODO: Only do this if /tmp/tzdata doesn't exist?
-	log(LOG_LEVEL_INFO, "Downloading IANA time zone database.");
-	const std::string tz_version = date::remote_version(); // FIXME?: Valgrind says this leaks...
-	(void)date::remote_download(tz_version);
-	(void)date::remote_install(tz_version);
+	// The 2024b version (latest as I type this) of the IANA time zone database has a typo causing an exception to be thrown, so use an older version.
+	//const std::string tz_version = date::remote_version(); // Get the latest version
+	const std::string tz_version = "2024a"; // Get a specific (known working!) version
+	log(LOG_LEVEL_INFO, "Downloading IANA time zone database %s.", tz_version.c_str());
+	{
+		char error_string[CURL_ERROR_SIZE];
+		if(date::remote_download(tz_version, error_string) != true) {
+			log(LOG_LEVEL_ERROR, "Download of IANA time zone database FAILED: %s", error_string);
+			return EXIT_FAILURE;
+		}
+	}
+	if(date::remote_install(tz_version) != true) {
+		log(LOG_LEVEL_ERROR, "Installing IANA time zone database FAILED!");
+		return EXIT_FAILURE;
+	}
+	log(LOG_LEVEL_INFO, "IANA time zone database downloaded and installed.");
 
 	// Create the bot and connect to Discord.
 	// TODO: We don't need all intents, so just request what we need...
 	dpp::cluster bot(g_config.discord_token, dpp::i_all_intents);
 
 	// Override the default DPP logger with ours.
-    bot.on_log([](const dpp::log_t& event) {
-        LOG_LEVEL level = g_log_level;
-        switch(event.severity) {
-            case dpp::ll_trace:    level = LOG_LEVEL_DEBUG;   break;
-            case dpp::ll_debug:    level = LOG_LEVEL_DEBUG;   break;
-            case dpp::ll_info:     level = LOG_LEVEL_INFO;    break;
-            case dpp::ll_warning:  level = LOG_LEVEL_WARNING; break;
-            case dpp::ll_error:    level = LOG_LEVEL_ERROR;   break;
-            case dpp::ll_critical: level = LOG_LEVEL_ERROR;   break;
-        }
-        log(level, "%s", event.message.c_str());
-    });
+	bot.on_log([](const dpp::log_t& event) {
+		LOG_LEVEL level = g_log_level;
+		switch(event.severity) {
+			case dpp::ll_trace:    level = LOG_LEVEL_DEBUG;   break;
+			case dpp::ll_debug:    level = LOG_LEVEL_DEBUG;   break;
+			case dpp::ll_info:     level = LOG_LEVEL_INFO;    break;
+			case dpp::ll_warning:  level = LOG_LEVEL_WARNING; break;
+			case dpp::ll_error:    level = LOG_LEVEL_ERROR;   break;
+			case dpp::ll_critical: level = LOG_LEVEL_ERROR;   break;
+		}
+		log(level, "%s", event.message.c_str());
+	});
 
 	// Called for slash command options that have the autocomplete flag set to true.
 	bot.on_autocomplete([&bot](const dpp::autocomplete_t& event) {
@@ -3733,7 +4286,7 @@ int main(int argc, char* argv[]) {
 					if(event.name == "post_draft") {
 						// Gets a list of all drafts that haven't been posted.
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						auto draft_codes = database_get_draft_codes_for_post_draft_autocomplete(guild_id, prefix);
+						auto draft_codes = database_get_draft_codes_for_post_draft_autocomplete(guild_id, prefix, DISCORD_AUTOCOMPLETE_ENTRIES_MAX);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
@@ -3743,7 +4296,7 @@ int main(int argc, char* argv[]) {
 					if(event.name == "edit_draft" || "view_draft") {
 						// Gets a list of drafts that have been created, but not necessarily posted yet.
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						auto draft_codes = database_get_draft_codes_for_edit_draft_autocomplete(guild_id, prefix);
+						auto draft_codes = database_get_draft_codes_for_edit_draft_autocomplete(guild_id, prefix, DISCORD_AUTOCOMPLETE_ENTRIES_MAX);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
@@ -3752,10 +4305,34 @@ int main(int argc, char* argv[]) {
 					} else
 					if(event.name == "delete_draft") {
 						std::string prefix = std::get<std::string>(opt.value); // What the user has typed so far
-						auto draft_codes = database_get_draft_codes_for_delete_draft_autocomplete(guild_id, prefix);
+						auto draft_codes = database_get_draft_codes_for_delete_draft_autocomplete(guild_id, prefix, DISCORD_AUTOCOMPLETE_ENTRIES_MAX);
 						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
 						for(auto& draft_code : draft_codes.value) {
 							response.add_autocomplete_choice(dpp::command_option_choice(draft_code, draft_code));
+						}
+						bot.interaction_response_create(event.command.id, event.command.token, response);
+					}
+				} else
+				if(opt.name == "message") {
+					if(event.name == "help") {
+						auto response = dpp::interaction_response(dpp::ir_autocomplete_reply);
+						std::string prefix = std::get<std::string>(opt.value);
+						int limit = DISCORD_AUTOCOMPLETE_ENTRIES_MAX;
+#if 0
+						if(prefix.length() == 0) {
+							response.add_autocomplete_choice(dpp::command_option_choice("All Commands - Print a list of all commands", "all_commands"));
+							--limit;
+						}
+#endif
+						auto commands = database_get_help_messages_for_autocomplete(guild_id, prefix, limit);
+						for(auto& command : commands.value) {
+							if(strlen(command.summary) > 0) {
+								// NOTE: ARGH! Discord trims whitespace on auto complete options so we can't align this list nicely. ;(
+								//auto choice = fmt::format("{} - {}", command.name, command.summary);
+								response.add_autocomplete_choice(dpp::command_option_choice(command.summary, command.summary));
+							} else {
+								response.add_autocomplete_choice(dpp::command_option_choice(command.name, command.name));
+							}
 						}
 						bot.interaction_response_create(event.command.id, event.command.token, response);
 					}
@@ -3767,9 +4344,9 @@ int main(int argc, char* argv[]) {
 	});
 
 	// Called when Discord has connected the bot to a guild.
-    bot.on_guild_create([&bot](const dpp::guild_create_t& event) {
+	bot.on_guild_create([&bot](const dpp::guild_create_t& event) {
 
-        log(LOG_LEVEL_INFO, "on_guild_create: Guild name:[%s] Guild ID:[%lu]", event.created->name.c_str(), static_cast<u64>(event.created->id));
+		log(LOG_LEVEL_INFO, "on_guild_create: Guild name:[%s] Guild ID:[%lu]", event.created->name.c_str(), static_cast<u64>(event.created->id));
 
 		// As this is a "private" bot we don't want unknown guilds adding the bot and using the commands.
 		// This won't prevent others joining the bot to their guild but it won't install any of the slash
@@ -3799,13 +4376,6 @@ int main(int argc, char* argv[]) {
 		// We only want to re-create the slash commands when the bot is first started, not when Discord reconnects a guild, so check if we've already created the slash commands on this execution.
 		if(g_commands_registered == false) {
 			// Create slash commands
-#ifdef DEBUG
-			{
-				dpp::slashcommand cmd("cpu_burner", "Create banner art for every set that has >= 3 images.", bot.me.id);
-				cmd.default_member_permissions = dpp::p_use_application_commands;
-				bot.guild_command_create(cmd, event.created->id);
-			}
-#endif // DEBUG
 			{
 				dpp::slashcommand cmd("banner", "Create a banner image for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3817,7 +4387,7 @@ int main(int argc, char* argv[]) {
 				// Optional
 				auto draft_type_opt = dpp::command_option(dpp::co_integer, "draft_type", "Deovtion, hero, or community choice draft.", false);
 				for(int i = (int)DRAFT_TYPE_DEVOTION_GIANT; i < (int)DRAFT_TYPE_COUNT; ++i) {
-					draft_type_opt.add_choice(dpp::command_option_choice(to_cstring((DRAFT_TYPE)i), (std::int64_t)i));
+					draft_type_opt.add_choice(dpp::command_option_choice(std::string{to_string((DRAFT_TYPE)i)}, (std::int64_t)i));
 				}
 				cmd.add_option(draft_type_opt);
 
@@ -3825,6 +4395,7 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_attachment, "art", "Art to use as the background. Will be resized to 825x550 pixels.", false));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("create_draft", "Create a new draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3852,12 +4423,16 @@ int main(int argc, char* argv[]) {
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("view_draft", "View the details for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code of the draft to view.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("edit_draft", "Edit the details of a draft", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3885,25 +4460,33 @@ int main(int argc, char* argv[]) {
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("post_draft", "Post a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The code of the draft event to post.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("delete_draft", "Delete a draft post.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The code of the draft to delete.", true).set_auto_complete(true));
-				cmd.add_option(dpp::command_option(dpp::co_boolean, "purge", "Purge the draft and delete all sign ups from the EventBot database.", false));
+				cmd.add_option(dpp::command_option(dpp::co_boolean, "purge", "Purge the draft and delete all sign ups from the XDHS Bot database.", false));
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("view_allocations", "Print the pod allocations to the #-current-draft-management channel.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("add_player", "Add a member to the Playing column of the sign up sheet.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3915,6 +4498,8 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(pod_option);
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("remove_player", "Remove a player from the sign up sheet and (optionally) record them as a No Show", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3922,16 +4507,21 @@ int main(int argc, char* argv[]) {
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "noshow", "Record this as a No Show.", true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
+#ifdef DEBUG
 			{
 				dpp::slashcommand cmd("fire", "Create a role with all draft participants, and separate roles for each pod.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+#endif
 			{
 				dpp::slashcommand cmd("timer", "Post the Draftmancer specific reminders and a timer for deck submission.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -3940,8 +4530,21 @@ int main(int argc, char* argv[]) {
 			{
 				dpp::slashcommand cmd("dropper", "Add a player to the droppers list.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
-				cmd.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the droppers list.", true));
-				cmd.add_option(dpp::command_option(dpp::co_string, "note", "Attach a note to the drop record.", false));
+
+				{
+					auto opt = dpp::command_option(dpp::co_sub_command, "add", "Add a dropper to the drop list with an optional note.");
+					opt.add_option(dpp::command_option(dpp::co_user, "member", "The member to add to the drop list.", true));
+					opt.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft the member dropped from.", true));
+					opt.add_option(dpp::command_option(dpp::co_string, "note", fmt::format("Attach a note to the drop record. Max. {} characters.", DROPPER_NOTE_LENGTH_MAX), false));
+
+					cmd.add_option(opt);
+				}
+				{
+					auto opt = dpp::command_option(dpp::co_sub_command, "list", "List all droppers or drops for a specific member");
+					opt.add_option(dpp::command_option(dpp::co_user, "member", "Only list the drops for this member.", false));
+
+					cmd.add_option(opt);
+				}
 				bot.guild_command_create(cmd, event.created->id);
 			}
 			{
@@ -3949,52 +4552,27 @@ int main(int argc, char* argv[]) {
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
+			{
+				dpp::slashcommand cmd("stats", "Get your stats via private message.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				bot.guild_command_create(cmd, event.created->id);
+			}
+			{
+				dpp::slashcommand cmd("help", "Post a pre-written help message.", bot.me.id);
+				cmd.default_member_permissions = dpp::p_use_application_commands;
+				cmd.add_option(dpp::command_option(dpp::co_string, "message", "The pre-written help message to post.", true).set_auto_complete(true));
+				bot.guild_command_create(cmd, event.created->id);
+			}
 
 			g_commands_registered = true;
 		}
 
-    });
+	});
 
 	bot.on_slashcommand([&bot](const dpp::slashcommand_t& event) {
 		const auto command_name = event.command.get_command_name();
 		const auto guild_id = event.command.get_guild().id;
 
-#ifdef DEBUG
-		if(command_name == "cpu_burner") {
-			event.reply("Here we go!");
-
-			Banner_Opts opts;
-			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
-			opts.datetime = "DATETIME / DATETIME / DATETIME / DATETIME";
-			for(size_t i = 0; i < SET_COUNT; ++i) {
-				const XDHS_League* league = &g_xdhs_leagues[rand() % XDHS_LEAGUE_COUNT];	
-				opts.league_color = league->color & 0x0000FF00;
-				opts.league_color |= (league->color & 0xFF) << 16;
-				opts.league_color |= (league->color & 0x00FF0000) >> 16;
-				const MTG_Draftable_Set* set = &g_draftable_sets[i];
-				if(set->pack_images >= 1) {
-					std::string format = fmt::format("{}/{}/{}", set->code, set->code, set->code);
-					opts.images = get_pack_images(format.c_str());
-					opts.title = fmt::format("BANNER TEST / SS.W-LT: {}", format);
-					//log(LOG_LEVEL_DEBUG, "Rendering: %s", format.c_str());
-					const auto banner = render_banner(&opts);
-					if(!is_error(banner)) {
-						dpp::message message;
-						message.set_type(dpp::message_type::mt_default);
-						message.set_guild_id(GUILD_ID);
-						message.set_channel_id(1170985661185151017); // #spam
-						message.set_allowed_mentions(false, false, false, false, {}, {});
-						message.set_content(format);
-						message.add_file("banner.png", dpp::utility::read_file(banner.value));
-						bot.message_create(message);
-					} else {
-						event.reply(to_cstring(banner.error));
-					}
-					opts.images.clear();
-				}
-			}
-		} else
-#endif // DEBUG
 		if(command_name == "banner") {
 			Banner_Opts opts;
 			opts.draft_type = DRAFT_TYPE_NOT_APPLICABLE;
@@ -4003,7 +4581,7 @@ int main(int argc, char* argv[]) {
 			auto draft_code_str = std::get<std::string>(event.get_parameter("draft_code"));
 			const auto draft_code = parse_draft_code(draft_code_str.c_str());
 			if(is_error(draft_code)) {
-				event.reply(to_cstring(draft_code.error));
+				event.reply(std::string{global_error_to_string(draft_code.error)});
 				return;
 			}
 
@@ -4026,7 +4604,7 @@ int main(int argc, char* argv[]) {
 			{
 				const auto result = parse_date_string(date_string.c_str());
 				if(is_error(result)) {
-					event.reply(to_cstring(result.error));
+					event.reply(std::string{global_error_to_string(result.error)});
 					return;
 				}
 				date = result.value;
@@ -4034,14 +4612,14 @@ int main(int argc, char* argv[]) {
 
 			// Create the default zoned time for this region.
 			auto zoned_time = date::make_zoned(league->time_zone,
-			                                   date::local_days{date::year{date.year} / date.month / date.day} +
-											   std::chrono::hours(league->time.hour) +
-											   std::chrono::minutes(league->time.minute));
+				date::local_days{date::year{date.year} / date.month / date.day} +
+				std::chrono::hours(league->time.hour) +
+				std::chrono::minutes(league->time.minute));
 
 			opts.datetime = date::format("%a %b %d @ %H:%M %Z", zoned_time).c_str();
 
 			switch(league->id) {
-				case LEAGUE_ID_AMERICAS_CHRONO: 
+				case LEAGUE_ID_AMERICAS_CHRONO:
 				case LEAGUE_ID_AMERICAS_BONUS:  {
 					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
 				} break;
@@ -4062,19 +4640,13 @@ int main(int argc, char* argv[]) {
 					opts.datetime += date::format(" || %a %b %d @ %H:%M %Z", date::make_zoned("Australia/Sydney", zoned_time));
 				} break;
 
-				case LEAGUE_ID_ATLANTIC_BONUS: {
-					// Euro and American - Date is the same
-					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/New_York", zoned_time));
-					opts.datetime += date::format(" | %H:%M %Z", date::make_zoned("America/Los_Angeles", zoned_time));
-				} break;
-
 				case LEAGUE_ID_EURO_BONUS: {
 					// Nothing extra to add.
 				} break;
 			}
 
-			opts.title = fmt::format("{} / {}: {}", to_upper(to_cstring(league->id)), draft_code_str, format);
-			
+			opts.title = fmt::format("{} / {}: {}", to_upper(to_string(league->id)), draft_code_str, format);
+
 			// Optional options
 			{
 				auto opt = event.get_parameter("draft_type");
@@ -4104,25 +4676,27 @@ int main(int argc, char* argv[]) {
 					auto art_id = std::get<dpp::snowflake>(event.get_parameter("art"));
 					auto itr = event.command.resolved.attachments.find(art_id);
 					auto art = itr->second;
-            		event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
-		            auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
+				//event.edit_response(fmt::format(":hourglass_flowing_sand: Downloading background art: {}", art.url));
+				auto download = download_file(art.url.c_str());//, &image_full_size, &image_full_data);
 					if(is_error(download)) {
-		                event.edit_response(to_cstring(download.error));
-		                return;
-        		    }
-					SCOPE_EXIT(free(download.value.data));
+						event.edit_response(std::string{global_error_to_string(download.error)});
+						return;
+					}
+					defer { free(download.value.data); };
 
 					if(download.value.size > DOWNLOAD_BYTES_MAX) {
 						event.edit_response(fmt::format("Downloading art image failed: Image exceeds maximum allowed size of {} bytes. Please resize your image to {}x{} pixels and try again.", DOWNLOAD_BYTES_MAX, BANNER_IMAGE_WIDTH, PACK_IMAGE_HEIGHT));
 						return;
 					}
 
-					std::string temp_file = fmt::format("/tmp/EventBot_Art_{}", random_string(16));
+					std::string temp_file = fmt::format("{}/XDHS_Bot_Art_{}", get_tmp_dir(), random_string(16));
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
-						SCOPE_EXIT(fclose(file));
-						event.edit_response(":hourglass_flowing_sand: Saving image");
+						defer { fclose(file); };
+						//event.edit_response(":hourglass_flowing_sand: Saving image");
+						log(LOG_LEVEL_INFO, "Saving banner file to %s...", temp_file.c_str());
 						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
+						log(LOG_LEVEL_INFO, "... file saved");
 						if(wrote == download.value.size) {
 							opts.images.push_back(temp_file);
 						} else {
@@ -4146,11 +4720,11 @@ int main(int argc, char* argv[]) {
 				return;
 			}
 
-			event.edit_response(":hourglass_flowing_sand: Rendering banner");
+			//event.edit_response(":hourglass_flowing_sand: Rendering banner");
 			auto start = std::chrono::high_resolution_clock::now();
 			const auto result = render_banner(&opts);
 			if(is_error(result)) {
-				event.edit_response(to_cstring(result.error));
+				event.edit_response(std::string{global_error_to_string(result.error)});
 				return;
 			}
 			auto end = std::chrono::high_resolution_clock::now();
@@ -4176,7 +4750,8 @@ int main(int argc, char* argv[]) {
 
 			const XDHS_League* league = draft_code.value.league;
 
-			strcpy(draft_event.league_name, to_cstring(league->id));
+			const std::string_view league_name = to_string(league->id);
+			memcpy(draft_event.league_name, league_name.data(), league_name.length());
 
 			auto format = std::get<std::string>(event.get_parameter("format"));
 			if(format.length() > FORMAT_STRING_LEN_MAX) {
@@ -4224,7 +4799,7 @@ int main(int argc, char* argv[]) {
 
 				// Attachments are treated as 'ephemeral' by Discord and can be deleted after a period of time. To avoid this ever happening we download the attachment and save it to storage and later attach it to the draft sign up post.
 				Result<Heap_Buffer> download = download_file(banner.url.c_str());
-				SCOPE_EXIT(free(download.value.data));
+				defer { free(download.value.data); };
 				if(is_error(download)) {
 					event.reply(dpp::message(download.errstr).set_flags(dpp::m_ephemeral));
 					return;
@@ -4238,7 +4813,7 @@ int main(int argc, char* argv[]) {
 				std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_DOC_ROOT, draft_code_str);
 				FILE* file = fopen(filename.c_str(), "wb");
 				if(file) {
-					SCOPE_EXIT(fclose(file));
+					defer { fclose(file); };
 					size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 					if(wrote == download.value.size) {
 						strcpy(draft_event.banner_file, filename.c_str());
@@ -4268,7 +4843,7 @@ int main(int argc, char* argv[]) {
 						event.reply(dpp::message(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
-					strcpy(&draft_event.blurbs[i][0], blurb.c_str()); 
+					strcpy(&draft_event.blurbs[i][0], blurb.c_str());
 				}
 			}
 
@@ -4393,7 +4968,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			draft_event.time = pack_time(date.year, date.month, date.day, start_time.hour, start_time.minute);
-			
+
 			// Iterate over all the roles for this guild and find the IDs of the pingable roles.
 			// TODO: Do this at post time?
 			char ping_string[PING_STRING_LENGTH_MAX + 1];
@@ -4438,12 +5013,12 @@ int main(int argc, char* argv[]) {
 
 			char time_string[TIME_STRING_MAX] = {0};
 			make_time_string(draft.value->time, time_string);
-			
+
 			std::string text;
 			text += "```";
 			text += fmt::format("             status: {}\n", draft_status_to_string(draft.value->status));
 			text += fmt::format("         draft_code: {}\n", draft.value->draft_code);
-			text += fmt::format("              pings: {}\n", draft.value->pings); 
+			text += fmt::format("              pings: {}\n", draft.value->pings);
 			text += fmt::format("        league_name: {}\n", draft.value->league_name);
 			text += fmt::format("             format: {}\n", draft.value->format);
 			text += fmt::format("          time_zone: {}\n", draft.value->time_zone);
@@ -4477,7 +5052,7 @@ int main(int argc, char* argv[]) {
 				auto opt = event.get_parameter("format");
 				if(std::holds_alternative<std::string>(opt)) {
 					const std::string format = std::get<std::string>(opt);
-					strcpy(draft_event.value->format, format.c_str());	
+					strcpy(draft_event.value->format, format.c_str());
 				}
 			}
 
@@ -4537,7 +5112,7 @@ int main(int argc, char* argv[]) {
 					auto banner = itr->second;
 
 					auto download = download_file(banner.url.c_str());
-					SCOPE_EXIT(free(download.value.data));
+					defer { free(download.value.data); };
 					if(is_error(download)) {
 						event.reply(dpp::message(download.errstr).set_flags(dpp::m_ephemeral));
 						return;
@@ -4551,7 +5126,7 @@ int main(int argc, char* argv[]) {
 					std::string filename = fmt::format("{}/{}.png", HTTP_SERVER_DOC_ROOT, draft_code);
 					FILE* file = fopen(filename.c_str(), "wb");
 					if(file) {
-						SCOPE_EXIT(fclose(file));
+						defer { fclose(file); };
 						size_t wrote = fwrite(download.value.data, 1, download.value.size, file);
 						if(wrote == download.value.size) {
 							strcpy(draft_event.value->banner_file, filename.c_str());
@@ -4582,7 +5157,7 @@ int main(int argc, char* argv[]) {
 						event.reply(dpp::message(fmt::format("blurb_{} exceeds maximum length of {} bytes.", i, DRAFT_BLURB_LENGTH_MAX)).set_flags(dpp::m_ephemeral));
 						return;
 					}
-					strcpy(&draft_event.value->blurbs[i][0], blurb.c_str()); 
+					strcpy(&draft_event.value->blurbs[i][0], blurb.c_str());
 				}
 			}
 
@@ -4731,7 +5306,7 @@ int main(int argc, char* argv[]) {
 			const auto pod = (SIGNUP_STATUS) std::get<std::int64_t>(event.get_parameter("pod"));
 
 			const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
-			
+
 			(void)database_sign_up_to_a_draft(guild_id, g_current_draft_code, member_id, preferred_name, time(NULL), pod);
 
 			// Redraw the sign up sheet in the #-pre-register channel.
@@ -4742,7 +5317,7 @@ int main(int argc, char* argv[]) {
 				redraw_signup(bot, guild_id, draft.value->reminder_id, draft.value->reminder_channel_id, draft.value);
 			}
 
-			event.reply(fmt::format("{} added to {} {} pod.", preferred_name, g_current_draft_code, to_cstring(pod)));
+			event.reply(fmt::format("{} added to {} {} pod.", preferred_name, g_current_draft_code, to_string(pod)));
 		} else
 		if(command_name == "remove_player") {
 			const auto guild_id = event.command.get_guild().id;
@@ -4763,7 +5338,7 @@ int main(int argc, char* argv[]) {
 					if(noshow == true) database_add_noshow(guild_id, member_id, g_current_draft_code.c_str());
 				}
 			}
-			
+
 			const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
 			auto current_sign_up_status = database_get_members_sign_up_status(guild_id, g_current_draft_code, member_id);
 			(void)database_sign_up_to_a_draft(guild_id, g_current_draft_code, member_id, preferred_name, current_sign_up_status.value.timestamp, (SIGNUP_STATUS)(current_sign_up_status.value.status | SIGNUP_STATUS_REMOVED));
@@ -4875,7 +5450,7 @@ int main(int argc, char* argv[]) {
 
 			for(const auto& player : sign_ups.value) {
 				log(LOG_LEVEL_DEBUG, fmt::format("Player:{} status:{} rank:{} is_shark:{} points:{} devotion:{} win_rate:{}",
-					player.preferred_name, (int)player.status, player.rank, player.is_shark, player.points, player.devotion, player.win_rate).c_str());	
+					player.preferred_name, (int)player.status, player.rank, player.is_shark, player.points, player.devotion, player.win_rate).c_str());
 			}
 
 			// FIXME: Does this need to be a shared_ptr / on the heap? This function might exit before Discord can finish making all the pod roles and assigning members to them.
@@ -4895,7 +5470,7 @@ int main(int argc, char* argv[]) {
 				#4: New XDHS players and Goblins (1-4 drafts played) have priority for Pod 2
 				#5: Players who reacted with their preferred emoji ( :Pod1~1:  or :Pod2~1: ) in #-pre-register
 				#6: Players who didn't react in #-pre-register (first among these to join the draft table on XMage gets the spot)
-				
+
 				The tiebreaker for #3/4/5 is determined by the order output from the randomizer. NOTE: This is not how it is done here. Instead we use sign up time - first in, first served!
 			 */
 
@@ -5064,7 +5639,7 @@ int main(int argc, char* argv[]) {
 
 			std::string pod_allocations[PODS_MAX];
 			for(int p = 0; p < tournament.pod_count; ++p) {
-				pod_allocations[p] += fmt::format("## Pod {} Allocations:\n", p+1);	
+				pod_allocations[p] += fmt::format("## Pod {} Allocations:\n", p+1);
 				const Draft_Pod* pod = &tournament.pods[p];
 				for(int s = 0; s < pod->seats; ++s) {
 					pod_allocations[p] += fmt::format("  {} <@{}>\n", emoji_for_reason(pod->players[s].reason), pod->players[s].member_id);
@@ -5109,6 +5684,9 @@ int main(int argc, char* argv[]) {
 											u64 draft_role_id = draft_role.id;
 											u64 pod_role_id = pod_role.id;
 											try {
+												// FIXME: dpp fixed the bug that caused roles to not update. I can now
+												// use member.add_role(role_id) and guild_edit_member(...) instead
+												// of needing to get the entire vector and adding the role to it.
 												dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
 												std::vector<dpp::snowflake> roles = member.get_roles();
 												roles.push_back(draft_role_id);
@@ -5222,7 +5800,7 @@ int main(int argc, char* argv[]) {
 
 			const auto draft = database_get_event(guild_id, g_current_draft_code);
 			if(draft == false) return; // TODO: Error message.
-			
+
 			std::string text;
 			text += "## While drafting, please remember to:\n";
 			text += "* **Keep Discord open, with notifications on.** Pay attention to pings and messages in this channel. We may need to restart the draft if there's a disconnect or other issue.\n";
@@ -5251,20 +5829,81 @@ int main(int argc, char* argv[]) {
 		} else
 		if(command_name == "dropper") {
 			const auto guild_id = event.command.get_guild().id;
-			const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
 
-			std::string note;
-			auto opt = event.get_parameter("note");
-			if(std::holds_alternative<std::string>(opt)) {
-				note = std::get<std::string>(opt);
-			}
+			const dpp::command_interaction cmd_data = event.command.get_command_interaction();
+			auto subcommand = cmd_data.options[0];
 
-			auto result = database_add_dropper(guild_id, member_id, g_current_draft_code.c_str(), note.c_str());
-			if(!is_error(result)) {
-				const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
-				event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
-			} else {
-				event.reply(result.errstr);
+			if(subcommand.name == "add") {
+				const auto member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
+				const auto draft_code = std::get<std::string>(event.get_parameter("draft_code"));
+
+				std::string note;
+				{
+					auto opt = event.get_parameter("note");
+					if(std::holds_alternative<std::string>(opt)) {
+						note = std::get<std::string>(opt);
+					}
+				}
+
+				auto result = database_add_drop(guild_id, member_id, draft_code, note);
+				if(!is_error(result)) {
+					const std::string preferred_name = get_members_preferred_name(guild_id, member_id);
+					event.reply(fmt::format("Incremented drop count for {}.", preferred_name));
+				} else {
+					event.reply(result.errstr);
+				}
+			} else
+			if(subcommand.name == "list") {
+				if(std::holds_alternative<dpp::snowflake>(event.get_parameter("member"))) {
+					// Requesting only a specific member.
+					const dpp::snowflake member_id = std::get<dpp::snowflake>(event.get_parameter("member"));
+					auto result = database_get_specific_dropper(guild_id, member_id);
+					if(!is_error(result)) {
+						if(result.value.size() > 0) {
+							std::string content;
+							content.reserve(DISCORD_MESSAGE_CHARACTER_LIMIT);
+							content += fmt::format("{} drop{} for {}:\n",
+								result.value.size(),
+								result.value.size() > 1 ? "s" : "",
+								get_members_preferred_name(guild_id, member_id)
+							);
+							content += "```";
+							for(auto& dropper: result.value) {
+								content += fmt::format("{:>{}} {} {}\n",
+									dropper.draft_code, DRAFT_CODE_LENGTH_MAX,
+									strlen(dropper.note) > 0 ? "-" : "",
+									dropper.note
+								);
+							}
+							content += "```";
+							event.reply(content);
+						} else {
+							event.reply(fmt::format("{} has no drops.", get_members_preferred_name(guild_id, member_id)));
+						}
+					} else {
+						event.reply(result.errstr);
+					}
+				} else {
+					// List all droppers
+					auto result = database_get_droppers(guild_id);
+					if(!is_error(result)) {
+						std::string content;
+						content.reserve(DISCORD_MESSAGE_CHARACTER_LIMIT + 1);
+						content += "```";
+						for(auto& dropper : result.value) {
+							content += fmt::format("{:<{}} {:>{}} {} {}\n",
+								get_members_preferred_name(guild_id, dropper.member_id), DISCORD_NAME_LENGTH_MAX,
+								dropper.draft_code, DRAFT_CODE_LENGTH_MAX,
+								strlen(dropper.note) > 0 ? "-" : "",
+								dropper.note
+							);
+						}
+						content += "```";
+						event.reply(content);
+					} else {
+						event.reply(result.errstr);
+					}
+				}
 			}
 		} else
 		if(command_name == "finish") {
@@ -5276,6 +5915,168 @@ int main(int argc, char* argv[]) {
 			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with the /feedback command.\n", FEEDBACK_CHANNEL_ID);
 			text += fmt::format("* Check out <#{}> and sign up to some upcoming events!", CALENDAR_CHANNEL_ID);
 			event.reply(text);
+		} else
+		if(command_name == "stats") {
+			const auto guild_id = event.command.get_guild().id;
+			const dpp::user& issuing_user = event.command.get_issuing_user();
+
+			const std::string preferred_name = get_members_preferred_name(guild_id, issuing_user.id);
+
+			auto stats = database_get_stats(issuing_user.id);
+			if(has_value(stats)) {
+				if(stats.count == 1) {
+					event.reply(fmt::format("{}, your stats will be delivered via private message.", preferred_name));
+					dpp::embed embed;
+
+					embed.set_title(fmt::format("Hello, {}! Here are your stats:", preferred_name));
+
+					embed.add_field("Devotion Badge", stats.value.devotion.name, true);
+					embed.add_field("Devotion Points", fmt::format("{}", stats.value.devotion.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.devotion.next), true);
+
+					embed.add_field("Victory Badge", stats.value.victory.name, true);
+					embed.add_field("Victory Points", fmt::format("{}", stats.value.victory.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.victory.next), true);
+
+					embed.add_field("Trophy Badge", stats.value.trophies.name, true);
+					embed.add_field("Trophy Points", fmt::format("{}", stats.value.trophies.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.trophies.next), true);
+
+					embed.add_field("Shark Badge", stats.value.shark.name, true);
+					embed.add_field("Shark Kills", fmt::format("{}", stats.value.shark.value), true);
+					embed.add_field("Kills needed for next badge", fmt::format("{}", stats.value.shark.next), true);
+
+					embed.add_field("Draft Hero Badge", stats.value.hero.name, true);
+					embed.add_field("Hero Points", fmt::format("{}", stats.value.hero.value), true);
+					embed.add_field("Points needed for next badge", fmt::format("{}", stats.value.hero.next), true);
+
+					{
+						std::string wins[3];
+						wins[0] = stats.value.win_rate_recent.chrono  > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_recent.chrono)  : "-";
+						wins[1] = stats.value.win_rate_recent.bonus   > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_recent.bonus)   : "-";
+						wins[2] = stats.value.win_rate_recent.overall > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_recent.overall) : "-";
+						embed.add_field("Chrono win rate (last 6 seasons)", wins[0], true);
+						embed.add_field("Bonus win rate (last 6 seasons)", wins[1], true);
+						embed.add_field("Overall win rate (last 6 seasons)", wins[2], true);
+					}
+					{
+						std::string wins[3];
+						wins[0] = stats.value.win_rate_all_time.chrono  > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_all_time.chrono)  : "-";
+						wins[1] = stats.value.win_rate_all_time.bonus   > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_all_time.bonus)   : "-";
+						wins[2] = stats.value.win_rate_all_time.overall > 0.0f ? fmt::format("{:.1f}%", stats.value.win_rate_all_time.overall) : "-";
+						embed.add_field("Chrono win rate (all time)", wins[0], true);
+						embed.add_field("Bonus win rate (all time)", wins[1], true);
+						embed.add_field("Overall win rate (all time)", wins[2], true);
+					}
+
+					embed.set_timestamp(stats.value.timestamp);
+					embed.set_footer("Stats last updated", "https://i.imgur.com/NPtgFpC.png");
+
+					dpp::message message;
+					message.add_embed(embed);
+
+					if(strlen(stats.value.badge_card.url) > 0) {
+						dpp::embed badge_card;
+						badge_card.set_title("Your badge card:");
+						badge_card.set_image(stats.value.badge_card.url);
+						badge_card.set_timestamp(stats.value.badge_card.timestamp);
+						badge_card.set_footer("Badge card last updated", "https://i.imgur.com/NPtgFpC.png");
+						message.add_embed(badge_card);
+					}
+
+					bot.direct_message_create(issuing_user.id, message);
+				} else {
+					event.reply(fmt::format("No stats found for {}. You must complete at least one XDHS draft first.", preferred_name));
+				}
+			} else {
+				event.reply(fmt::format("Sorry {}, there was an error retrieving your stats. This is not your fault! Please wait a few minutes and try again.", preferred_name));
+			}
+		} else
+		if(command_name == "help") {
+			const auto guild_id = event.command.get_guild().id;
+			std::string message = std::get<std::string>(event.get_parameter("message"));
+			if(message == "all_commands") {
+				auto result = database_get_all_help_messages(guild_id);
+				if(has_value(result)) {
+					std::string content;
+					content.reserve(DISCORD_MESSAGE_CHARACTER_LIMIT);
+					//content += "```";
+					dpp::message msg;
+					for(auto& help_message : result.value) {
+						//content += fmt::format("{:<{}} - {}\n", help_message.name, 32, help_message.summary);
+						content += fmt::format("{}\n", help_message.summary);
+					}
+					//content += "```";
+					msg.set_content(content);
+					msg.set_flags(dpp::m_ephemeral);
+					event.reply(msg);
+				} else {
+					// TODO: Log database error and return message
+				}
+			} else {
+				auto result = database_get_help_message_by_summary(guild_id, message);
+				if(has_value(result)) {
+					if(result.count == 1) {
+						dpp::message msg;
+						if(result.value.host == true) {
+							if(member_has_role(guild_id, event.command.get_issuing_user().id, XDHS_HOST_ROLE_ID)) {
+								msg.set_content(result.value.content);
+							} else {
+								msg.set_content("The Host role is required to post this help message.");
+								msg.set_flags(dpp::m_ephemeral);
+							}
+						} else {
+							msg.set_content(result.value.content);
+						}
+						event.reply(msg);
+					} else {
+						event.reply(dpp::message(fmt::format("'{}' is not a valid help topic.", message)).set_flags(dpp::m_ephemeral));
+					}
+				} else {
+					log(LOG_LEVEL_ERROR, "database_get_help_message_by_summary failed: %s", result.errstr);
+				}
+			}
+		} else {
+			log(LOG_LEVEL_ERROR, "No handler for '{}' command.", command_name);
+		}
+	});
+
+	bot.on_message_create([&bot](const dpp::message_create_t& event) {
+		const std::string& content = event.msg.content;
+		if(content[0] == '?' && content.length() > 1) {
+			if(content == "?stats" || content == "?badges" || content == "?pmbadges") {
+				// Legacy commands.
+				event.reply("This command has been removed. Use the new ``/stats`` slash command instead.");
+			} else {
+				std::string_view command = std::string_view(content).substr(1, content.length()-1);
+				auto result = database_get_help_message_by_name(GUILD_ID, command);
+				if(has_value(result)) {
+					if(result.count == 1) {
+						dpp::message msg;
+						if(result.value.host == true) {
+							if(member_has_role(GUILD_ID, event.msg.author.id, XDHS_HOST_ROLE_ID)) {
+								msg.set_content(result.value.content);
+							} else {
+								msg.set_content("The Host role is required to post this help message.");
+								msg.set_flags(dpp::m_ephemeral);
+							}
+						} else {
+							msg.set_content(result.value.content);
+						}
+						event.reply(msg);
+					} else {
+						// FIXME: Why does ephemeral not work here?
+						event.reply(dpp::message(fmt::format("'{}' is not a valid command name.", command)).set_flags(dpp::m_ephemeral));
+					}
+				} else {
+					log(LOG_LEVEL_ERROR, "database_get_help_message_by_name failed: %s", result.errstr);
+				}
+			}
+		} else
+		if(event.msg.author.id == 475744554910351370 /*Apollo*/ && event.msg.channel_id == PRE_REGISTER_CHANNEL_ID) {
+			// Add the Pod 1 and Pod 2 reaction emojis
+			bot.message_add_reaction(event.msg, POD1_EMOJI);
+			bot.message_add_reaction(event.msg, POD2_EMOJI);
 		}
 	});
 
@@ -5349,7 +6150,7 @@ int main(int argc, char* argv[]) {
 
 		int index = time_to_use_index_lookup[demask(current_sign_up_status.value.status)][demask(new_sign_up_status)];
 		time_t timestamp = time_to_use[index];
-		(void)database_sign_up_to_a_draft(guild_id, draft_code, member_id, preferred_name, timestamp, new_sign_up_status);	
+		(void)database_sign_up_to_a_draft(guild_id, draft_code, member_id, preferred_name, timestamp, new_sign_up_status);
 
 		const auto draft = database_get_event(guild_id, draft_code);
 		if(is_error(draft)) {
@@ -5370,7 +6171,7 @@ int main(int argc, char* argv[]) {
 		if(new_sign_up_status == SIGNUP_STATUS_MINUTEMAGE) {
 			time_t draft_start = unpack_and_make_timestamp(draft.value->time, draft.value->time_zone);
 			if(now >= draft_start) {
-				send_message(bot, draft.value->hosting_channel_id, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
+				send_message(bot, GUILD_ID, draft.value->hosting_channel_id, fmt::format(":warning: {} signed up as a minutemage. :warning:", preferred_name));
 			}
 		}
 	});
@@ -5388,7 +6189,7 @@ int main(int argc, char* argv[]) {
 					const std::shared_ptr<Draft_Event> draft = std::make_shared<Draft_Event>(D);
 					if(draft->signups_id != 0) {
 						redraw_signup(bot, GUILD_ID, draft->signups_id, draft->signup_channel_id, draft);
-						if(draft->reminder_id != 0) { 
+						if(draft->reminder_id != 0) {
 							redraw_signup(bot, GUILD_ID, draft->reminder_id, draft->reminder_channel_id, draft);
 						}
 					}
@@ -5400,7 +6201,7 @@ int main(int argc, char* argv[]) {
 			log(LOG_LEVEL_ERROR, "database_delete_member_from_all_sign_ups(%lu, %lu) failed", guild_id, member_id);
 		}
 
-		send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("Member '{}' (ID:{}) has left the server.", event.removed.username, event.removed.id));
+		send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("Member '{}' (ID:{}) has left the server.", event.removed.username, event.removed.id));
 	});
 
 	// Called when the bot has successfully connected to Discord.
@@ -5408,13 +6209,16 @@ int main(int argc, char* argv[]) {
 		// Discord will now call on_guild_create for each guild this bot is a member of.
 	});
 
+	bot.start(true);
 
-    bot.start(true);
+	bot.start_timer([&bot](dpp::timer t) {
+		do_role_commands(bot);
+	}, 5, [](dpp::timer){});
 
 	bot.start_timer([&bot](dpp::timer t) {
 		set_bot_presence(bot);
 
-		auto draft_code = database_get_next_upcoming_draft(GUILD_ID);	
+		auto draft_code = database_get_next_upcoming_draft(GUILD_ID);
 		if(is_error(draft_code)) {
 			return;
 		}
@@ -5433,21 +6237,21 @@ int main(int argc, char* argv[]) {
 
 		// Send the pre-draft reminder message if it hasn't already been sent.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_REMINDER_SENT)) && (draft_start - now <= SECONDS_BEFORE_DRAFT_TO_SEND_REMINDER)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending pre-draft reminder message and unlocking minutemage sign up.", draft_code.value.c_str()));
 			// TODO: Remove mentions on this when the draft is fired?
 			post_pre_draft_reminder(bot, GUILD_ID, draft_code.value.c_str());
 		}
 
 		// Ping the tentatives if they haven't already been pinged.
 		if(!(BIT_SET(draft.value->status, DRAFT_STATUS_TENTATIVES_PINGED)) && (draft_start - now <= SECONDS_BEFORE_DRAFT_TO_PING_TENTATIVES)) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending tentative reminder message, if needed.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Sending tentative reminder message, if needed.", draft_code.value.c_str()));
 			// Redraw the sign up posts so the Tentative button shows as locked.
 			ping_tentatives(bot, GUILD_ID, draft_code.value.c_str());
 		}
 
 		// Lock the draft.
 		if((draft.value->status < DRAFT_STATUS_LOCKED) && now >= draft_start) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Locking sign ups and pinging for a minutemage, if needed.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID,BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Locking sign ups and pinging for a minutemage, if needed.", draft_code.value.c_str()));
 			database_set_draft_status(GUILD_ID, draft_code.value, DRAFT_STATUS_LOCKED);
 
 			// Ping minutemages if there is an odd number of confirmed sign ups.
@@ -5458,7 +6262,7 @@ int main(int argc, char* argv[]) {
 
 		// Delete the draft after a few hours.
 		if((draft.value->status < DRAFT_STATUS_COMPLETE) && now - draft_start > SECONDS_AFTER_DRAFT_TO_DELETE_POSTS) {
-			send_message(bot, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Deleting completed draft.", draft_code.value.c_str()));
+			send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format("{} - Deleting completed draft.", draft_code.value.c_str()));
 			delete_draft_posts(bot, GUILD_ID, draft_code.value);
 			// TODO: Test this is actually working!
 			delete_temp_roles(bot, GUILD_ID, draft_code.value);
@@ -5470,16 +6274,19 @@ int main(int argc, char* argv[]) {
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
-    while(g_exit_code == 0) {
-        http_server_poll();
-    }
+	http_server_start();
+	while(g_exit_code == 0) {
+		http_server_poll();
+	}
+	http_server_end();
 
 	bot.shutdown();
 	mysql_library_end();
-    http_server_free();
-    curl_global_cleanup();
+	curl_global_cleanup();
 
 	log(LOG_LEVEL_INFO, "Exiting");
 
-    return g_exit_code;
+	//log_close();
+
+	return g_exit_code;
 }

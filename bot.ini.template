@@ -1,9 +1,9 @@
 # A template for the bot.ini file.
 
 # Only allow execution if running on this hostname. Stops accidentally running the bot on the wrong server.
-eventbot_host =
+xdhs_bot_host =
 
-# Hostname of the MySQL server. EventBot currently only supports connecting over IPV4 connections.
+# Hostname of the MySQL server. XDHS Bot currently only supports connecting over IPV4 connections.
 mysql_host = hostname
 
 # Port the MySQL server is listening on.
@@ -15,8 +15,11 @@ mysql_username = username
 # Password to use when connecting to MySQL
 mysql_password = password
 
-# Where to write the EventBot log file
-logfile_path = /var/log/eventbot.log
+# Database to read/write from
+mysql_database = database
+
+# Where to write the XDHS Bot log file
+logfile_path = /var/log/xdhs_bot.log
 
 # The Discord token for this bot. Can be found (or created) in the Discord Developer Portal
 discord_token = 123456890ABCDEF
@@ -26,3 +29,15 @@ xmage_server = xmage.today
 
 # The HTTP server API_KEY
 api_key = 1234567890ABCDEF
+
+# Imgur client secret key
+imgur_client_secret = 1234567890ABCDEF
+
+# HTTP server bind address
+bind_address = 0.0.0.0
+
+# HTTP server bind port
+bind_port = 80
+
+# FQDN of the server we're running on
+server_fqdn = http://www.some-server.com

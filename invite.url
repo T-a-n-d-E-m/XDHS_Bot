@@ -1,3 +1,5 @@
 The invite link for both the DEBUG and RELEASE version of the bot. Replace [BOT_ID] in the URL below with the ID of the version of the bot to add to a server.
 
-https://discord.com/api/oauth2/authorize?client_id=[BOT_ID]&permissions=328833690704&scope=bot
+Remember when adding the bot to the server to give it the Bot role so it has high enough permissions to do stuff!
+
+https://discord.com/api/oauth2/authorize?client_id=[BOT_ID]&permissions=329387600976&scope=bot

@@ -1,6 +1,5 @@
 #ifndef HTTP_SERVER_H_INCLUDED
 #define HTTP_SERVER_H_INCLUDED
-
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,13 +8,19 @@
 
 #include <vector>
 
-#include "mongoose.h"
-#define closesocket(x) close(x)
+#define FMT_HEADER_ONLY
+#include <fmt/format.h>
 
+// TODO: Update to version 7.14? Seems to have a lot of arbitrary breaking
+// changes that would have little to no benefit here...
+#include "mongoose.h"
+
+#include "constants.h"
+#include "result.h"
+#include "log.h"
 #include "database.h"
-#include "config.h"
 #include "curl.h"
-#include "scope_exit.h"
+#include "defer.h"
 
 #ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
@@ -41,19 +46,34 @@
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include "stb_image_write.h"
+#pragma GCC diagnostic pop
 #endif // #ifndef
 
 #include "poppler/cpp/poppler-document.h"
 #include "poppler/cpp/poppler-page.h"
 #include "poppler/cpp/poppler-page-renderer.h"
 
+#if MG_ENABLE_CUSTOM_LOG
+// Currently not used...
+void mg_log_prefix(int level, const char* file, int line, const char* fname) {
+	(void)level; (void)file; (void)line; (void)fname;
+}
 
-static const char* HTTP_SERVER_BIND_ADDRESS = "0.0.0.0";
-static const uint16_t HTTP_SERVER_BIND_PORT = 8181;
-static const char* HTTP_SERVER_FQDN = "http://harvest-sigma.bnr.la"; // FIXME: This mirrors g_config.eventbot_host
-static const char* HTTP_SERVER_DOC_ROOT = "www-root"; // Relative to executable
+void mg_log(const char* fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	log(g_log_level, fmt, args);
+	va_end(args);
+}
+#endif // MG_ENABLE_CUSTOM_LOG
 
+// Direct mongoose to write to our log file
+void log_write_char(char c, void*) {
+	fputc(c, g_log_descriptor);
+}
 
 static void start_thread(void *(*f)(void *), void *p) {
 	pthread_t thread_id = (pthread_t) 0;
@@ -76,15 +96,16 @@ struct thread_data {
 
 struct http_response {
 	int result;
-	const char* str; // Must point to heap memory - freed in main thread.
+	const char* str; // Must point to heap memory. Freed in MG_EV_WAKEUP handler.
+
+	// TODO: It appears as if mg_wakeup sends the contents of this struct, but then
+	// later we call mg_http_reply with the same data to send it again?
 };
 
 
 #define STR_OR_NULL(ptr) ((ptr != NULL ? ptr : "(NULL)"))
 
-static const char STAT_NAME_MAX_LENGTH = 32;
-
-struct Stats {
+struct Stats_In {
 	uint64_t member_id; // Called user_id when sent from sheet
 	struct {
 		char* name;
@@ -130,171 +151,171 @@ struct Stats {
 	} win_rate_all_time;
 };
 
-static Database_Result<Database_No_Value> database_touch_stats(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO stats (id, timestamp) VALUES (?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_touch_stats(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO stats (id, timestamp) VALUES (?,?)";
+	MYSQL_STATEMENT();
 
-    time_t timestamp = time(NULL);
+	time_t timestamp = time(NULL);
 
-    MYSQL_INPUT_INIT(2);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_LONGLONG, &timestamp, sizeof(timestamp));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_devotion(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO devotion (id, name, value, next) VALUES (?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_devotion(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO devotion (id, name, value, next) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    MYSQL_INPUT_INIT(4);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_STRING, stats->devotion.name, strlen(stats->devotion.name));
-    MYSQL_INPUT(2, MYSQL_TYPE_SHORT, &stats->devotion.value, sizeof(stats->devotion.value));
-    MYSQL_INPUT(3, MYSQL_TYPE_SHORT, &stats->devotion.next, sizeof(stats->devotion.next));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_STR(stats->devotion.name, strlen(stats->devotion.name));
+	MYSQL_INPUT_I32(&stats->devotion.value);
+	MYSQL_INPUT_I32(&stats->devotion.next);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_victory(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO victory (id, name, value, next) VALUES (?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_victory(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO victory (id, name, value, next) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    MYSQL_INPUT_INIT(4);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_STRING, stats->victory.name, strlen(stats->victory.name));
-    MYSQL_INPUT(2, MYSQL_TYPE_SHORT, &stats->victory.value, sizeof(stats->victory.value));
-    MYSQL_INPUT(3, MYSQL_TYPE_SHORT, &stats->victory.next, sizeof(stats->victory.next));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_STR(stats->victory.name, strlen(stats->victory.name));
+	MYSQL_INPUT_I32(&stats->victory.value);
+	MYSQL_INPUT_I32(&stats->victory.next);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_trophies(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO trophies (id, name, value, next) VALUES (?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_trophies(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO trophies (id, name, value, next) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    MYSQL_INPUT_INIT(4);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_STRING, stats->trophies.name, strlen(stats->trophies.name));
-    MYSQL_INPUT(2, MYSQL_TYPE_SHORT, &stats->trophies.value, sizeof(stats->trophies.value));
-    MYSQL_INPUT(3, MYSQL_TYPE_SHORT, &stats->trophies.next, sizeof(stats->trophies.next));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_STR(stats->trophies.name, strlen(stats->trophies.name));
+	MYSQL_INPUT_I32(&stats->trophies.value);
+	MYSQL_INPUT_I32(&stats->trophies.next);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_hero(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO hero (id, name, value, next) VALUES (?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_hero(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO hero (id, name, value, next) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    MYSQL_INPUT_INIT(4);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_STRING, stats->hero.name, strlen(stats->hero.name));
-    MYSQL_INPUT(2, MYSQL_TYPE_SHORT, &stats->hero.value, sizeof(stats->hero.value));
-    MYSQL_INPUT(3, MYSQL_TYPE_SHORT, &stats->hero.next, sizeof(stats->hero.next));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_STR(stats->hero.name, strlen(stats->hero.name));
+	MYSQL_INPUT_I32(&stats->hero.value);
+	MYSQL_INPUT_I32(&stats->hero.next);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_shark(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO shark (id, name, value, next, is_shark) VALUES (?,?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_shark(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO shark (id, name, value, next, is_shark) VALUES (?,?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    MYSQL_INPUT_INIT(5);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_STRING, stats->shark.name, strlen(stats->shark.name));
-    MYSQL_INPUT(2, MYSQL_TYPE_SHORT, &stats->shark.value, sizeof(stats->shark.value));
-    MYSQL_INPUT(3, MYSQL_TYPE_SHORT, &stats->shark.next, sizeof(stats->shark.next));
-    MYSQL_INPUT(4, MYSQL_TYPE_TINY, &stats->shark.is_shark, sizeof(stats->shark.is_shark));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(5);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_STR(stats->shark.name, strlen(stats->shark.name));
+	MYSQL_INPUT_I32(&stats->shark.value);
+	MYSQL_INPUT_I32(&stats->shark.next);
+	MYSQL_INPUT_I32(&stats->shark.is_shark);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_win_rate_all_time(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO win_rate_all_time (id, league, bonus, overall) VALUES (?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_win_rate_all_time(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO win_rate_all_time (id, league, bonus, overall) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    float chrono  = (float) stats->win_rate_all_time.chrono;
-    float bonus   = (float) stats->win_rate_all_time.bonus;
-    float overall = (float) stats->win_rate_all_time.overall;
+	float chrono  = (float) stats->win_rate_all_time.chrono;
+	float bonus   = (float) stats->win_rate_all_time.bonus;
+	float overall = (float) stats->win_rate_all_time.overall;
 
-    MYSQL_INPUT_INIT(4);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_FLOAT, &chrono, sizeof(chrono));
-    MYSQL_INPUT(2, MYSQL_TYPE_FLOAT, &bonus, sizeof(bonus));
-    MYSQL_INPUT(3, MYSQL_TYPE_FLOAT, &overall, sizeof(overall));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_F32(&chrono);
+	MYSQL_INPUT_F32(&bonus);
+	MYSQL_INPUT_F32(&overall);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_upsert_win_rate_recent(const Stats* stats) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "REPLACE INTO win_rate_recent (id, league, bonus, overall) VALUES (?,?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_upsert_win_rate_recent(const Stats_In* stats) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO win_rate_recent (id, league, bonus, overall) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    float chrono  = (float) stats->win_rate_recent.chrono;
-    float bonus   = (float) stats->win_rate_recent.bonus;
-    float overall = (float) stats->win_rate_recent.overall;
+	float chrono  = (float) stats->win_rate_recent.chrono;
+	float bonus   = (float) stats->win_rate_recent.bonus;
+	float overall = (float) stats->win_rate_recent.overall;
 
-    MYSQL_INPUT_INIT(4);
-    MYSQL_INPUT(0, MYSQL_TYPE_LONGLONG, &stats->member_id, sizeof(stats->member_id));
-    MYSQL_INPUT(1, MYSQL_TYPE_FLOAT, &chrono, sizeof(chrono));
-    MYSQL_INPUT(2, MYSQL_TYPE_FLOAT, &bonus, sizeof(bonus));
-    MYSQL_INPUT(3, MYSQL_TYPE_FLOAT, &overall, sizeof(overall));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&stats->member_id);
+	MYSQL_INPUT_F32(&chrono);
+	MYSQL_INPUT_F32(&bonus);
+	MYSQL_INPUT_F32(&overall);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
 
-void print_stats(const Stats* s) {
-	fprintf(stderr, "member_id : %lu\n", s->member_id);
-	fprintf(stderr, "devotion.name  : %s\n", s->devotion.name);
-	fprintf(stderr, "devotion.value : %d\n", s->devotion.value);
-	fprintf(stderr, "devotion.next  : %d\n", s->devotion.next);
+void print_stats(const Stats_In* s) {
+	log(LOG_LEVEL_DEBUG, "member_id : %lu", s->member_id);
+	log(LOG_LEVEL_DEBUG, "    devotion.name  : %s", s->devotion.name);
+	log(LOG_LEVEL_DEBUG, "    devotion.value : %d", s->devotion.value);
+	log(LOG_LEVEL_DEBUG, "    devotion.next  : %d", s->devotion.next);
 
-	fprintf(stderr, "victory.name  : %s\n", s->victory.name);
-	fprintf(stderr, "victory.value : %d\n", s->victory.value);
-	fprintf(stderr, "victory.next  : %d\n", s->victory.next);
+	log(LOG_LEVEL_DEBUG, "    victory.name  : %s", s->victory.name);
+	log(LOG_LEVEL_DEBUG, "    victory.value : %d", s->victory.value);
+	log(LOG_LEVEL_DEBUG, "    victory.next  : %d", s->victory.next);
 
-	fprintf(stderr, "trophies.name  : %s\n", s->trophies.name);
-	fprintf(stderr, "trophies.value : %d\n", s->trophies.value);
-	fprintf(stderr, "trophies.next  : %d\n", s->trophies.next);
+	log(LOG_LEVEL_DEBUG, "    trophies.name  : %s", s->trophies.name);
+	log(LOG_LEVEL_DEBUG, "    trophies.value : %d", s->trophies.value);
+	log(LOG_LEVEL_DEBUG, "    trophies.next  : %d", s->trophies.next);
 
-	fprintf(stderr, "hero.name  : %s\n", s->hero.name);
-	fprintf(stderr, "hero.value : %d\n", s->hero.value);
-	fprintf(stderr, "hero.next  : %d\n", s->hero.next);
+	log(LOG_LEVEL_DEBUG, "    hero.name  : %s", s->hero.name);
+	log(LOG_LEVEL_DEBUG, "    hero.value : %d", s->hero.value);
+	log(LOG_LEVEL_DEBUG, "    hero.next  : %d", s->hero.next);
 
-	fprintf(stderr, "shark.name  : %s\n", s->shark.name);
-	fprintf(stderr, "shark.value : %d\n", s->shark.value);
-	fprintf(stderr, "shark.next  : %d\n", s->shark.next);
-	fprintf(stderr, "shark.shark : %d\n", s->shark.is_shark);
+	log(LOG_LEVEL_DEBUG, "    shark.name  : %s", s->shark.name);
+	log(LOG_LEVEL_DEBUG, "    shark.value : %d", s->shark.value);
+	log(LOG_LEVEL_DEBUG, "    shark.next  : %d", s->shark.next);
+	log(LOG_LEVEL_DEBUG, "    shark.shark : %d", s->shark.is_shark);
 
-	fprintf(stderr, "win_rate_recent.chrono : %f\n", s->win_rate_recent.chrono);
-	fprintf(stderr, "win_rate_recent.bonus : %f\n", s->win_rate_recent.bonus);
-	fprintf(stderr, "win_rate_recent.overall : %f\n", s->win_rate_recent.overall);
+	log(LOG_LEVEL_DEBUG, "    win_rate_recent.chrono : %f", s->win_rate_recent.chrono);
+	log(LOG_LEVEL_DEBUG, "    win_rate_recent.bonus : %f", s->win_rate_recent.bonus);
+	log(LOG_LEVEL_DEBUG, "    win_rate_recent.overall : %f", s->win_rate_recent.overall);
 
-	fprintf(stderr, "win_rate_all_time.chrono : %f\n", s->win_rate_all_time.chrono);
-	fprintf(stderr, "win_rate_all_time.bonus : %f\n", s->win_rate_all_time.bonus);
-	fprintf(stderr, "win_rate_all_time.overall : %f\n", s->win_rate_all_time.overall);
+	log(LOG_LEVEL_DEBUG, "    win_rate_all_time.chrono : %f", s->win_rate_all_time.chrono);
+	log(LOG_LEVEL_DEBUG, "    win_rate_all_time.bonus : %f", s->win_rate_all_time.bonus);
+	log(LOG_LEVEL_DEBUG, "    win_rate_all_time.overall : %f", s->win_rate_all_time.overall);
 }
 
 http_response parse_stats(const mg_str json) {
-	Stats stats;
-	memset(&stats, 0, sizeof(Stats));
+	Stats_In stats;
+	memset(&stats, 0, sizeof(Stats_In));
 
 	{
 		char* value = mg_json_get_str(json, "$.member_id");
@@ -310,7 +331,10 @@ http_response parse_stats(const mg_str json) {
 	if(stats.devotion.name == NULL) {
 		return {400, mg_mprintf(R"({"result":"'devotion.name' key not found"})")};
 	}
-	SCOPE_EXIT(free(stats.devotion.name));
+	defer { free(stats.devotion.name); };
+	if(strlen(stats.devotion.name) > DEVOTION_BADGE_NAME_LENGTH_MAX) {
+		return {400, mg_mprintf(R"({"result":"'devotion.name' > %d characters"})", DEVOTION_BADGE_NAME_LENGTH_MAX)};
+	}
 
 	stats.devotion.value = mg_json_get_long(json, "$.devotion.value", -1);
 	if(stats.devotion.value == -1) {
@@ -326,7 +350,10 @@ http_response parse_stats(const mg_str json) {
 	if(stats.victory.name == NULL) {
 		return {400, mg_mprintf(R"({"result":"'victory.name' key not found"})")};
 	}
-	SCOPE_EXIT(free(stats.victory.name));
+	defer{ free(stats.victory.name); };
+	if(strlen(stats.victory.name) > VICTORY_BADGE_NAME_LENGTH_MAX) {
+		return {400, mg_mprintf(R"({"result":"'victory.name' > %d characters"})", VICTORY_BADGE_NAME_LENGTH_MAX)};
+	}
 
 	stats.victory.value = mg_json_get_long(json, "$.victory.value", -1);
 	if(stats.victory.value == -1) {
@@ -342,7 +369,10 @@ http_response parse_stats(const mg_str json) {
 	if(stats.trophies.name == NULL) {
 		return {400, mg_mprintf(R"({"result":"'trophies.name' key not found"})")};
 	}
-	SCOPE_EXIT(free(stats.trophies.name));
+	defer{ free(stats.trophies.name); };
+	if(strlen(stats.trophies.name) > TROPHIES_BADGE_NAME_LENGTH_MAX) {
+		return {400, mg_mprintf(R"({"result":"'trophies.name' > %d characters"})", TROPHIES_BADGE_NAME_LENGTH_MAX)};
+	}
 
 	stats.trophies.value = mg_json_get_long(json, "$.trophies.value", -1);
 	if(stats.trophies.value == -1) {
@@ -358,7 +388,10 @@ http_response parse_stats(const mg_str json) {
 	if(stats.hero.name == NULL) {
 		return {400, mg_mprintf(R"({"result":"'hero.name' key not found"})")};
 	}
-	SCOPE_EXIT(free(stats.hero.name));
+	defer { free(stats.hero.name); };
+	if(strlen(stats.hero.name) > SHARK_BADGE_NAME_LENGTH_MAX) {
+		return {400, mg_mprintf(R"({"result":"'hero.name' > %d characters"})", SHARK_BADGE_NAME_LENGTH_MAX)};
+	}
 
 	stats.hero.value = mg_json_get_long(json, "$.hero.value", -1);
 	if(stats.hero.value == -1) {
@@ -374,7 +407,10 @@ http_response parse_stats(const mg_str json) {
 	if(stats.shark.name == NULL) {
 		return {400, mg_mprintf(R"({"result":"'shark.name' key not found"})")};
 	}
-	SCOPE_EXIT(free(stats.shark.name));
+	defer { free(stats.shark.name); };
+	if(strlen(stats.shark.name) > SHARK_BADGE_NAME_LENGTH_MAX) {
+		return {400, mg_mprintf(R"({"result":"'shark.name' > %d characters"})", SHARK_BADGE_NAME_LENGTH_MAX)};
+	}
 
 	stats.shark.value = mg_json_get_long(json, "$.shark.value", -1);
 	if(stats.shark.value == -1) {
@@ -393,54 +429,55 @@ http_response parse_stats(const mg_str json) {
 
 	if(mg_json_get_num(json, "$.win_rate_recent.chrono", &stats.win_rate_recent.chrono) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_recent.chrono' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_recent.bonus", &stats.win_rate_recent.bonus) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_recent.bonus' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_recent.overall", &stats.win_rate_recent.overall) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_recent.overall' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_all_time.chrono", &stats.win_rate_all_time.chrono) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.chrono' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_all_time.bonus", &stats.win_rate_all_time.bonus) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.bonus' key not found"})")};
-	}	
+	}
 
 	if(mg_json_get_num(json, "$.win_rate_all_time.overall", &stats.win_rate_all_time.overall) == false) {
 		return {400, mg_mprintf(R"({"result":"'win_rate_all_time.overall' key not found"})")};
 	}
 
-	print_stats(&stats);
 
-    if(is_error(database_touch_stats(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_touch_stats failed"})")};
-    }
-    if(is_error(database_upsert_devotion(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_devotion failed"})")};
-    }
-    if(is_error(database_upsert_victory(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_victory failed"})")};
-    }
-    if(is_error(database_upsert_trophies(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_trophies failed"})")};
-    }
-    if(is_error(database_upsert_hero(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_hero failed"})")};
-    }
-    if(is_error(database_upsert_shark(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_hero failed"})")};
-    }
-    if(is_error(database_upsert_win_rate_recent(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_win_rate_recent failed"})")};
-    }
-    if(is_error(database_upsert_win_rate_all_time(&stats))) {
-        return {500, mg_mprintf(R"({"result":"database_upsert_win_rate_all_time failed"})")};
-    }
+	if(is_error(database_touch_stats(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_touch_stats failed"})")};
+	}
+	if(is_error(database_upsert_devotion(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_devotion failed"})")};
+	}
+	if(is_error(database_upsert_victory(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_victory failed"})")};
+	}
+	if(is_error(database_upsert_trophies(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_trophies failed"})")};
+	}
+	if(is_error(database_upsert_hero(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_hero failed"})")};
+	}
+	if(is_error(database_upsert_shark(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_hero failed"})")};
+	}
+	if(is_error(database_upsert_win_rate_recent(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_win_rate_recent failed"})")};
+	}
+	if(is_error(database_upsert_win_rate_all_time(&stats))) {
+		return {500, mg_mprintf(R"({"result":"database_upsert_win_rate_all_time failed"})")};
+	}
+
+	//print_stats(&stats);
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
@@ -465,88 +502,90 @@ struct Leaderboard {
 };
 
 void print_leaderboard(const Leaderboard* l) {
-	fprintf(stderr, "league: %s\n", l->league);
-	fprintf(stderr, "season: %d\n", l->season);
-	fprintf(stderr, "rows : [\n");
+	log(LOG_LEVEL_DEBUG, "league: %s\n", l->league);
+	log(LOG_LEVEL_DEBUG, "season: %d\n", l->season);
+	log(LOG_LEVEL_DEBUG, "rows : [\n");
 	for(size_t row = 0; row < MAX_LEADERBOARD_ROWS; ++row) {
 		if(l->rows[row].member_id != 0) {
-			fprintf(stderr, "{\n");
-			fprintf(stderr, "	member_id: %lu\n", l->rows[row].member_id);
-			fprintf(stderr, "	rank     : %d\n", l->rows[row].rank);
-			fprintf(stderr, "	average  : %f\n", l->rows[row].average);
-			fprintf(stderr, "	drafts   : %d\n", l->rows[row].drafts);
-			fprintf(stderr, "	trophies : %d\n", l->rows[row].trophies);
-			fprintf(stderr, "	win_rate : %f\n", l->rows[row].win_rate);
-			fprintf(stderr, "	points   : [ ");
+			log(LOG_LEVEL_DEBUG, "{\n");
+			log(LOG_LEVEL_DEBUG, "	member_id: %lu\n", l->rows[row].member_id);
+			log(LOG_LEVEL_DEBUG, "	rank     : %d\n", l->rows[row].rank);
+			log(LOG_LEVEL_DEBUG, "	average  : %f\n", l->rows[row].average);
+			log(LOG_LEVEL_DEBUG, "	drafts   : %d\n", l->rows[row].drafts);
+			log(LOG_LEVEL_DEBUG, "	trophies : %d\n", l->rows[row].trophies);
+			log(LOG_LEVEL_DEBUG, "	win_rate : %f\n", l->rows[row].win_rate);
+			log(LOG_LEVEL_DEBUG, "	points   : [ ");
 			for(size_t week = 0; week < MAX_WEEKS_PER_SEASON; ++week) {
-				fprintf(stderr, "%d, ", l->rows[row].points[week]);
+				log(LOG_LEVEL_DEBUG, "%d, ", l->rows[row].points[week]);
 			}
-			fprintf(stderr, "]\n");
-			fprintf(stderr, "}\n");
+			log(LOG_LEVEL_DEBUG, "]\n");
+			log(LOG_LEVEL_DEBUG, "}\n");
 		}
 	}
-	fprintf(stderr, "]\n");
+	log(LOG_LEVEL_DEBUG, "]\n");
 }
 
 static Database_Result<Database_No_Value> database_upsert_leaderboard(const Leaderboard* leaderboard) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-	static const char* query = R"(REPLACE INTO leaderboards (
-        league,    -- 0
-        season,    -- 1
-        member_id, -- 2
-        rank,      -- 3
-        week_01,   -- 4
-        week_02,   -- 5
-        week_03,   -- 6
-        week_04,   -- 7
-        week_05,   -- 8
-        week_06,   -- 9
-        week_07,   -- 10
-        week_08,   -- 11
-        week_09,   -- 12
-        week_10,   -- 13
-        week_11,   -- 14
-        week_12,   -- 15
-        week_13,   -- 16
-        points,    -- 17
-        average,   -- 18
-        drafts,    -- 19
-        trophies,  -- 20
-        win_rate)  -- 21
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = R"(
+		REPLACE INTO leaderboards(
+			league,    -- 0
+			season,    -- 1
+			member_id, -- 2
+			rank,      -- 3
+			week_01,   -- 4
+			week_02,   -- 5
+			week_03,   -- 6
+			week_04,   -- 7
+			week_05,   -- 8
+			week_06,   -- 9
+			week_07,   -- 10
+			week_08,   -- 11
+			week_09,   -- 12
+			week_10,   -- 13
+			week_11,   -- 14
+			week_12,   -- 15
+			week_13,   -- 16
+			points,    -- 17
+			average,   -- 18
+			drafts,    -- 19
+			trophies,  -- 20
+			win_rate)  -- 21
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		;)";
 
-    for(int row = 0; row < leaderboard->row_count; ++row) {
-        MYSQL_STATEMENT();
+	for(int row = 0; row < leaderboard->row_count; ++row) {
+		MYSQL_STATEMENT();
 
-        MYSQL_INPUT_INIT(22);
-            MYSQL_INPUT( 0, MYSQL_TYPE_STRING, leaderboard->league, strlen(leaderboard->league));
-            MYSQL_INPUT( 1, MYSQL_TYPE_LONG, &leaderboard->season, sizeof(leaderboard->season));
-            MYSQL_INPUT( 2, MYSQL_TYPE_LONGLONG, &leaderboard->rows[row].member_id, sizeof(leaderboard->rows[row].member_id));
-            MYSQL_INPUT( 3, MYSQL_TYPE_LONG, &leaderboard->rows[row].rank, sizeof(leaderboard->rows[row].rank));
+		MYSQL_INPUT_INIT(22);
+		MYSQL_INPUT_STR(leaderboard->league, strlen(leaderboard->league));
+		MYSQL_INPUT_I32(&leaderboard->season);
+		MYSQL_INPUT_I64(&leaderboard->rows[row].member_id);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].rank);
 
-            MYSQL_INPUT( 4, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 0], sizeof(leaderboard->rows[row].points[ 0]));
-            MYSQL_INPUT( 5, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 1], sizeof(leaderboard->rows[row].points[ 1]));
-            MYSQL_INPUT( 6, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 2], sizeof(leaderboard->rows[row].points[ 2]));
-            MYSQL_INPUT( 7, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 3], sizeof(leaderboard->rows[row].points[ 3]));
-            MYSQL_INPUT( 8, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 4], sizeof(leaderboard->rows[row].points[ 4]));
-            MYSQL_INPUT( 9, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 5], sizeof(leaderboard->rows[row].points[ 5]));
-            MYSQL_INPUT(10, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 6], sizeof(leaderboard->rows[row].points[ 6]));
-            MYSQL_INPUT(11, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 7], sizeof(leaderboard->rows[row].points[ 7]));
-            MYSQL_INPUT(12, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 8], sizeof(leaderboard->rows[row].points[ 8]));
-            MYSQL_INPUT(13, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[ 9], sizeof(leaderboard->rows[row].points[ 9]));
-            MYSQL_INPUT(14, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[10], sizeof(leaderboard->rows[row].points[10]));
-            MYSQL_INPUT(15, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[11], sizeof(leaderboard->rows[row].points[11]));
-            MYSQL_INPUT(16, MYSQL_TYPE_LONG, &leaderboard->rows[row].points[12], sizeof(leaderboard->rows[row].points[12]));
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 0]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 1]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 2]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 3]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 4]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 5]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 6]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 7]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 8]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[ 9]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[10]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[11]);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points[12]);
 
-            MYSQL_INPUT(17, MYSQL_TYPE_LONG, &leaderboard->rows[row].points, sizeof(leaderboard->rows[row].points));
-            MYSQL_INPUT(18, MYSQL_TYPE_FLOAT, &leaderboard->rows[row].average, sizeof(leaderboard->rows[row].average));
-            MYSQL_INPUT(19, MYSQL_TYPE_LONG, &leaderboard->rows[row].drafts, sizeof(leaderboard->rows[row].drafts));
-            MYSQL_INPUT(20, MYSQL_TYPE_LONG, &leaderboard->rows[row].trophies, sizeof(leaderboard->rows[row].trophies));
-            MYSQL_INPUT(21, MYSQL_TYPE_FLOAT, &leaderboard->rows[row].win_rate, sizeof(leaderboard->rows[row].win_rate));
-        MYSQL_INPUT_BIND_AND_EXECUTE();
-    }
+		MYSQL_INPUT_I32(&leaderboard->rows[row].points);
+		MYSQL_INPUT_F32(&leaderboard->rows[row].average);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].drafts);
+		MYSQL_INPUT_I32(&leaderboard->rows[row].trophies);
+		MYSQL_INPUT_F32(&leaderboard->rows[row].win_rate);
+		MYSQL_INPUT_BIND_AND_EXECUTE();
+	}
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
 http_response parse_leaderboards(const mg_str json) {
@@ -557,7 +596,7 @@ http_response parse_leaderboards(const mg_str json) {
 	if(leaderboard.league == NULL) {
 		return {400, mg_mprintf(R"({"result":"'league' key not found"})")};
 	}
-	SCOPE_EXIT(free(leaderboard.league));
+	defer { free(leaderboard.league); };
 
 	leaderboard.season = mg_json_get_long(json, "$.season", -1);
 	if(leaderboard.season == -1) {
@@ -631,11 +670,11 @@ http_response parse_leaderboards(const mg_str json) {
 		leaderboard.row_count++;
 	}
 
-	print_leaderboard(&leaderboard);
+	//print_leaderboard(&leaderboard);
 
-    if(is_error(database_upsert_leaderboard(&leaderboard))) {
-	    return {200, mg_mprintf(R"({"result":"database_upsert_leaderboard() failed"})")};
-    }
+	if(is_error(database_upsert_leaderboard(&leaderboard))) {
+		return {200, mg_mprintf(R"({"result":"database_upsert_leaderboard() failed"})")};
+	}
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
@@ -647,7 +686,7 @@ http_response make_thumbnail(const mg_str json) {
 	if(url == NULL) {
 		return {400, strdup("{\"result\":\"malformed JSON\"}")};
 	}
-	SCOPE_EXIT(free((void*)url));
+	defer { free((void*)url); };
 
 	const char* filename = NULL;
 	for(size_t i = strlen(url)-1; i > 0; --i) {
@@ -660,17 +699,17 @@ http_response make_thumbnail(const mg_str json) {
 	char local_file_path[FILENAME_MAX];
 	snprintf(local_file_path, FILENAME_MAX, "%s/static/badge_thumbnails/%s", HTTP_SERVER_DOC_ROOT, filename);
 	if(access(local_file_path, F_OK) == 0) {
-		return {200, mg_mprintf(R"({"result":"%s"})", filename)};
+		return {200, mg_mprintf(R"({"result":"%s:%d/static/badge_thumbnails/%s"})", g_config.server_fqdn, g_config.bind_port, filename)};
 	} else {
-        log(LOG_LEVEL_DEBUG, "%s: downloadfile(%s)", __FUNCTION__, url);
+		log(LOG_LEVEL_DEBUG, "%s: downloadfile(%s)", __FUNCTION__, url);
 		auto buffer = download_file(url);
 		if(has_value(buffer)) {
-			SCOPE_EXIT(free(buffer.value.data));
+			defer { free(buffer.value.data); };
 
 			int width, height, channels;
 			uint8_t* img = stbi_load_from_memory(buffer.value.data, buffer.value.size, &width, &height, &channels, 4);
 			if(img != NULL) {
-				SCOPE_EXIT(stbi_image_free(img));
+				defer{ stbi_image_free(img); };
 
 				uint8_t* resized = (uint8_t*)alloca(THUMBNAIL_SIZE*THUMBNAIL_SIZE*4);
 				stbir_resize_uint8_srgb(img, width, height, 0, resized, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 0, STBIR_RGBA);
@@ -678,7 +717,7 @@ http_response make_thumbnail(const mg_str json) {
 				snprintf(local_file_path, FILENAME_MAX, "%s/static/badge_thumbnails/%s", HTTP_SERVER_DOC_ROOT, filename);
 				stbi_write_png_compression_level = 9;
 				if(stbi_write_png(local_file_path, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 4, resized, THUMBNAIL_SIZE*4) != 0) {
-					return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_thumbnails/%s"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, filename)};
+					return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_thumbnails/%s"})", g_config.server_fqdn, g_config.bind_port, filename)};
 				} else {
 					return {500, mg_mprintf(R"({"result":"%s"})", "saving file failed")};
 				}
@@ -691,6 +730,21 @@ http_response make_thumbnail(const mg_str json) {
 	}
 }
 
+static Database_Result<Database_No_Value> database_upsert_badge_card(const uint64_t member_id, const char* url) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO badges (id, url, timestamp) VALUES (?,?,?)";
+	MYSQL_STATEMENT();
+
+	time_t timestamp = time(NULL);
+
+	MYSQL_INPUT_INIT(3);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_STR(url, strlen(url));
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
 
 http_response pdf_to_png(const mg_str json) {
 	int width;
@@ -739,65 +793,97 @@ http_response pdf_to_png(const mg_str json) {
 	if(mem == NULL) {
 		return {400, mg_mprintf(R"({"result":"'member_id' key not found"})")};
 	}
-	SCOPE_EXIT(free(mem));
+	defer{ free(mem); };
 
-    poppler::document *pdf = poppler::document::load_from_raw_data(mem, mem_len);
-    if(pdf == NULL) {
+	poppler::document *pdf = poppler::document::load_from_raw_data(mem, mem_len);
+	if(pdf == NULL) {
 		return {400, mg_mprintf(R"({"result":"could not open PDF"})")};
 	}
-    SCOPE_EXIT(delete pdf);
-    int page_count = pdf->pages();
-    if(page_count == 0) {
+	defer{ delete pdf; };
+	int page_count = pdf->pages();
+	if(page_count == 0) {
 		return {400, mg_mprintf(R"({"result":"no pages"})")};
 	}
-    poppler::page *page = pdf->create_page(0);
-    SCOPE_EXIT(delete page);
-    poppler::page_renderer renderer;
-    poppler::image img = renderer.render_page(page, dpi, dpi, 0, 0, width, height);
+	poppler::page *page = pdf->create_page(0);
+	defer{ delete page; };
+	poppler::page_renderer renderer;
+	renderer.set_render_hints(poppler::page_renderer::text_antialiasing | poppler::page_renderer::text_hinting);
+	renderer.set_image_format(poppler::image::format_enum::format_rgb24);
+	poppler::image img = renderer.render_page(page, dpi, dpi, 0, 0, width, height);
 
-    time_t timestamp = time(NULL);
-	char file_path[FILENAME_MAX];
-	snprintf(file_path, FILENAME_MAX, "%s/static/badge_cards/%lu_%lu.png", HTTP_SERVER_DOC_ROOT, member_id, timestamp);
-    img.save(file_path, "png");
+	int size;
+	unsigned char* png = stbi_write_png_to_mem((const unsigned char*)img.data(), img.bytes_per_row(), img.width(), img.height(), 3, &size);
+	if(png == NULL) {
+		return {500, mg_mprintf(R"({"result":"Error decoding PDF to PNG"})")};
+	}
+	defer{ STBIW_FREE(png); };
 
-	return {201, mg_mprintf(R"({"result":"%s:%d/static/badge_cards/%lu_%lu.png"})", HTTP_SERVER_FQDN, HTTP_SERVER_BIND_PORT, member_id, timestamp)};
+	auto upload = upload_img_to_imgur((const char*)png, size, g_config.imgur_client_secret);
+	if(is_error(upload)) {
+		return {500, mg_mprintf(R"({"result":"Error uploading to Imgur: %s"})", upload.errstr)};
+	}
+	defer{ free(upload.value.data); };
+
+	mg_str result_json = {(const char*)upload.value.data, upload.value.size};
+	char* url = mg_json_get_str(result_json, "$.data.link");
+	if(url == NULL) {
+		return {500, mg_mprintf(R"({"result":"JSON parse error"})")};
+	}
+
+	auto db_result = database_upsert_badge_card(member_id, url);
+	if(is_error(db_result)) {
+		// NOTE: This is an error, but not treated as fatal.
+		log(LOG_LEVEL_ERROR, db_result.errstr);
+	}
+
+	return {201, mg_mprintf(R"({"result":"%s"})", url)};
 }
 
 static Database_Result<Database_No_Value> database_clear_commands() {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "TRUNCATE TABLE commands";
-    MYSQL_STATEMENT();
-    MYSQL_EXECUTE();
-    MYSQL_RETURN();
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "TRUNCATE TABLE commands";
+	MYSQL_STATEMENT();
+	MYSQL_EXECUTE();
+	MYSQL_RETURN();
 }
 
-static Database_Result<Database_No_Value> database_insert_command(const char* name, const bool team, const char* content) {
-    MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, "XDHS", g_config.mysql_port);
-    static const char* query = "INSERT INTO commands (name, team, content) VALUES (?,?,?)";
-    MYSQL_STATEMENT();
+static Database_Result<Database_No_Value> database_insert_command(const char* name, const char team, const char hidden, const char* content, const char* summary) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "INSERT INTO commands (name, team, hidden, content, summary) VALUES (?,?,?,?,?)";
+	MYSQL_STATEMENT();
 
-    MYSQL_INPUT_INIT(3);
-    MYSQL_INPUT(0, MYSQL_TYPE_STRING, name, strlen(name));
-    MYSQL_INPUT(1, MYSQL_TYPE_TINY, team, sizeof(team));
-    MYSQL_INPUT(2, MYSQL_TYPE_STRING, content, strlen(content));
-    MYSQL_INPUT_BIND_AND_EXECUTE();
+	MYSQL_INPUT_INIT(5);
+	MYSQL_INPUT_STR(name, strlen(name));
+	MYSQL_INPUT_I8(&team);
+	MYSQL_INPUT_I8(&hidden);
+	MYSQL_INPUT_STR(content, strlen(content));
+	MYSQL_INPUT_STR(summary, strlen(summary));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
 
-    MYSQL_RETURN();
+	MYSQL_RETURN();
 }
 
 http_response parse_commands(const mg_str json) {
-    struct Command {
-        char* name;
-        bool team;
-        char* text;
+	struct Command {
+		char* name;
+		bool team;
+		bool hidden;
+		char* text;
+		char* summary;
+	};
 
-        ~Command() {
-            free(name);
-            free(text);
-        }
-    };
+	std::vector<Command> commands;
+	commands.reserve(100);
 
-    std::vector<Command> commands;
+	auto cleanup = [&commands]() {
+		for(auto& c : commands) {
+			free(c.name);
+			free(c.text);
+			free(c.summary);
+		}
+	};
+
+	defer{ cleanup(); };
 
 	int index = 0;
 	while(true) {
@@ -815,41 +901,67 @@ http_response parse_commands(const mg_str json) {
 		}
 		const mg_str row = {json.ptr + offset, (size_t) length};
 
-        Command cmd = {NULL, 0, NULL};
+		commands.push_back({NULL, false, false, NULL, NULL});
 
-		cmd.name = mg_json_get_str(row, "$.name");
-		if(cmd.name == NULL) {
+		commands.back().name = mg_json_get_str(row, "$.name");
+		if(commands.back().name == NULL) {
 			return {400, mg_mprintf(R"({"result":"'name' key not found"})")};
 		}
-		//SCOPE_EXIT(free((void*)name));
 
-		cmd.text = mg_json_get_str(row, "$.text");
-		if(cmd.text == NULL) {
+		commands.back().text = mg_json_get_str(row, "$.text");
+		if(commands.back().text == NULL) {
 			return {400, mg_mprintf(R"({"result":"'text' key not found"})")};
 		}
-		//SCOPE_EXIT(free((void*)text));
 
-		//bool team;
-		if(mg_json_get_bool(row, "$.team", &cmd.team) == false) {
+		commands.back().summary = mg_json_get_str(row, "$.summary");
+		if(commands.back().summary == NULL) {
+			return {400, mg_mprintf(R"({"result":"'summary' key not found"})")};
+		}
+
+		if(mg_json_get_bool(row, "$.team", &commands.back().team) == false) {
 			return {400, mg_mprintf(R"({"result":"'team' key not found"})")};
 		}
 
-		fprintf(stderr, "command %d: %s, %d, %s\n", index, cmd.name, cmd.team, cmd.text);
+		if(mg_json_get_bool(row, "$.hide", &commands.back().hidden) == false) {
+			return {400, mg_mprintf(R"({"result":"'hide' key not found"})")};
+		}
+
+		//log(LOG_LEVEL_DEBUG, "%s: command %d: %s", __FUNCTION__, index, commands.back().name);
 
 		index++;
 	}
 
-    if(is_error(database_clear_commands())) {
-    	return {500, mg_mprintf(R"({"result":"database_clear_commands() failed"})")};
-    }
+	// NOTE: This can hang the thread if MariaDB is stuck waiting for a lock.
+	// In the MariaDB terminal type `show full processlist` to see a list of connect clients
+	// and `kill [id]` the client that is stuck holding the lock.
+	if(is_error(database_clear_commands())) {
+		return {500, mg_mprintf(R"({"result":"Internal server error: database_clear_commands() failed"})")};
+	}
 
-    for(auto& c : commands) {
-        if(is_error(database_insert_command(c.name, c.team, c.text))) {
-    	    return {500, mg_mprintf(R"({"result":"database_insert_command() failed"})")};
-        }
-    }
+	for(auto& c : commands) {
+		if(is_error(database_insert_command(c.name, c.team, c.hidden, c.text, c.summary))) {
+			return {500, mg_mprintf(R"({"result":"Internal server error: database_insert_command() failed"})")};
+		} else {
+			log(LOG_LEVEL_INFO, "%s: Added command: %s", __FUNCTION__, c.name);
+		}
+	}
 
 	return {200, mg_mprintf(R"({"result":"ok"})")};
+}
+
+Database_Result<Database_No_Value> database_update_xmage_version(const char* version) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "REPLACE INTO xmage_version (version, timestamp) VALUES (?,?)";
+	MYSQL_STATEMENT();
+
+	time_t timestamp = time(NULL);
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_STR(version, strlen(version));
+	MYSQL_INPUT_I64(&timestamp);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
 }
 
 http_response parse_xmage_version(const mg_str json) {
@@ -857,11 +969,75 @@ http_response parse_xmage_version(const mg_str json) {
 	if(xmage_version == NULL) {
 		return {400, mg_mprintf(R"({"result":"'version' key not found"})")};
 	}
-	SCOPE_EXIT(free(xmage_version));
+	defer{ free(xmage_version); };
 
-	fprintf(stderr, "XMage version: %s\n", xmage_version);
-	//database_update_xmage_version(...);
+	log(LOG_LEVEL_DEBUG, "XMage version: %s\n", xmage_version);
 
+	database_update_xmage_version(xmage_version);
+
+	return {200, mg_mprintf(R"({"result":"ok"})")};
+}
+
+Database_Result<Database_No_Value> database_add_role_command(uint64_t guild_id, uint64_t member_id, int action, char* role) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "INSERT INTO role_commands (guild_id, member_id, action, role) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_I64(&guild_id);
+	MYSQL_INPUT_I64(&member_id);
+	MYSQL_INPUT_I32(&action);
+	MYSQL_INPUT_STR(role, strlen(role));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
+http_response role_command(const mg_str json) {
+	uint64_t member_id = 0;
+	{
+		char* value = mg_json_get_str(json, "$.member_id");
+		if(value != NULL) {
+			member_id = strtoull(value, NULL, 10);
+			free(value);
+		} else {
+			return {400, mg_mprintf(R"({"result":"'member_id' key not found"})")};
+		}
+	}
+
+	uint64_t guild_id = 0;
+	{
+		char* value = mg_json_get_str(json, "$.guild_id");
+		if(value != NULL) {
+			guild_id = strtoull(value, NULL, 10);
+			free(value);
+		} else {
+			return {400, mg_mprintf(R"({"result":"'guild_id' key not found"})")};
+		}
+	}
+	if(guild_id == 0) {
+		return {400, mg_mprintf(R"({"result":"Invalid value for 'guild_id' key"})")};
+	}
+
+	int action = mg_json_get_long(json, "$.action", -1);
+	if(action == -1) {
+		return {400, mg_mprintf(R"({"result":"'action' key not found"})")};
+	}
+
+	if((action < 0) || (action > 1)) {
+		return {400, mg_mprintf(R"({"result":"Invalid value '%d' for 'action' key"})", action)};
+	}
+
+	char* role_name = mg_json_get_str(json, "$.role_name");
+	if(role_name == NULL) {
+			return {400, mg_mprintf(R"({"result":"'role_name' key not found"})")};
+	}
+	defer { free(role_name); };
+
+	auto result = database_add_role_command(guild_id, member_id, action, role_name);
+	if(is_error(result)) {
+		return {500, mg_mprintf(R"({"result":"database_add_role_command failed"})")};
+	}
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
 
@@ -870,11 +1046,11 @@ static void *post_thread_function(void *param) {
 	thread_data *p = (thread_data*) param;
 
 	// Free all resources that were passed in param
-	SCOPE_EXIT(free((void*) p->content_type.ptr));
-	SCOPE_EXIT(free((void*) p->api_key.ptr));
-	SCOPE_EXIT(free((void*) p->uri.ptr));
-	SCOPE_EXIT(free((void*) p->body.ptr));
-	SCOPE_EXIT(free(p));
+	defer{ free((void*) p->content_type.ptr); };
+	defer{ free((void*) p->api_key.ptr); };
+	defer{ free((void*) p->uri.ptr); };
+	defer{ free((void*) p->body.ptr); };
+	defer{ free(p); };
 
 #if 0
 	MG_DEBUG(("Content-Type: %s\n", STR_OR_NULL(p->content_type.ptr)));
@@ -886,15 +1062,15 @@ static void *post_thread_function(void *param) {
 	http_response response;
 
 	if(p->content_type.ptr == NULL || mg_strcmp(p->content_type, mg_str("application/json")) != 0) {
-		response = {400, strdup("JSON payload required")};
+		response = {400, strdup(R"({"result":"JSON payload required"})")};
 	} else
 	if(p->api_key.ptr == NULL || mg_strcmp(p->api_key, mg_str(g_config.api_key)) != 0) {
-		response = {401, strdup("Invalid API key")};
+		response = {401, strdup(R"({"result":"Invalid API key"})")};
 	} else {
-		if(mg_match(p->uri, mg_str("/api/v1/stats"), NULL)) {
+		if(mg_match(p->uri, mg_str("/api/v1/upload_stats"), NULL)) {
 			response = parse_stats(p->body);
 		} else
-		if(mg_match(p->uri, mg_str("/api/v1/leaderboards"), NULL)) {
+		if(mg_match(p->uri, mg_str("/api/v1/upload_leaderboard"), NULL)) {
 			response = parse_leaderboards(p->body);
 		} else
 		if(mg_match(p->uri, mg_str("/api/v1/upload_commands"), NULL)) {
@@ -903,13 +1079,16 @@ static void *post_thread_function(void *param) {
 		if(mg_match(p->uri, mg_str("/api/v1/make_thumbnail"), NULL)) {
 			response = make_thumbnail(p->body);
 		} else
-		if(mg_match(p->uri, mg_str("/api/v1/xmage_version"), NULL)) {
+		if(mg_match(p->uri, mg_str("/api/v1/update_xmage_version"), NULL)) {
 			response = parse_xmage_version(p->body);
 		} else
 		if(mg_match(p->uri, mg_str("/api/v1/pdf2png"), NULL)) {
 			response = pdf_to_png(p->body);
+		} else
+		if(mg_match(p->uri, mg_str("/api/v1/role_command"), NULL)) {
+			response = role_command(p->body);
 		} else {
-			response = {400, strdup("Invalid API endpoint")};
+			response = {400, strdup(R"({"result":"Invalid API endpoint"})")};
 		}
 	}
 
@@ -918,13 +1097,20 @@ static void *post_thread_function(void *param) {
 	return NULL;
 }
 
-static void http_server_func(mg_connection *con, int event, void *event_data, void *fn_data) {
-	(void)fn_data;
-
+static void http_server_func(mg_connection *con, int event, void *event_data) {
 	if (event == MG_EV_HTTP_MSG) {
 		mg_http_message *message = (mg_http_message *) event_data;
-		
+
+		log(LOG_LEVEL_DEBUG, "%s: Method:%.*s URI:%.*s, Proto:%.*s Body:\"%.*s\"",
+			__FUNCTION__,
+			message->method.len, STR_OR_NULL(message->method.ptr),
+			message->uri.len, STR_OR_NULL(message->uri.ptr),
+			message->proto.len, STR_OR_NULL(message->proto.ptr),
+			message->body.len, STR_OR_NULL(message->body.ptr)
+		);
+
 		if(mg_match(message->method, mg_str("GET"), NULL)) {
+			// TODO: Serve from a thread too?
 			mg_http_serve_opts opts;
 			memset(&opts, 0, sizeof(mg_http_serve_opts));
 			opts.root_dir = HTTP_SERVER_DOC_ROOT;
@@ -934,8 +1120,8 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 		if(mg_match(message->method, mg_str("POST"), NULL)) {
 			thread_data *data = (thread_data*) calloc(1, sizeof(*data)); // Freed in worker thread
 			if(data != NULL) {
-				// Get the Content-Type and API_KEY from the HTTP headers.
 				for(int i = 0; i < MG_MAX_HTTP_HEADERS && message->headers[i].name.len > 0; ++i) {
+					// Get the Content-Type and API_KEY from the HTTP headers.
 					MG_DEBUG(("header[%d]->%.*s:%.*s", i, message->headers[i].name.len, message->headers[i].name.ptr, message->headers[i].value.len, message->headers[i].value.ptr));
 					if(mg_strcmp(message->headers[i].name, mg_str("Content-Type")) == 0) {
 						data->content_type = mg_strdup(message->headers[i].value);
@@ -945,12 +1131,21 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 					}
 				}
 
-				data->conn_id = con->id;
-				data->mgr     = con->mgr;
-				data->uri     = mg_strdup(message->uri);
-				data->body    = mg_strdup(message->body);
+				// Early out bad requests.
+				if(data->content_type.ptr == NULL || data->api_key.ptr == NULL) {
+					if(data->content_type.ptr != NULL) free((void*)data->content_type.ptr);
+					if(data->api_key.ptr != NULL) free((void*)data->api_key.ptr);
+					free(data);
 
-				start_thread(post_thread_function, data);  // Start thread and pass data
+					mg_http_reply(con, 500, NULL, "");
+				} else {
+					data->conn_id = con->id;
+					data->mgr     = con->mgr;
+					data->uri     = mg_strdup(message->uri);
+					data->body    = mg_strdup(message->body);
+
+					start_thread(post_thread_function, data);
+				}
 			} else {
 				mg_http_reply(con, 500, NULL, "");
 			}
@@ -959,33 +1154,32 @@ static void http_server_func(mg_connection *con, int event, void *event_data, vo
 		}
 	} else
 	if (event == MG_EV_WAKEUP) {
+		// Back from the handler thread. Send the response.
 		http_response* response = (http_response*) ((mg_str*)event_data)->ptr;
-		mg_http_reply(con,
-				response->result,
-				"",
-				"%s\n", response->str);
+		mg_http_reply(con, response->result, "", "%s\n", response->str);
 
 		free((void*)response->str);
 	}
 }
 
-mg_mgr g_mgr;
+static mg_mgr g_mgr;
 
-void http_server_init() {
-	mg_log_level = MG_LL_DEBUG;
-	mg_mgr_init(&g_mgr);
+static void http_server_start() {
 	mg_log_set(MG_LL_DEBUG);
-	char listen[32];
-	snprintf(listen, 32, "%s:%d", HTTP_SERVER_BIND_ADDRESS, HTTP_SERVER_BIND_PORT);
+	mg_log_set_fn(log_write_char, NULL);
+	mg_mgr_init(&g_mgr);
+	char listen[64];
+	snprintf(listen, 64, "%s:%d", g_config.bind_address, g_config.bind_port);
 	mg_http_listen(&g_mgr, listen, http_server_func, NULL);
 	mg_wakeup_init(&g_mgr);
 }
 
-void http_server_poll() {
+static void http_server_poll() {
 	mg_mgr_poll(&g_mgr, 1000);
 }
 
-void http_server_free() {
+
+static void http_server_end() {
 	mg_mgr_free(&g_mgr);
 }
 

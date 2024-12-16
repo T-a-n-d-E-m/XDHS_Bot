@@ -1,6 +1,8 @@
 bot.ini
-eventbot
-eventbot.log
+xdhs_bot
+xdhs_bot_dev
+xdhs_bot.log
+schema.sql
 *.swp
 
 # Prerequisites
