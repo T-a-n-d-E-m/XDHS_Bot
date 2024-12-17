@@ -466,8 +466,8 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"OTJ", "Outlaws of Thunder Junction",                 1, false},
 	{"MH3", "Modern Horizons 3",                           1, false},
 	{"BLB", "Bloomburrow",                                 1, false},
-	{"DSK", "Duskmourn: House of Horror",                  0, false}, // TODO: Needs art
-	{"FDN", "Foundations",                                 0, false}, // TODO: Needs art
+	{"DSK", "Duskmourn: House of Horror",                  1, false},
+	{"FDN", "Foundations",                                 1, false},
 
 	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
