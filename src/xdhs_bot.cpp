@@ -297,12 +297,16 @@ static void send_message(dpp::cluster& bot, const u64 guild_id, const u64 channe
 }
 
 static bool member_has_role(const u64 guild_id, const u64 member_id, const u64 role_id) {
-	dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
-	std::vector<dpp::snowflake> roles = member.get_roles();
-	for(auto role : roles) {
-		if(role == role_id) {
-			return true;
+	try {
+		dpp::guild_member member = dpp::find_guild_member(guild_id, member_id);
+		std::vector<dpp::snowflake> roles = member.get_roles();
+		for(auto role : roles) {
+			if(role == role_id) {
+				return true;
+			}
 		}
+	} catch (const dpp::cache_exception &e) {
+		log(LOG_LEVEL_ERROR, "dpp::find_guild_member(%llu) threw an exception in member_has_role(): %s", e.what());
 	}
 	return false;
 }
@@ -3074,22 +3078,26 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 // Users on Discord have two names per guild: Their global name or an optional per-guild nickname.
 static std::string get_members_preferred_name(const u64 guild_id, const u64 member_id) {
 	std::string preferred_name;
-	const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // FIXME: This can throw!
-	const std::string nickname = member.get_nickname();
-	if(nickname.length() > 0) {
-		preferred_name = nickname;
-	} else {
-		const dpp::user* user = dpp::find_user(member_id);
-		if(user != nullptr) {
-			if(user->global_name.length() > 0) {
-				preferred_name = user->global_name;
-			} else {
-				preferred_name = user->username;
-			}
+	try {
+		const dpp::guild_member member = dpp::find_guild_member(guild_id, member_id); // FIXME: This can throw!
+		const std::string nickname = member.get_nickname();
+		if(nickname.length() > 0) {
+			preferred_name = nickname;
 		} else {
-			// TODO: Now what? Return an error message?
-			log(LOG_LEVEL_ERROR, "Failed to find preferred name for member %lu.", member_id);
+			const dpp::user* user = dpp::find_user(member_id);
+			if(user != nullptr) {
+				if(user->global_name.length() > 0) {
+					preferred_name = user->global_name;
+				} else {
+					preferred_name = user->username;
+				}
+			} else {
+				// TODO: Now what? Return an error message?
+				log(LOG_LEVEL_ERROR, "Failed to find preferred name for member %lu.", member_id);
+			}
 		}
+	} catch (...) {
+		log(LOG_LEVEL_ERROR, "dpp::find_guild_member threw an exception oin get_members_preferred_name");
 	}
 	return preferred_name;
 }
@@ -3848,71 +3856,77 @@ static void do_role_commands(dpp::cluster& bot) {
 					for(const auto [role_id, role] : role_map) {
 						if(role.name == command.role) {
 							bool edit_member = false;
-							dpp::guild_member member = dpp::find_guild_member(GUILD_ID, command.member_id);
-							std::string message;
-							if(command.action == 0) { // del
-								// Check if the user already has the role. Unlike add_role it is not an error to remove a role they don't have.
-								auto& roles = member.get_roles();
-								if(std::find(roles.begin(), roles.end(), role_id) != roles.end()) {
-									// Found, remove the role
-									edit_member = true;
-									member.remove_role(role_id);
-								} else {
-									// Doesn't have the role.
-									const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
-									send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
-										fmt::format(":orange_circle: {} doesn't have the '{}' role",
-											preferred_name,
-											command.role)
-									);
-									auto del_result = database_del_role_command(command.row_id);
-									if(is_error(del_result)) {
-										log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
-									}
-								}
-							} else
-							if(command.action == 1) { // add
-								// Check if the user already has the role. Discord returns an error if a member already has a role so we have to check.
-								auto& roles = member.get_roles();
-								if(std::find(roles.begin(), roles.end(), role_id) == roles.end()) {
-									// Not found, add the role
-									member.add_role(role_id);
-									edit_member = true;
-								} else {
-									// Already has the role.
-									const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
-									send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
-										fmt::format(":orange_circle: {} already has the '{}' role",
-											preferred_name,
-											command.role)
-									);
-									auto del_result = database_del_role_command(command.row_id);
-									if(is_error(del_result)) {
-										log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
-									}
-								}
-							}
-
-							if(edit_member) {
-								bot.guild_edit_member(member, [&bot, member, command](const dpp::confirmation_callback_t& callback){ 
-									if(!callback.is_error()) {
+							try {
+								dpp::guild_member member = dpp::find_guild_member(GUILD_ID, command.member_id);
+								std::string message;
+								if(command.action == 0) { // del
+									// Check if the user already has the role. Unlike add_role it is not an error to remove a role they don't have.
+									auto& roles = member.get_roles();
+									if(std::find(roles.begin(), roles.end(), role_id) != roles.end()) {
+										// Found, remove the role
+										edit_member = true;
+										member.remove_role(role_id);
+									} else {
+										// Doesn't have the role.
 										const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
 										send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
-											fmt::format("{} {} role '{}' {} {}",
-												command.action == 0 ? ":red_circle:" : ":green_circle:",
-												command.action == 0 ? "Removed" : "Added",
-												command.role,
-												command.action == 0 ? "from" : "to",
-												preferred_name)
+											fmt::format(":orange_circle: {} doesn't have the '{}' role",
+												preferred_name,
+												command.role)
 										);
 										auto del_result = database_del_role_command(command.row_id);
 										if(is_error(del_result)) {
 											log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
 										}
-									} else {
-										log(LOG_LEVEL_ERROR, "guild_edit_member failed: %s", callback.get_error().human_readable.c_str());
 									}
-								});
+								} else
+								if(command.action == 1) { // add
+									// Check if the user already has the role. Discord returns an error if a member already has a role so we have to check.
+									auto& roles = member.get_roles();
+									if(std::find(roles.begin(), roles.end(), role_id) == roles.end()) {
+										// Not found, add the role
+										member.add_role(role_id);
+										edit_member = true;
+									} else {
+										// Already has the role.
+										const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+										send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+											fmt::format(":orange_circle: {} already has the '{}' role",
+												preferred_name,
+												command.role)
+										);
+										auto del_result = database_del_role_command(command.row_id);
+										if(is_error(del_result)) {
+											log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+										}
+									}
+								}
+
+								if(edit_member) {
+									bot.guild_edit_member(member, [&bot, member, command](const dpp::confirmation_callback_t& callback){ 
+										if(!callback.is_error()) {
+											const std::string preferred_name = get_members_preferred_name(GUILD_ID, member.user_id);
+											send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID,
+												fmt::format("{} {} role '{}' {} {}",
+													command.action == 0 ? ":red_circle:" : ":green_circle:",
+													command.action == 0 ? "Removed" : "Added",
+													command.role,
+													command.action == 0 ? "from" : "to",
+													preferred_name)
+											);
+											auto del_result = database_del_role_command(command.row_id);
+											if(is_error(del_result)) {
+												log(LOG_LEVEL_ERROR, "database_del_role_command(%lu) failed", command.row_id);
+											}
+										} else {
+											log(LOG_LEVEL_ERROR, "guild_edit_member failed: %s", callback.get_error().human_readable.c_str());
+										}
+									});
+								}
+
+							} catch (const dpp::cache_exception &e) {
+								log(LOG_LEVEL_ERROR, "dpp::find_guild_member(%llu) threw an exception while handling role_commands");// %s", e.what()); // FIXME: Why does .what() return garbage here? DPP bug? 
+								//send_message(bot, GUILD_ID, BOT_COMMANDS_CHANNEL_ID, fmt::format(":warning: dpp::find_guild_member({}) threw an exception while handling a role commands: {}\n", command.member_id, e.what());
 							}
 						}
 					}
@@ -5444,7 +5458,7 @@ try{
 							host_count++;
 						}
 					}
-				} catch(dpp::cache_exception& e) {
+				} catch(const dpp::cache_exception &e) {
 					log(LOG_LEVEL_ERROR, "Caught exception: %s", e.what());
 				}
 			}
@@ -6275,11 +6289,17 @@ try{
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
+#ifdef DEBUG
 	http_server_start();
 	while(g_exit_code == 0) {
 		http_server_poll();
 	}
 	http_server_end();
+#else
+	while(g_exit_code == 0) {
+		sleep(1);
+	}
+#endif
 
 	bot.shutdown();
 	mysql_library_end();
@@ -6290,7 +6310,7 @@ try{
 	//log_close();
 
 	return g_exit_code;
-	
+
 } catch(const std::exception &e) {
 	fprintf(stderr, "Exception caught: %s\n", e.what());
 	throw e;
