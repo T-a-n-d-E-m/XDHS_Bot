@@ -6293,5 +6293,6 @@ try{
 	
 } catch(const std::exception &e) {
 	fprintf(stderr, "Exception caught: %s\n", e.what());
+	throw e;
 }
 }
