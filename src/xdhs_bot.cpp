@@ -4156,6 +4156,7 @@ static void config_file_kv_pair_callback(const char* key, const char* value, siz
 }
 
 int main(int argc, char* argv[]) {
+try{
 	// Load the config file. This file has sensitive information so isn't in version control.
 	if(!load_config_file(CONFIG_FILE_NAME, config_file_kv_pair_callback)) {
 		return EXIT_FAILURE;
@@ -6289,4 +6290,8 @@ int main(int argc, char* argv[]) {
 	//log_close();
 
 	return g_exit_code;
+	
+} catch(const std::exception &e) {
+	fprintf(stderr, "Exception caught: %s\n", e.what());
+}
 }
