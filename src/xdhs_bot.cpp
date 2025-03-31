@@ -472,6 +472,9 @@ static const MTG_Draftable_Set g_draftable_sets[] = {
 	{"BLB", "Bloomburrow",                                 1, false},
 	{"DSK", "Duskmourn: House of Horror",                  1, false},
 	{"FDN", "Foundations",                                 1, false},
+	{"INR", "Innistrad Remastered",                        1, false},
+	{"DFT", "Aetherdrift",                                 1, false},
+	{"TDM", "Tarkir: Dragonstorm",                         1, false},
 
 	// FIXME: Find art for these from their full name, not set codes.
 	{"INVR", "Invasion Remastered",                        0,  true},
