@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 #include <vector>
 
@@ -21,6 +22,9 @@
 #include "database.h"
 #include "curl.h"
 #include "defer.h"
+#include "slurp.h"
+#include "image.h"
+#include "font.h"
 
 #ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
@@ -40,6 +44,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #pragma GCC diagnostic ignored "-Wunused-function"
+#define STBIR_DEFAULT_FILTER_DOWNSAMPLE STBIR_FILTER_CUBICSPLINE // TODO: Investigate which looks best.
 #include "stb_image_resize2.h"
 #pragma GCC diagnostic pop
 #endif // #ifndef
@@ -55,6 +60,8 @@
 #include "poppler/cpp/poppler-document.h"
 #include "poppler/cpp/poppler-page.h"
 #include "poppler/cpp/poppler-page-renderer.h"
+
+static const int THUMBNAIL_SIZE = 50;
 
 #if MG_ENABLE_CUSTOM_LOG
 // Currently not used...
@@ -680,7 +687,6 @@ http_response parse_leaderboards(const mg_str json) {
 }
 
 http_response make_thumbnail(const mg_str json) {
-	static const int THUMBNAIL_SIZE = 50;
 
 	const char* url = mg_json_get_str(json, "$.url");
 	if(url == NULL) {
@@ -829,6 +835,7 @@ http_response pdf_to_png(const mg_str json) {
 	if(url == NULL) {
 		return {500, mg_mprintf(R"({"result":"JSON parse error"})")};
 	}
+	//defer{ free(url); }; // FIXME: Probably leaking memory here!
 
 	auto db_result = database_upsert_badge_card(member_id, url);
 	if(is_error(db_result)) {
@@ -934,6 +941,7 @@ http_response parse_commands(const mg_str json) {
 	// NOTE: This can hang the thread if MariaDB is stuck waiting for a lock.
 	// In the MariaDB terminal type `show full processlist` to see a list of connect clients
 	// and `kill [id]` the client that is stuck holding the lock.
+	// TODO: This should be start a transaction so on failure we can roll back to a valid state.
 	if(is_error(database_clear_commands())) {
 		return {500, mg_mprintf(R"({"result":"Internal server error: database_clear_commands() failed"})")};
 	}
@@ -1041,6 +1049,733 @@ http_response role_command(const mg_str json) {
 	return {200, mg_mprintf(R"({"result":"ok"})")};
 }
 
+// --- Badge card generation ---
+
+static Database_Result<Database_No_Value> database_clear_badge_images() {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "TRUNCATE TABLE badge_images";
+	MYSQL_STATEMENT();
+	MYSQL_EXECUTE();
+	MYSQL_RETURN();
+}
+
+static Database_Result<Database_No_Value> database_insert_badge_image(const char* category, const char* name, const char* display, const char* url) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "INSERT INTO badge_images (category, name, display, url) VALUES (?,?,?,?)";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(4);
+	MYSQL_INPUT_STR(category, strlen(category));
+	MYSQL_INPUT_STR(name,     strlen(name));
+	MYSQL_INPUT_STR(display,  strlen(display));
+	MYSQL_INPUT_STR(url,      strlen(url));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
+http_response upload_badge_images(const mg_str json) {
+	struct Badge {
+		char* category;
+		char* name;
+		char* display;
+		char *url;
+	};
+
+	std::vector<Badge> badges;
+	badges.reserve(2000);
+
+	auto cleanup = [&badges]() {
+		for(auto& b: badges) {
+			free(b.category);
+			free(b.name);
+			free(b.display);
+			free(b.url);
+		}
+	};
+
+	defer{ cleanup(); };
+
+	int index = 0;
+	while(true) {
+		char key[32];
+		snprintf(key, 32, "$[%d]", index);
+
+		int length;
+		int offset = mg_json_get(json, key, &length);
+		if(offset < 0) {
+			if(offset == MG_JSON_NOT_FOUND) {
+				break;
+			} else {
+				return {400, mg_mprintf(R"({"result":"JSON parse error"})")};
+			}
+		}
+		const mg_str row = {json.ptr + offset, (size_t) length};
+
+		badges.push_back({NULL, NULL, NULL, NULL});
+
+		badges.back().category = mg_json_get_str(row, "$.category");
+		if(badges.back().category == NULL) {
+			return {400, mg_mprintf(R"({"result":"'category' key not found on row %d"})", index)};
+		}
+
+		badges.back().name = mg_json_get_str(row, "$.name");
+		if(badges.back().name == NULL) {
+			return {400, mg_mprintf(R"({"result":"'name' key not found on row %d"})", index)};
+		}
+
+		badges.back().display = mg_json_get_str(row, "$.display");
+		if(badges.back().display == NULL) {
+			badges.back().display = strdup(badges.back().name);
+		}
+
+		badges.back().url = mg_json_get_str(row, "$.url");
+		if(badges.back().url == NULL) {
+			return {400, mg_mprintf(R"({"result":"'url' key not found on row %d"})", index)};
+		}
+
+		index++;
+	}
+
+	// NOTE: This can hang the thread if MariaDB is stuck waiting for a lock.
+	// In the MariaDB terminal type `show full processlist` to see a list of connect clients
+	// and `kill [id]` the client that is stuck holding the lock.
+	// TODO: This should be start a transaction so on failure we can roll back to a valid state.
+	if(is_error(database_clear_badge_images())) {
+		return {500, mg_mprintf(R"({"result":"Internal server error: database_clear_badge_images() failed"})")};
+	}
+
+	for(auto& b : badges) {
+		if(is_error(database_insert_badge_image(b.category, b.name, b.display, b.url))) {
+			return {500, mg_mprintf(R"({"result":"Internal server error: database_insert_badge_image() failed"})")};
+		} else {
+			log(LOG_LEVEL_INFO, "%s: Added badge: %s - %s", __FUNCTION__, b.category, b.name);
+		}
+	}
+
+	return {200, mg_mprintf(R"({"result":"ok"})")};
+}
+
+struct Badge {
+	char category[BADGE_CATEGORY_LENGTH_MAX];
+	char name[BADGE_NAME_LENGTH_MAX];
+	char display[BADGE_DISPLAY_NAME_LENGTH_MAX];
+	char url[URL_LENGTH_MAX];
+};
+
+static Database_Result<Badge> database_get_badge_image(const char* category, const char* name) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT category, name, display, url FROM badge_images WHERE category=? AND name=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_STR(category, strlen(category));
+	MYSQL_INPUT_STR(name, strlen(name));
+	MYSQL_INPUT_BIND_AND_EXECUTE()
+
+	Badge result;
+
+	MYSQL_OUTPUT_INIT(4);
+	MYSQL_OUTPUT_STR(result.category, BADGE_CATEGORY_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(result.name, BADGE_NAME_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(result.display, BADGE_DISPLAY_NAME_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(result.url, URL_LENGTH_MAX);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_ZERO_OR_ONE_ROWS();
+}
+
+static Database_Result<std::vector<Badge>> database_get_unchecked_badges(int how_many) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT category, name, display, url FROM badge_images WHERE checked=0 LIMIT ?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(1);
+	MYSQL_INPUT_I32(&how_many);
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	Badge result;
+	MYSQL_OUTPUT_INIT(4);
+	MYSQL_OUTPUT_STR(result.category, BADGE_CATEGORY_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(result.name, BADGE_NAME_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(result.display, BADGE_DISPLAY_NAME_LENGTH_MAX);
+	MYSQL_OUTPUT_STR(result.url, URL_LENGTH_MAX);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	std::vector<Badge> results;
+	results.reserve(how_many);
+
+	MYSQL_FETCH_AND_RETURN_MULTIPLE_ROWS();
+}
+
+/*
+
+Take JSON input like this...
+
+{
+member_name : "Some Discord Username",
+badges :[{category="badge category", name="badge name", ...}]
+}
+
+.. and render it to a badge card.
+
+*/
+http_response make_badge_card(const mg_str json) {
+	char* member_name = mg_json_get_str(json, "$.member_name");
+	if(member_name == NULL) {
+		return {400, mg_mprintf(R"({"result":"'member_name' key not found"})")};
+	}
+	defer { free(member_name); };
+
+	struct Badge_ID {
+		char* category;
+		char* name;
+	};
+
+	std::vector<Badge_ID> badge_ids;
+	badge_ids.reserve(100);
+
+	auto cleanup = [&badge_ids]() {
+		//log(LOG_LEVEL_DEBUG, "CLEANUP START");
+		for(auto& b : badge_ids) {
+			//log(LOG_LEVEL_DEBUG, "category:\"%s\"", b.category);
+			free(b.category);
+			//log(LOG_LEVEL_DEBUG, "name    :\"%s\"", b.name);
+			free(b.name);
+		}
+		//log(LOG_LEVEL_DEBUG, "CLEANUP END");
+	};
+
+	defer{ cleanup(); };
+
+	int index = 0;
+	while(true) {
+		char key[22];
+		snprintf(key, 22, "$.badges[%d]", index);
+
+		int length;
+		int offset = mg_json_get(json, key, &length);
+		if(offset < 0) {
+			if(offset == MG_JSON_NOT_FOUND) {
+				break;
+			} else {
+				return {400, mg_mprintf(R"({"result":"JSON parse error"})")};
+			}
+		}
+
+		const mg_str row = {json.ptr + offset, (size_t) length};
+
+		badge_ids.push_back({NULL, NULL});
+
+		badge_ids.back().category = mg_json_get_str(row, "$.category");
+		if(badge_ids.back().category == NULL) {
+			return {400, mg_mprintf(R"({"result":"'category' key not found"})")};
+		}
+
+		badge_ids.back().name = mg_json_get_str(row, "$.name");
+		if(badge_ids.back().name == NULL) {
+			return {400, mg_mprintf(R"({"result":"'name' key not found"})")};
+		}
+
+		index++;
+	}
+
+	// Construct the card. Unless otherwise stated, units are pixels.
+	struct Badge_Card_Design {
+		float aspect_ratio;
+		int minimum_columns;
+		int maximum_columns;
+
+		Pixel background_color;
+
+		// Border around the entire badge card.
+		int border_thickness;
+		Pixel border_color;
+
+		// Frame around the badges
+		int frame_thickness;
+		Pixel frame_top_color;
+		Pixel frame_bottom_color;
+		int frame_padding; // Padding between frame and badges
+
+		// Member name
+		int header_height;
+		int header_font_size;
+		const char* header_font_name;
+		//Pixel header_font_color;
+
+		// Badge names
+		int badge_name_height;
+		int badge_name_font_size;
+		const char* badge_name_font_name;
+		//Pixel badge_name_font_color;
+
+		int badge_size;
+		int badge_padding; // Vertical Padding between badges.
+	} design;
+
+	// We eventually might want to support multiple designs...
+	design.aspect_ratio = 4.0f / 3.0f;
+	design.minimum_columns = 4;
+	design.maximum_columns = 17;
+	design.background_color.c = 0xFF101010;
+	design.border_thickness = 2;
+	design.border_color.c = 0xFF000000;
+	design.frame_thickness = 20;
+	design.frame_top_color.c = 0xFF0D4373;
+	design.frame_bottom_color.c = 0xFF1C7FBD;
+	design.frame_padding = 4;
+	design.header_font_size = 26;
+	design.header_height = design.header_font_size + (design.header_font_size * 0.4);
+	design.header_font_name = "gfx/badge_card/Beleren2016-Bold.ttf";
+	//design.header_font_color = 0xFFFFFFFF;
+	design.badge_name_height = 20;
+	design.badge_name_font_size = 12;
+	design.badge_name_font_name = "gfx/badge_card/calibri.ttf";
+	//design.badge_name_font_color.c = 0xFFFFFFFF;
+	design.badge_size = 100;
+	design.badge_padding = 4;
+
+	// Load the header font
+	size_t header_font_buffer_size;
+	u8* header_font_buffer = file_slurp(design.header_font_name, &header_font_buffer_size);
+	if(header_font_buffer == NULL) {
+		return {500, mg_mprintf(R"({"result":"failed to read header font file"})")};
+	}
+	defer{ free(header_font_buffer); };
+	stbtt_fontinfo header_font;
+	int header_font_result = stbtt_InitFont(&header_font, header_font_buffer, stbtt_GetFontOffsetForIndex(header_font_buffer, 0));
+	if(header_font_result == 0) {
+		return {500, mg_mprintf(R"({"result":"failed to init header font file"})")};
+	}
+
+	// Load the badge name font
+	size_t badge_font_buffer_size;
+	u8* badge_font_buffer = file_slurp(design.badge_name_font_name, &badge_font_buffer_size);
+	if(badge_font_buffer == NULL) {
+		return {500, mg_mprintf(R"({"result":"failed to read badge font file"})")};
+	}
+	defer{ free(badge_font_buffer); };
+	stbtt_fontinfo badge_font;
+	int badge_font_result = stbtt_InitFont(&badge_font, badge_font_buffer, stbtt_GetFontOffsetForIndex(badge_font_buffer, 0));
+	if(badge_font_result == 0) {
+		return {500, mg_mprintf(R"({"result":"failed to init badge font file"})")};
+	}
+
+	const int total_badges = (int)badge_ids.size();
+	//int badge_columns_needed = (int) floor(((sqrt(total_badges)+1) * design.aspect_ratio));
+	int badge_columns_needed = (int) floor(((sqrt(total_badges)) * design.aspect_ratio));
+	if(badge_columns_needed < design.minimum_columns) badge_columns_needed = design.minimum_columns;
+	if(badge_columns_needed > design.maximum_columns) badge_columns_needed = design.maximum_columns;
+	int badge_rows_needed = 1;
+	while(badge_rows_needed * badge_columns_needed < total_badges) badge_rows_needed++;
+
+	Image canvas;
+	canvas.w = ((design.border_thickness + design.frame_thickness + design.frame_padding)*2) + (badge_columns_needed*design.badge_size) + ((badge_columns_needed - 1) * design.badge_padding);
+	canvas.h = ((design.border_thickness + design.frame_thickness + design.frame_padding)*2) + (design.header_height) + (badge_rows_needed*(design.badge_size+design.badge_name_height));
+	canvas.channels = 4;
+	canvas.data = malloc(canvas.w * canvas.h * canvas.channels);
+	if(canvas.data == NULL) {
+		return {500, mg_mprintf(R"({"result":"memory allocation for badge card failed"})")};
+	}
+	defer{ free(canvas.data); };
+
+	auto draw_filled_rect = [](Image* canvas, int x, int y, int w, int h, Pixel color) {
+		Pixel* ptr = (Pixel*)canvas->data + (y*canvas->w) + x;
+		for(int row = 0; row < h; ++row) {
+			for(int col = 0; col < w; ++col) {
+				ptr++->c = color.c;
+			}
+			ptr += canvas->w - w;
+		}
+	};
+
+	// background
+	draw_filled_rect(
+			&canvas,
+			design.border_thickness + design.frame_thickness,
+			design.border_thickness + design.frame_thickness,
+			canvas.w - (2 * (design.border_thickness + design.frame_thickness)),
+			canvas.h - (2 * (design.border_thickness + design.frame_thickness)),
+			design.background_color
+			);
+
+	// top border
+	draw_filled_rect(
+			&canvas,
+			0,
+			0,
+			canvas.w,
+			design.border_thickness,
+			design.border_color
+			);
+
+	// bottom border
+	draw_filled_rect(
+			&canvas,
+			0,
+			canvas.h-design.border_thickness,
+			canvas.w,
+			design.border_thickness,
+			design.border_color
+			);
+
+	// left border
+	draw_filled_rect(
+			&canvas,
+			0,
+			design.border_thickness,
+			design.border_thickness,
+			canvas.h - (2 * design.border_thickness),
+			design.border_color
+			);
+
+	// right border
+	draw_filled_rect(
+			&canvas,
+			canvas.w - design.border_thickness,
+			design.border_thickness,
+			design.border_thickness,
+			canvas.h - (2 * design.border_thickness),
+			design.border_color
+			);
+
+	// Top frame
+	draw_filled_rect(
+			&canvas,
+			design.border_thickness,
+			design.border_thickness,
+			canvas.w - (2 * design.border_thickness),
+			design.frame_thickness,
+			design.frame_top_color
+			);
+
+	// Bottom frame
+	draw_filled_rect(
+			&canvas,
+			design.border_thickness,
+			canvas.h - design.border_thickness - design.frame_thickness,
+			canvas.w - (2 * design.border_thickness),
+			design.frame_thickness,
+			design.frame_bottom_color
+			);
+
+	// Function to draw the left and right side frame gradients
+	auto draw_gradient_rect = [](Image* canvas, int x, int y, int w, int h, Pixel begin, Pixel end) {
+		Pixel* ptr = (Pixel*)canvas->data + (y*canvas->w) + x;
+		float r_step = (float)((end.components.r - begin.components.r) / (float)h);
+		float g_step = (float)((end.components.g - begin.components.g) / (float)h);
+		float b_step = (float)((end.components.b - begin.components.b) / (float)h);
+		for(int row = 0; row < h; ++row) {
+			for(int col = 0; col < w; ++col) {
+				ptr->components.a = 0xFF;
+				ptr->components.r = begin.components.r + (row * r_step);
+				ptr->components.g = begin.components.g + (row * g_step);
+				ptr->components.b = begin.components.b + (row * b_step);
+				ptr++;
+			}
+			ptr += canvas->w - w;
+		}
+	};
+
+	draw_gradient_rect(
+			&canvas,
+			design.border_thickness,
+			design.border_thickness + design.frame_thickness,
+			design.frame_thickness,
+			canvas.h - (2 * (design.border_thickness + design.frame_thickness)),
+			design.frame_top_color,
+			design.frame_bottom_color
+			);
+
+	draw_gradient_rect(
+			&canvas,
+			canvas.w - design.border_thickness - design.frame_thickness,
+			design.border_thickness + design.frame_thickness,
+			design.frame_thickness,
+			canvas.h - (2 * (design.border_thickness + design.frame_thickness)),
+			design.frame_top_color,
+			design.frame_bottom_color
+			);
+
+	// Write the member name
+	{
+		char header_string[64];
+		snprintf(header_string, 64, "%s's badges", member_name);
+		int scale = 4;
+		Text_Dim dim = get_text_dimensions(&header_font, design.header_font_size*scale, (const u8*)header_string);
+		Result<Image> name = make_image(dim.w, dim.h, 1, 0x00000000);
+		if(is_error(name)) {
+			return {500, mg_mprintf(R"({"result":"Error creating header canvas"})")};
+		}
+		defer { free(name.value.data); };
+
+		render_text_to_image(
+				&header_font,
+				(const u8*)header_string,
+				design.header_font_size*scale,
+				&name.value,
+				0,
+				0,
+				{.c=0xFFFFFFFF}
+				);
+
+		Image resized;
+		resized.w = dim.w / scale;
+		resized.h = dim.h / scale;
+		resized.channels = 1;
+		resized.data = stbir_resize_uint8_srgb((const unsigned char*)name.value.data, dim.w, dim.h, 0, NULL, resized.w, resized.h, 0, STBIR_1CHANNEL);
+		if(resized.data == NULL) {
+			return {500, mg_mprintf(R"({"result":"%s: out of memory})", __FUNCTION__)};
+		}
+		defer{ free(resized.data); };
+
+		if(resized.w < canvas.w - (2 * (design.border_thickness + design.frame_thickness))) {
+			// Rendered text fits the width, blit it as is.
+			blit_A8_to_RGBA(
+					&resized,
+					resized.w,
+					{.c=0xFFFFFFFF},
+					&canvas,
+					(canvas.w / 2) - (resized.w/2),
+					design.border_thickness + design.frame_thickness + design.frame_padding + (design.header_height/2) - (resized.h/2));
+		} else {
+			// Rendered text is too wide. Resize it
+			// TODO... is this even possible here?
+		}
+	}
+
+	// Draw the badge images and labels
+	int badge_start_x = design.border_thickness + design.frame_thickness + design.frame_padding;
+	int badge_start_y = design.border_thickness + design.frame_thickness + design.frame_padding + design.header_height;
+	int badge_x = badge_start_x;
+	int badge_y = badge_start_y;
+	int badge_col = 0;
+	for(const auto id : badge_ids) {
+		auto badge = database_get_badge_image(id.category, id.name);
+		if(has_value(badge)) {
+			// Get the filename part from the URL
+			const char* filename = NULL;
+			for(size_t i = strlen(badge.value.url)-1; i > 0; --i) {
+				if(badge.value.url[i] == '/') {
+					filename = &badge.value.url[i] + 1;
+					break;
+				}
+			}
+			if(filename == NULL) {
+				log(LOG_LEVEL_ERROR, "%s: Could not get filename part from url: %s", __FUNCTION__, badge.value.url);
+				continue;
+			}
+
+			char local_file_path[FILENAME_MAX];
+			snprintf(local_file_path, FILENAME_MAX, "gfx/badge_card/images/%s", filename);
+
+			if(access(local_file_path, F_OK) == 0) {
+				auto img = load_image(local_file_path, 4);
+				if(has_value(img)) {
+					defer{ stbi_image_free(img.value.data); };
+
+					{
+						// Resize the image to the desired size.
+						Image resized;
+						resized.w = design.badge_size;
+						resized.h = design.badge_size;
+						resized.channels = img.value.channels;
+						resized.data = stbir_resize_uint8_srgb((const unsigned char*)img.value.data, img.value.w, img.value.h, 0, NULL, resized.w, resized.h, 0, STBIR_RGBA);
+						if(resized.data == NULL) {
+							return {500, mg_mprintf(R"({"result":"%s: out of memory})", __FUNCTION__)};
+						}
+						defer { free(resized.data); };
+
+						blit_RGBA_to_RGBA(&resized, &canvas, badge_x, badge_y);
+					}
+
+					{
+						// Badge name
+						int scale = 4; // Render the text larger, then size it down so it looks nicer.
+						Text_Dim dim = get_text_dimensions(&badge_font, design.badge_name_font_size*scale, (const u8*)badge.value.display);
+						Result<Image> name = make_image(dim.w, dim.h, 1, 0x00000000);
+						if(is_error(name)) {
+							return {500, mg_mprintf(R"({"result":"Error creating badge name canvas})")};
+						}
+						defer { free(name.value.data); };
+						render_text_to_image(
+								&badge_font,
+								(const u8*)badge.value.display,
+								design.badge_name_font_size*scale,
+								&name.value,
+								0,
+								0,
+								{.c=0xFFFFFFFF}
+								);
+
+						// Scale it back to the correct size;
+						Image resized;
+						resized.w = dim.w / scale;
+						resized.h = dim.h / scale;
+						resized.channels = 1;
+						resized.data = stbir_resize_uint8_srgb((const unsigned char*)name.value.data, dim.w, dim.h, 0, NULL, resized.w, resized.h, 0, STBIR_1CHANNEL);
+						if(resized.data == NULL) {
+							return {500, mg_mprintf(R"({"result":"%s: out of memory})", __FUNCTION__)};
+						}
+						defer{ free(resized.data); };
+
+						int name_x = badge_x + ((design.badge_size / 2) - (resized.w / 2));
+						int name_y = badge_y + design.badge_size + (design.badge_name_height / 2) - (resized.h/2);
+
+						blit_A8_to_RGBA(&resized, resized.w, {.c=0xFFFFFFFF}, &canvas, name_x, name_y);
+					}
+
+					badge_col += 1;
+					if(badge_col == badge_columns_needed) {
+						badge_col = 0;
+						badge_x = badge_start_x;
+						badge_y += design.badge_size + design.badge_name_height;
+					} else {
+						badge_x += design.badge_size + design.badge_padding;
+					}
+				} else {
+					log(LOG_LEVEL_ERROR, "Failed to load file %s", local_file_path);
+				}
+			} else {
+				// TODO: Download it!
+				log(LOG_LEVEL_ERROR, "Missing badge image for {category=\"%s\", name=\"%s\", url=\"%s\"}", badge.value.category, badge.value.name, badge.value.url);
+			}
+		} else {
+			log(LOG_LEVEL_ERROR, "badge {category=\"%s\", name=\"%s\"} not found", id.category, id.name);
+		}
+	}
+
+	// Convert the canvas to an in-memory .png
+	int png_size;
+	unsigned char* png = stbi_write_png_to_mem((const unsigned char*)canvas.data, canvas.w * canvas.channels, canvas.w, canvas.h, canvas.channels, &png_size);
+	if(png == NULL) {
+		return {500, mg_mprintf(R"({"result":"Error writing canvas to in-memory png"})")};
+	}
+	defer{ STBIW_FREE(png); };
+
+	auto upload = upload_img_to_imgur((const char*)png, png_size, g_config.imgur_client_secret);
+	if(is_error(upload)) {
+		return {500, mg_mprintf(R"({"result":"Error uploading to Imgur: %s"})", upload.errstr)};
+	}
+	defer{ free(upload.value.data); };
+
+	mg_str result_json = {(const char*)upload.value.data, upload.value.size};
+	char* url = mg_json_get_str(result_json, "$.data.link");
+	if(url == NULL) {
+		return {500, mg_mprintf(R"({"result":"JSON parse error"})")};
+	}
+	defer { free(url); }; // TODO: Check the pdf_to_png function isn't leaking this too
+
+	return {200, mg_mprintf(R"({"result":"%s"})", url)};
+}
+
+Database_Result<Database_No_Value> database_mark_badge_as_checked(const char* category, const char* name) {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	const char* query = "UPDATE badge_images SET checked=1 WHERE category=? AND name=?";
+	MYSQL_STATEMENT();
+
+	MYSQL_INPUT_INIT(2);
+	MYSQL_INPUT_STR(category, strlen(category));
+	MYSQL_INPUT_STR(name, strlen(name));
+	MYSQL_INPUT_BIND_AND_EXECUTE();
+
+	MYSQL_RETURN();
+}
+
+// TODO: This thread should use a paged arena and just free all pages at the end of the main loop.
+static bool g_image_download_thread_should_close = false;
+void badge_card_image_downloader_thread() {
+	static const int MAX_BADGES_TO_CHECK = 20; // Limit the number of badges to check per iteration to keep memory usage down.
+	while(!g_image_download_thread_should_close) {
+		const auto badges = database_get_unchecked_badges(MAX_BADGES_TO_CHECK); // TODO: To lower memory usage, just get 10 at a time?
+		if(!is_error(badges)) {
+			// Iterate over the unchecked badges, download a local copy and resize to the desired size.
+			for(const auto& badge : badges.value) {
+				// Stop if the close signal has been sent
+				if(g_image_download_thread_should_close) break;
+
+				// Get the filename part from the URL
+				const char* filename = NULL;
+				for(size_t i = strlen(badge.url)-1; i > 0; --i) {
+					if(badge.url[i] == '/') {
+						filename = &badge.url[i] + 1;
+						break;
+					}
+				}
+				if(filename == NULL) {
+					log(LOG_LEVEL_ERROR, "%s: Could not get filename part from url: %s", __FUNCTION__, badge.url);
+					continue;
+				}
+
+				char local_file_path[FILENAME_MAX];
+				snprintf(local_file_path, FILENAME_MAX, "gfx/badge_card/images/%s", filename);
+
+				// Check if a local copy already exists. This will happen every time the Badge Images sheet is synced with the bot.
+				if(access(local_file_path, F_OK) == 0) {
+					database_mark_badge_as_checked(badge.category, badge.name);
+				} else {
+					auto buffer = download_file(badge.url);
+					if(has_value(buffer)) {
+						defer { free(buffer.value.data); };
+
+						{
+							// Save to storage
+							FILE* out = fopen(local_file_path, "wb");
+							if(out != NULL) {
+								defer { fclose(out); };
+								size_t wrote = fwrite(buffer.value.data, 1, buffer.value.size, out);
+								if(wrote == buffer.value.size) {
+									database_mark_badge_as_checked(badge.category, badge.name);
+									log(LOG_LEVEL_DEBUG, "Badge %s downloaded", local_file_path);
+								} else {
+									log(LOG_LEVEL_ERROR, "%s: fwrite failed", __FUNCTION__);
+								}
+							} else {
+								log(LOG_LEVEL_ERROR, "%s: fopen(%s) failed", __FUNCTION__, local_file_path);
+							}
+						}
+						{
+							// Generate a thumbnail too.
+							int width, height, channels;
+							uint8_t* img = stbi_load_from_memory(buffer.value.data, buffer.value.size, &width, &height, &channels, 4);
+							if(img != NULL) {
+								defer{ stbi_image_free(img); };
+
+								uint8_t* resized = stbir_resize_uint8_srgb(img, width, height, 0, NULL, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 0, STBIR_RGBA);
+								if(resized == NULL) {
+									log(LOG_LEVEL_ERROR, "%s: out of memory", __FUNCTION__);
+								}
+								defer{ free(resized); };
+
+								char thumbnail_file_path[FILENAME_MAX];
+								snprintf(thumbnail_file_path, FILENAME_MAX, "%s/static/badge_thumbnails/%s", HTTP_SERVER_DOC_ROOT, filename);
+
+								stbi_write_png_compression_level = 9;
+								if(stbi_write_png(thumbnail_file_path, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 4, resized, THUMBNAIL_SIZE * 4) !=0) {
+									log(LOG_LEVEL_DEBUG, "Thumbnail %s created", thumbnail_file_path);
+								} else {
+									log(LOG_LEVEL_ERROR, "Failed to save file: %s", thumbnail_file_path);
+								}
+							} else {
+								log(LOG_LEVEL_ERROR, "stbi_load_from_memory_failed"); // TODO: Get stbi_error
+							}
+						}
+					} else {
+						log(LOG_LEVEL_ERROR, "Downloading %s failed", badge.url);
+					}
+				}
+			}
+		} else {
+			log(LOG_LEVEL_ERROR, "database_get_unchecked_badges() failed");
+		}
+
+		sleep(1);
+	}
+}
+
+// --- End of badge card stuff ---
+
 // Handles POST requests
 static void *post_thread_function(void *param) {
 	thread_data *p = (thread_data*) param;
@@ -1067,6 +1802,12 @@ static void *post_thread_function(void *param) {
 	if(p->api_key.ptr == NULL || mg_strcmp(p->api_key, mg_str(g_config.api_key)) != 0) {
 		response = {401, strdup(R"({"result":"Invalid API key"})")};
 	} else {
+		if(mg_match(p->uri, mg_str("/api/v1/upload_badge_images"), NULL)) {
+			response = upload_badge_images(p->body);
+		} else
+		if(mg_match(p->uri, mg_str("/api/v1/make_badge_card"), NULL)) {
+			response = make_badge_card(p->body);
+		} else
 		if(mg_match(p->uri, mg_str("/api/v1/upload_stats"), NULL)) {
 			response = parse_stats(p->body);
 		} else
@@ -1163,6 +1904,7 @@ static void http_server_func(mg_connection *con, int event, void *event_data) {
 }
 
 static mg_mgr g_mgr;
+static std::thread downloader_thread; // TODO: mongoose already uses pthreads, so just use that.
 
 static void http_server_start() {
 	mg_log_set(MG_LL_DEBUG);
@@ -1172,6 +1914,9 @@ static void http_server_start() {
 	snprintf(listen, 64, "%s:%d", g_config.bind_address, g_config.bind_port);
 	mg_http_listen(&g_mgr, listen, http_server_func, NULL);
 	mg_wakeup_init(&g_mgr);
+
+	// Start the badge image downloader thread
+	downloader_thread = std::thread{badge_card_image_downloader_thread};
 }
 
 static void http_server_poll() {
@@ -1181,6 +1926,9 @@ static void http_server_poll() {
 
 static void http_server_end() {
 	mg_mgr_free(&g_mgr);
+
+	g_image_download_thread_should_close = true;
+	downloader_thread.join();
 }
 
 #endif // HTTP_SERVER_H_INCLUDED

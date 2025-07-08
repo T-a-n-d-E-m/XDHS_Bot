@@ -92,10 +92,18 @@
 #include "stb_image_write.h"
 #endif // #ifndef
 
-#ifndef STB_TRUETYPE_IMPLEMENTATION
-#define STB_TRUETYPE_IMPLEMENTATION
-#include "stb_truetype.h"
-#endif // #ifndef
+
+// Some useful shorthands for common types.
+using  u8 = std::uint8_t;
+using  s8 = std::int8_t;
+using u16 = std::uint16_t;
+using s16 = std::int16_t;
+using u32 = std::uint32_t;
+using s32 = std::int32_t;
+using u64 = std::uint64_t;
+using s64 = std::int64_t;
+using f32 = float;
+using f64 = double;
 
 
 struct Config {
@@ -135,27 +143,17 @@ struct Config {
 #include "config.h"
 
 #include "date/tz.h"  // Howard Hinnant's date and timezone library.
+#include "defer.h"
+#include "slurp.h"
 #include "constants.h"
 #include "curl.h"
-#include "http_server.h"
 #include "image.h"
+#include "font.h"
+#include "http_server.h"
 #include "database.h"
 #include "result.h"
 #include "log.h"
-#include "defer.h"
 #include "utf8.h"
-
-// Some useful shorthands for common types.
-using  u8 = std::uint8_t;
-using  s8 = std::int8_t;
-using u16 = std::uint16_t;
-using s16 = std::int16_t;
-using u32 = std::uint32_t;
-using s32 = std::int32_t;
-using u64 = std::uint64_t;
-using s64 = std::int64_t;
-using f32 = float;
-using f64 = double;
 
 #define BIT_SET(value,mask) (((value) & (mask)) != (0))
 
@@ -2656,86 +2654,6 @@ static const int KEY_ART_WIDTH = BANNER_IMAGE_WIDTH;
 static const int KEY_ART_HEIGHT = BANNER_IMAGE_HEIGHT;
 
 
-struct Text_Dim {
-	int w;
-	int h;
-};
-
-static Text_Dim get_text_dimensions(stbtt_fontinfo* font, const int size, const u8* str) {
-	f32 scale = stbtt_ScaleForPixelHeight(font, size);
-
-	Text_Dim dim;
-
-	int ascent, descent, linegap;
-	stbtt_GetFontVMetrics(font, &ascent, &descent, &linegap);
-
-	dim.h = ceil(scale * (ascent - descent));
-
-	f32 xpos = 0.0f;
-	u32 ch = 0;
-	int index = 0;
-	while((str[index] != 0) && ((ch = u8_nextchar(str, &index)) != 0)) {
-		f32 x_shift = xpos - (f32) floor(xpos);
-		int advance, lsb;
-		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
-		int x0, y0, x1, y1;
-	  	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
-		xpos += advance * scale;
-		if(str[index+1] != 0 && isutf(str[index+1])) {
-			int tmp = index;
-			xpos += scale * stbtt_GetCodepointKernAdvance(font, ch, u8_nextchar(str, &tmp));
-		}
-	}
-
-	dim.w = ceil(xpos);
-
-	return dim;
-}
-
-static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int size, Image* canvas, int x, int y, const Pixel color) {
-	f32 scale = stbtt_ScaleForPixelHeight(font, size);
-	int ascent, descent, linegap;
-	stbtt_GetFontVMetrics(font, &ascent, &descent, &linegap);
-	int baseline = (int) (ascent * scale);
-
-	static const int GLYPH_WIDTH_MAX = 200;
-	static const int GLYPH_HEIGHT_MAX = 300;
-	u8 bitmap_buffer[GLYPH_WIDTH_MAX * GLYPH_HEIGHT_MAX];
-
-	Image bitmap;
-	bitmap.data = (u8*)bitmap_buffer;
-	bitmap.channels = 1;
-
-	f32 xpos = (f32)x;
-	int ch = 0;
-	int index = 0;
-	while((str[index]) != 0 && ((ch = u8_nextchar(str, &index)) != 0)) {
-		f32 x_shift = xpos - (f32) floor(xpos);
-		int advance, lsb;
-		stbtt_GetCodepointHMetrics(font, ch, &advance, &lsb);
-		int x0, y0, x1, y1;
-	  	stbtt_GetCodepointBitmapBoxSubpixel(font, ch, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
-		bitmap.w = x1-x0;
-		bitmap.h = y1-y0;
-	  	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
-
-		if(canvas->channels == 4) {
-			blit_A8_to_RGBA(&bitmap, GLYPH_WIDTH_MAX, color, canvas, (int)xpos + x0, y + baseline + y0);
-		} else
-		if(canvas->channels == 1) {
-			blit_A8_to_A8(&bitmap, GLYPH_WIDTH_MAX, canvas, (int)xpos + x0, y + baseline + y0);
-		} else {
-			log(LOG_LEVEL_ERROR, "Unsupported channel count {} in {}", canvas->channels, __FUNCTION__);
-		}
-
-		xpos += advance * scale;
-		if(str[index+1] != 0 && isutf(str[index+1])) {
-			int index_copy = index;
-			xpos += scale * stbtt_GetCodepointKernAdvance(font, ch, u8_nextchar(str, &index_copy));
-		}
-	}
-}
-
 void draw_shadowed_text(stbtt_fontinfo* font, int font_size, int max_width, const u8* str, u32 shadow_color, u32 text_color, Image* out, int ypos) {
 	// The output of the stbtt_truetype library isn't as nice as Freetype so to generate smoother looking glyphs we render the text larger than we need, then scale it down to the requested size. This produces better aliasing, IMO!
 	static const int upscale_factor = 2;
@@ -2856,29 +2774,6 @@ const Icon* get_icon(DRAFT_TYPE type) {
 		if(g_icons[i].type == type) return &g_icons[i];
 	}
 	return NULL;
-}
-
-// NOTE: Don't forget to free the returned buffer!
-static u8* file_slurp(const char* path, size_t* size) {
-	u8* file_contents = NULL;
-	FILE* f = fopen(path, "rb");
-	if(f != NULL) {
-		defer { fclose(f); };
-		struct stat s;
-		int result = stat(path, &s);
-		if(result != -1) {
-			*size = s.st_size;
-			file_contents = (u8*) malloc(*size);
-			if(file_contents != NULL) {
-				size_t got = fread(file_contents, 1, *size, f);
-				if(got != *size) {
-					free(file_contents);
-					file_contents = NULL;
-				}
-			}
-		}
-	}
-	return file_contents;
 }
 
 // Fill this structure and pass it to the render function.
@@ -3963,8 +3858,15 @@ static void output_sql() {
 	fprintf(stdout, "\n");
 
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS xmage_version (version VARCHAR(64) NOT NULL UNIQUE, timestamp BIGINT NOT NULL UNIQUE);\n");
+
+	fprintf(stdout, "\n");
+
 	// TODO: Delete name when BadgeBot is turned off
 	fprintf(stdout, "CREATE TABLE IF NOT EXISTS commands (name VARCHAR(64) NOT NULL UNIQUE PRIMARY KEY, team BOOLEAN NOT NULL DEFAULT 0, hidden BOOLEAN NOT NULL DEFAULT 0, content VARCHAR(%lu) NOT NULL, summary VARCHAR(%d) NOT NULL);\n", DISCORD_MESSAGE_CHARACTER_LIMIT, DISCORD_AUTOCOMPLETE_STRING_LENGTH_MAX);
+
+	fprintf(stdout, "\n");
+
+	fprintf(stdout, "CREATE TABLE IF NOT EXISTS badge_images (category VARCHAR(%d) NOT NULL, name VARCHAR(%d) NOT NULL, display VARCHAR(%d) NOT NULL, url VARCHAR(%lu) NOT NULL, checked BOOLEAN NOT NULL DEFAULT 0);\n", BADGE_CATEGORY_LENGTH_MAX, BADGE_NAME_LENGTH_MAX, BADGE_DISPLAY_NAME_LENGTH_MAX, URL_LENGTH_MAX);
 
 	fprintf(stdout, "\n");
 
@@ -4108,6 +4010,7 @@ static void output_sql() {
 	fprintf(stdout, "CREATE USER '%s'@localhost IDENTIFIED BY '%s'\n", g_config.mysql_username, g_config.mysql_password);
 	fprintf(stdout, "GRANT DELETE, INSERT, SELECT, UPDATE ON %s.* TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
 	fprintf(stdout, "GRANT DROP ON %s.commands TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
+	fprintf(stdout, "GRANT DROP ON %s.badge_images TO '%s'@localhost;\n", g_config.mysql_database, g_config.mysql_username);
 	fprintf(stdout, "FLUSH PRIVILEGES;\n");
 }
 

@@ -1,4 +1,4 @@
-#ifndef IMAGE_H_INLCUDED
+#ifndef IMAGE_H_INCLUDED
 #define IMAGE_H_INCLUDED
 
 #ifndef STB_IMAGE_IMPLEMENTATION
@@ -18,6 +18,8 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#define STBIR_DEFAULT_FILTER_DOWNSAMPLE STBIR_FILTER_CUBICSPLINE // TODO: Investigate which looks best.
 #include "stb_image_resize2.h"
 #pragma GCC diagnostic pop
 #endif // #ifndef
@@ -55,9 +57,9 @@ static Result<Image> make_image(int width, int height, int channels, uint32_t co
 		RETURN_ERROR_RESULT(ERROR_OUT_OF_MEMORY);
 	}
 
-	result.channels = channels;
 	result.w = width;
 	result.h = height;
+	result.channels = channels;
 
 	// TODO: Do I need to support 3 channel images here? Probably not...
 	// TODO: This should be moved to it's own function
@@ -251,6 +253,5 @@ static void blit_A8_to_A8(const Image* src, int stride, Image* dst, int x, int y
 		}
 	}
 }
-
 
 #endif // IMAGE_H_INCLUDED

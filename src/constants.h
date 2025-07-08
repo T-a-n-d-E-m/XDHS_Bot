@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+static const int BADGE_CATEGORY_LENGTH_MAX      = 32;
+static const int BADGE_NAME_LENGTH_MAX          = 32;
+static const int BADGE_DISPLAY_NAME_LENGTH_MAX  = 32;
+
 static const int DEVOTION_BADGE_NAME_LENGTH_MAX = 32;
 static const int VICTORY_BADGE_NAME_LENGTH_MAX  = 32;
 static const int TROPHIES_BADGE_NAME_LENGTH_MAX = 32;
