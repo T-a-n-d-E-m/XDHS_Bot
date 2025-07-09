@@ -1774,7 +1774,53 @@ void badge_card_image_downloader_thread() {
 	}
 }
 
+Database_Result<int> database_get_badges_count() {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT COUNT(*) FROM badge_images";
+	MYSQL_STATEMENT();
+
+	MYSQL_EXECUTE();
+
+	int result;
+
+	MYSQL_OUTPUT_INIT(1);
+	MYSQL_OUTPUT_I32(&result);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
+}
+
+Database_Result<int> database_get_checked_badges_count() {
+	MYSQL_CONNECT(g_config.mysql_host, g_config.mysql_username, g_config.mysql_password, g_config.mysql_database, g_config.mysql_port);
+	static const char* query = "SELECT COUNT(*) FROM badge_images WHERE checked=1";
+	MYSQL_STATEMENT();
+
+	MYSQL_EXECUTE();
+
+	int result;
+
+	MYSQL_OUTPUT_INIT(1);
+	MYSQL_OUTPUT_I32(&result);
+	MYSQL_OUTPUT_BIND_AND_STORE();
+
+	MYSQL_FETCH_AND_RETURN_SINGLE_ROW();
+
+}
+
 // --- End of badge card stuff ---
+http_response get_badge_image_status(const mg_str json) {
+	auto total_badges = database_get_badges_count();
+	if(is_error(total_badges)) {
+		return {500, mg_mprintf(R"({"result":"database_get_badges_count failed"})")};
+	}
+
+	auto checked_badges = database_get_checked_badges_count();
+	if(is_error(checked_badges)) {
+		return {500, mg_mprintf(R"({"result":"database_get_checked_badges_count failed"})")};
+	}
+
+	return {200, mg_mprintf(R"({"total": %d, "have": %d})", total_badges.value, checked_badges.value)};
+}
 
 // Handles POST requests
 static void *post_thread_function(void *param) {
@@ -1804,6 +1850,9 @@ static void *post_thread_function(void *param) {
 	} else {
 		if(mg_match(p->uri, mg_str("/api/v1/upload_badge_images"), NULL)) {
 			response = upload_badge_images(p->body);
+		} else
+		if(mg_match(p->uri, mg_str("/api/v1/get_badge_image_status"), NULL)) {
+			response = get_badge_image_status(p->body);
 		} else
 		if(mg_match(p->uri, mg_str("/api/v1/make_badge_card"), NULL)) {
 			response = make_badge_card(p->body);
