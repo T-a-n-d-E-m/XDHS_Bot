@@ -184,6 +184,7 @@ static const char* CONFIG_FILE_NAME = "bot.ini";
 // In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
 #ifdef DEBUG
 // The bot will be running in debug mode on the XDHS Dev server.
+#define EVENTBOT_ENABLED
 static const char* BUILD_MODE                    = "Debug";
 static const u64 GUILD_ID                        = 882164794566791179;
 static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft sign up.
@@ -4316,7 +4317,7 @@ try{
 				cmd.add_option(dpp::command_option(dpp::co_attachment, "art", "Art to use as the background. Will be resized to 825x550 pixels.", false));
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#ifdef DEBUG
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("create_draft", "Create a new draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4344,16 +4345,16 @@ try{
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("view_draft", "View the details for a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The draft code of the draft to view.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("edit_draft", "Edit the details of a draft", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4381,16 +4382,16 @@ try{
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("post_draft", "Post a draft.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				cmd.add_option(dpp::command_option(dpp::co_string, "draft_code", "The code of the draft event to post.", true).set_auto_complete(true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("delete_draft", "Delete a draft post.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4399,15 +4400,15 @@ try{
 
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("view_allocations", "Print the pod allocations to the #-current-draft-management channel.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("add_player", "Add a member to the Playing column of the sign up sheet.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4419,8 +4420,8 @@ try{
 				cmd.add_option(pod_option);
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("remove_player", "Remove a player from the sign up sheet and (optionally) record them as a No Show", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -4428,21 +4429,21 @@ try{
 				cmd.add_option(dpp::command_option(dpp::co_boolean, "noshow", "Record this as a No Show.", true));
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("post_allocations", "Post the pod allocations to the public channels, create threads and groups.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
-#ifdef DEBUG
+#endif // EVENTBOT_ENABLED
+#ifdef EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("fire", "Create a role with all draft participants, and separate roles for each pod.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
 				bot.guild_command_create(cmd, event.created->id);
 			}
-#endif
+#endif // EVENTBOT_ENABLED
 			{
 				dpp::slashcommand cmd("timer", "Post the Draftmancer specific reminders and a timer for deck submission.", bot.me.id);
 				cmd.default_member_permissions = dpp::p_use_application_commands;
@@ -6195,17 +6196,11 @@ try{
 
 	}, JOB_THREAD_TICK_RATE, [](dpp::timer){});
 
-#ifdef DEBUG
 	http_server_start();
 	while(g_exit_code == 0) {
 		http_server_poll();
 	}
 	http_server_end();
-#else
-	while(g_exit_code == 0) {
-		sleep(1);
-	}
-#endif
 
 	bot.shutdown();
 	mysql_library_end();
