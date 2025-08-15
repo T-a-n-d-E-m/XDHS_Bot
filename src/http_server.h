@@ -1236,14 +1236,10 @@ http_response make_badge_card(const mg_str json) {
 	badge_ids.reserve(100);
 
 	auto cleanup = [&badge_ids]() {
-		//log(LOG_LEVEL_DEBUG, "CLEANUP START");
 		for(auto& b : badge_ids) {
-			//log(LOG_LEVEL_DEBUG, "category:\"%s\"", b.category);
 			free(b.category);
-			//log(LOG_LEVEL_DEBUG, "name    :\"%s\"", b.name);
 			free(b.name);
 		}
-		//log(LOG_LEVEL_DEBUG, "CLEANUP END");
 	};
 
 	defer{ cleanup(); };
@@ -1882,6 +1878,10 @@ static void *post_thread_function(void *param) {
 		}
 	}
 
+	if (response.result != 200) {
+		log(LOG_LEVEL_DEBUG, response.str);
+	}
+
 	mg_wakeup(p->mgr, p->conn_id, &response, sizeof(http_response));
 
 	return NULL;
@@ -1956,7 +1956,7 @@ static mg_mgr g_mgr;
 static std::thread downloader_thread; // TODO: mongoose already uses pthreads, so just use that.
 
 static void http_server_start() {
-	mg_log_set(MG_LL_DEBUG);
+	mg_log_set(MG_LL_INFO);
 	mg_log_set_fn(log_write_char, NULL);
 	mg_mgr_init(&g_mgr);
 	char listen[64];

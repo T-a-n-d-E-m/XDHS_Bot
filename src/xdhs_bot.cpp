@@ -105,6 +105,51 @@ using s64 = std::int64_t;
 using f32 = float;
 using f64 = double;
 
+// The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
+// In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
+#ifdef DEBUG
+// The bot will be running in debug mode on the XDHS Dev server.
+#define EVENTBOT_ENABLED
+static const char* BUILD_MODE                    = "Debug";
+static const u64 GUILD_ID                        = 882164794566791179;
+static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft sign up.
+static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 1087299085612109844;
+static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 1075355794507305001;
+static const u64 BOT_COMMANDS_CHANNEL_ID         = 885048614190190593;
+static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 1155769474520199279;
+static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 1155771897225674752;
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 1155772743485235200;
+static const u64 FEEDBACK_CHANNEL_ID             = 1155773361104887880;
+static const u64 CALENDAR_CHANNEL_ID             = 1155774664732323952;
+static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
+static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
+static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
+static const char* POD1_EMOJI                    = ":Pod1:1037638721115275284";
+static const char* POD2_EMOJI                    = ":Pod2:1037638719156518935";
+static const char* TEMP_DIR                      = "/tmp/xdhs_bot_dev";
+#endif
+
+#ifdef RELEASE
+// The bot will be running in release mode on the XDHS public server.
+static const char* BUILD_MODE                    = "Release";
+static const u64 GUILD_ID                        = 528728694680715324;
+static const u64 PRE_REGISTER_CHANNEL_ID         = 753639027428687962; // Default channel to post the draft sign up.
+static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 921027014822068234;
+static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 535127333401657354;
+static const u64 BOT_COMMANDS_CHANNEL_ID         = 753637350877429842;
+static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 647073844649000962;
+static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
+static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 796861143594958868;
+static const u64 FEEDBACK_CHANNEL_ID             = 822015209756950528;
+static const u64 CALENDAR_CHANNEL_ID             = 794227134892998666;
+static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
+static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
+static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
+static const char* POD1_EMOJI                    = ":Pod1:1037398751339360286";
+static const char* POD2_EMOJI                    = ":Pod2:1037398772017287319";
+static const char* TEMP_DIR                      = "/tmp/xdhs_bot";
+#endif
+
 
 struct Config {
 	char* mysql_host;
@@ -180,49 +225,6 @@ static const char* EXPECTED_WORKING_DIR                 = "/opt/XDHS_Bot";
 
 static const char* CONFIG_FILE_NAME = "bot.ini";
 
-// The bot is designed to run in two modes, Debug and Release. Debug builds will only run on the XDHS Dev server and Release builds will only run on the public XDHS server.
-// In the future we might want to control these values with a bot command, but for now we'll simply hard code them in.
-#ifdef DEBUG
-// The bot will be running in debug mode on the XDHS Dev server.
-#define EVENTBOT_ENABLED
-static const char* BUILD_MODE                    = "Debug";
-static const u64 GUILD_ID                        = 882164794566791179;
-static const u64 PRE_REGISTER_CHANNEL_ID         = 907524659099099178; // Default channel to post the draft sign up.
-static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 1087299085612109844;
-static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 1075355794507305001;
-static const u64 BOT_COMMANDS_CHANNEL_ID         = 885048614190190593;
-static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 1155769474520199279;
-static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 1155771897225674752;
-static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 1155772743485235200;
-static const u64 FEEDBACK_CHANNEL_ID             = 1155773361104887880;
-static const u64 CALENDAR_CHANNEL_ID             = 1155774664732323952;
-static const u64 XDHS_TEAM_ROLE_ID               = 885054778978234408;
-static const u64 XDHS_HOST_ROLE_ID               = 1091275398639267881;
-static const u64 MINUTEMAGE_ROLE_ID              = 1156767797192437891;
-static const char* POD1_EMOJI                    = ":Pod1:1037638721115275284";
-static const char* POD2_EMOJI                    = ":Pod2:1037638719156518935";
-#endif
-
-#ifdef RELEASE
-// The bot will be running in release mode on the XDHS public server.
-static const char* BUILD_MODE                    = "Release";
-static const u64 GUILD_ID                        = 528728694680715324;
-static const u64 PRE_REGISTER_CHANNEL_ID         = 753639027428687962; // Default channel to post the draft sign up.
-static const u64 CURRENT_DRAFT_MANAGEMENT_ID     = 921027014822068234;
-static const u64 IN_THE_MOMENT_DRAFT_CHANNEL_ID  = 535127333401657354;
-static const u64 BOT_COMMANDS_CHANNEL_ID         = 753637350877429842;
-static const u64 DECK_SCREENSHOTS_CHANNEL_ID     = 647073844649000962;
-static const u64 ROLE_SELF_ASSIGNMENT_CHANNEL_ID = 663422413891174400;
-static const u64 P1P1_AND_DRAFT_LOG_CHANNEL_ID   = 796861143594958868;
-static const u64 FEEDBACK_CHANNEL_ID             = 822015209756950528;
-static const u64 CALENDAR_CHANNEL_ID             = 794227134892998666;
-static const u64 XDHS_TEAM_ROLE_ID               = 639451893399027722;
-static const u64 XDHS_HOST_ROLE_ID               = 1051631435506794657;
-static const u64 MINUTEMAGE_ROLE_ID              = 843796946984370176;
-static const char* POD1_EMOJI                    = ":Pod1:1037398751339360286";
-static const char* POD2_EMOJI                    = ":Pod2:1037398772017287319";
-#endif
-
 // Have the bot slash commands been registered?
 static bool g_commands_registered                = false;
 
@@ -249,15 +251,6 @@ static void sig_handler(int signo) {
 		default: log(LOG_LEVEL_INFO, "Caught unhandled signal: %d", signo);
 	}
 	g_exit_code = signo;
-}
-
-static const char* get_tmp_dir() {
-#ifdef DEBUG
-	return "/tmp/xdhs_bot_dev";
-#endif
-#ifdef RELEASE
-	return "/tmp/xdhs_bot";
-#endif
 }
 
 static std::string to_upper(const std::string_view src) {
@@ -2964,7 +2957,7 @@ const Result<std::string> render_banner(Banner_Opts* opts) {
 	// TODO: Only need to save RGB, this saves having to clear the alpha channel, but does stbii_write support this?
 	stbi_write_png_compression_level = 9; // TODO: What's the highest stbi supports?
 	image_max_alpha(&banner.value);
-	std::string file_path = fmt::format("{}/XDHS_Bot_Banner_{}.png", get_tmp_dir(), random_string(16));
+	std::string file_path = fmt::format("{}/XDHS_Bot_Banner_{}.png", TEMP_DIR, random_string(16));
 	if(stbi_write_png(file_path.c_str(), banner.value.w, banner.value.h, 4, (u8*)banner.value.data, banner.value.w*4) == 0) {
 		RETURN_ERROR_RESULT(ERROR_FAILED_TO_SAVE_BANNER);
 	}
@@ -4181,6 +4174,14 @@ try{
 	}
 	log(LOG_LEVEL_INFO, "IANA time zone database downloaded and installed.");
 
+#ifdef SQLITE3
+	// Open the database.
+	if(!open_database()) {
+		return EXIT_FAILURE;
+	}
+	defer { close_database(); };
+#endif // SQLITE3
+
 	// Create the bot and connect to Discord.
 	// TODO: We don't need all intents, so just request what we need...
 	dpp::cluster bot(g_config.discord_token, dpp::i_all_intents);
@@ -4611,7 +4612,7 @@ try{
 						return;
 					}
 
-					std::string temp_file = fmt::format("{}/XDHS_Bot_Art_{}", get_tmp_dir(), random_string(16));
+					std::string temp_file = fmt::format("{}/XDHS_Bot_Art_{}", TEMP_DIR, random_string(16));
 					FILE* file = fopen(temp_file.c_str(), "wb");
 					if(file) {
 						defer { fclose(file); };

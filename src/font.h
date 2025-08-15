@@ -49,7 +49,7 @@ static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int 
 	f32 scale = stbtt_ScaleForPixelHeight(font, size);
 	int ascent, descent, linegap;
 	stbtt_GetFontVMetrics(font, &ascent, &descent, &linegap);
-	int baseline = (int) ceil(((float)ascent * scale));
+	int baseline = (int) ceil((((float)ascent) * scale));
 
 	static const int GLYPH_WIDTH_MAX = 400;
 	static const int GLYPH_HEIGHT_MAX = 400;
@@ -60,7 +60,7 @@ static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int 
 	bitmap.channels = 1;
 
 	f32 xpos = (f32)x;
-	int ch = 0;
+	u32 ch = 0;
 	int index = 0;
 	while((str[index]) != 0 && ((ch = u8_nextchar(str, &index)) != 0)) {
 		f32 x_shift = xpos - (f32) floor(xpos);
@@ -72,11 +72,22 @@ static void render_text_to_image(stbtt_fontinfo* font, const u8* str, const int 
 		bitmap.h = y1-y0;
 	  	stbtt_MakeCodepointBitmapSubpixel(font, (u8*)bitmap.data, bitmap.w, bitmap.h, GLYPH_WIDTH_MAX, scale, scale, x_shift, 0, ch);
 
+		/* Hack!
+		   The x0 variable used to calculate the x position to start drawing the glyph can
+		   sometimes be -1 for the first character, which causes the blit functions below to write outside
+		   of the allocated canvas and corrupt memory. There is likely some floating point imprecision
+		   in the code above which is causing this, but the easy fix is below: Simply check the x value
+		   the glyph is about to be drawn at and set it to 0 if it's -1. When this happens the kerning of
+		   the first and second character will be wrong, but the difference should be imperceptible.
+		*/
+		int fixed_xpos = (int)xpos + x0;
+		if (fixed_xpos < 0) fixed_xpos = 0;
+
 		if(canvas->channels == 4) {
-			blit_A8_to_RGBA(&bitmap, GLYPH_WIDTH_MAX, color, canvas, (int)xpos + x0, y + baseline + y0);
+			blit_A8_to_RGBA(&bitmap, GLYPH_WIDTH_MAX, color, canvas, fixed_xpos, y + baseline + y0);
 		} else
 		if(canvas->channels == 1) {
-			blit_A8_to_A8(&bitmap, GLYPH_WIDTH_MAX, canvas, (int)xpos + x0, y + baseline + y0);
+			blit_A8_to_A8(&bitmap, GLYPH_WIDTH_MAX, canvas, fixed_xpos, y + baseline + y0);
 		} else {
 			log(LOG_LEVEL_ERROR, "Unsupported channel count {} in {}", canvas->channels, __FUNCTION__);
 		}
