@@ -5833,7 +5833,7 @@ try{
 			std::string text;
 			text += "## Thanks everyone for drafting with us!\n";
 			text += fmt::format("* You can share a screenshot of your deck in <#{}>.\n", DECK_SCREENSHOTS_CHANNEL_ID);
-			text += fmt::format("* If you want feedback on your draft, just ask or give yourself the Civilized Scholar role in <#{}>).\n", ROLE_SELF_ASSIGNMENT_CHANNEL_ID);
+			text += fmt::format("* If you want feedback on your draft, just ask or give yourself the Civilized Scholar role in <id:customize>).\n");
 			text += fmt::format("* You can also upload your draftlog to <https://magic.flooey.org/draft/upload> and share it in <#{}>.\n", P1P1_AND_DRAFT_LOG_CHANNEL_ID);
 			text += fmt::format("* We're happy to hear feedback on how to improve, either in <#{}> or anonymously with the /feedback command.\n", FEEDBACK_CHANNEL_ID);
 			text += fmt::format("* Check out <#{}> and sign up to some upcoming events!", CALENDAR_CHANNEL_ID);
