@@ -1227,6 +1227,17 @@ http_response make_badge_card(const mg_str json) {
 	}
 	defer { free(member_name); };
 
+	uint64_t member_id;
+	{
+		char* value = mg_json_get_str(json, "$.member_id");
+		if(value != NULL) {
+			member_id = strtoull(value, NULL, 10);
+			free(value);
+		} else {
+			return {400, mg_mprintf(R"({"result":"'member_id' key not found"})")};
+		}
+	}
+
 	struct Badge_ID {
 		char* category;
 		char* name;
@@ -1662,6 +1673,12 @@ http_response make_badge_card(const mg_str json) {
 		return {500, mg_mprintf(R"({"result":"JSON parse error"})")};
 	}
 	defer { free(url); }; // TODO: Check the pdf_to_png function isn't leaking this too
+
+	auto db_result = database_upsert_badge_card(member_id, url);
+	if(is_error(db_result)) {
+		// NOTE: This is an error, but not treated as fatal.
+		log(LOG_LEVEL_ERROR, db_result.errstr);
+	}
 
 	return {200, mg_mprintf(R"({"result":"%s"})", url)};
 }
